@@ -34,7 +34,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-BUILD_ID = "2026-07-16-scheduled-status-v16"
+BUILD_ID = "2026-07-16-broker-sl-only-v17"
 SCHEDULED_ACTION_LEAD_SECONDS = 3.0
 
 try:
@@ -822,13 +822,6 @@ class OPPWContinuousStrategy:
             close_processing_time = session.close_processing.time().replace(second=0, microsecond=0)
 
             if self.cfg.premarket_start <= bar_time < cash_open_time:
-                gap_down = bar_time == self.cfg.premarket_start and bar.open < hard_sl
-                slpre_open = bar.open < hard_sl
-                slpre_low = bar.low < hard_sl
-                self.log_check(now, "GAP_DOWN", gap_down, bar_open=bar.open, hard_sl=hard_sl, first_premarket_minute=(bar_time == self.cfg.premarket_start))
-                self.log_check(now, "SLPRE_OPEN", slpre_open, bar_open=bar.open, hard_sl=hard_sl)
-                self.log_check(now, "SLPRE_LOW", slpre_low, bar_low=bar.low, hard_sl=hard_sl)
-                check_count += 3
                 if weekday == 3:
                     tsl1pre = bar.open / entry < self.cfg.thursday_sl_ratio
                     self.log_check(now, "TSL1PRE", tsl1pre, bar_open=bar.open, entry=entry, ratio=bar.open / entry, threshold=self.cfg.thursday_sl_ratio)
@@ -838,11 +831,9 @@ class OPPWContinuousStrategy:
                 check_count += 1
 
             if bar_time == cash_open_time:
-                slo = bar.open < hard_sl
                 beo = self.state.break_even and bar.open > entry * self.cfg.break_even_ratio
-                self.log_check(now, "SLO", slo, cash_open=bar.open, hard_sl=hard_sl)
                 self.log_check(now, "BEO", beo, break_even_armed=self.state.break_even, cash_open=bar.open, threshold=entry * self.cfg.break_even_ratio)
-                check_count += 2
+                check_count += 1
                 if weekday == 3:
                     tsl1 = bar.open / entry < self.cfg.thursday_sl_ratio
                     self.log_check(now, "TSL1", tsl1, cash_open=bar.open, entry=entry, ratio=bar.open / entry, threshold=self.cfg.thursday_sl_ratio)
@@ -853,11 +844,6 @@ class OPPWContinuousStrategy:
                     check_count += 1
 
             if cash_open_time <= bar_time < close_processing_time:
-                sl_open = bar.open < hard_sl
-                sl_low = bar.low < hard_sl
-                self.log_check(now, "SL_OPEN", sl_open, bar_open=bar.open, hard_sl=hard_sl)
-                self.log_check(now, "SL_LOW", sl_low, bar_low=bar.low, hard_sl=hard_sl)
-                check_count += 2
                 if weekday == 3:
                     tsl2 = bar.low / entry < self.cfg.thursday_sl_ratio
                     self.log_check(now, "TSL2", tsl2, bar_low=bar.low, entry=entry, ratio=bar.low / entry, threshold=self.cfg.thursday_sl_ratio)
@@ -1335,12 +1321,7 @@ class OPPWContinuousStrategy:
 
     def evaluate_premarket_open(self, position, bar: M1Bar, now: datetime) -> None:
         entry = float(position.price_open)
-        hard_sl = self.hard_sl_price(position)
-        if bar.open < hard_sl:
-            self.arm_exit(position, "GAP DOWN" if bar.local_datetime.time() == self.cfg.premarket_start else "SLPRE", now)
-        elif bar.low < hard_sl:
-            self.arm_exit(position, "SLPRE", now)
-        elif bar.local_datetime.weekday() == 3 and bar.open / entry < self.cfg.thursday_sl_ratio:
+        if bar.local_datetime.weekday() == 3 and bar.open / entry < self.cfg.thursday_sl_ratio:
             self.arm_exit(position, "TSL1PRE", now)
         elif self.state.break_even and bar.open > entry * self.cfg.break_even_ratio:
             self.arm_exit(position, "BEPRE", now)
@@ -1348,10 +1329,7 @@ class OPPWContinuousStrategy:
     def evaluate_cash_open(self, position, bar: M1Bar, now: datetime) -> None:
         current_day = bar.local_datetime.date()
         entry = float(position.price_open)
-        hard_sl = self.hard_sl_price(position)
-        if bar.open < hard_sl:
-            self.arm_exit(position, "SLO", now)
-        elif self.state.break_even and bar.open > entry * self.cfg.break_even_ratio:
+        if self.state.break_even and bar.open > entry * self.cfg.break_even_ratio:
             self.arm_exit(position, "BEO", now)
         elif current_day.weekday() == 3 and bar.open / entry < self.cfg.thursday_sl_ratio:
             self.arm_exit(position, "TSL1", now)
@@ -1362,11 +1340,8 @@ class OPPWContinuousStrategy:
         if self.state.exit_latched_reason:
             return
         entry = float(position.price_open)
-        hard_sl = self.hard_sl_price(position)
         weekday = bar.local_datetime.weekday()
-        if bar.open < hard_sl or bar.low < hard_sl:
-            self.arm_exit(position, "SL", now)
-        elif weekday == 3 and bar.low / entry < self.cfg.thursday_sl_ratio:
+        if weekday == 3 and bar.low / entry < self.cfg.thursday_sl_ratio:
             self.arm_exit(position, "TSL2", now)
         elif weekday == 4 and bar.low / entry < self.cfg.friday_sl_ratio:
             self.arm_exit(position, "TSL4", now)
