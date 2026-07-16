@@ -34,7 +34,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-BUILD_ID = "2026-07-16-preopen-preclose-v15"
+BUILD_ID = "2026-07-16-scheduled-status-v16"
 SCHEDULED_ACTION_LEAD_SECONDS = 3.0
 
 try:
@@ -771,15 +771,33 @@ class OPPWContinuousStrategy:
         hard_sl = self.hard_sl_price(position)
         bar_available = current_bar is not None and current_bar.local_datetime.date() == current_day
         due, due_reason, due_final_day = self.weekly_exit_status(position, now)
-        open_action_pending = self.state.last_open_action_date != current_day.isoformat()
-        close_action_pending = self.state.last_close_action_date != current_day.isoformat()
+        day_key = current_day.isoformat()
+        if self.state.last_open_action_date == day_key:
+            open_action_status = "PROCESSED"
+        elif now < session.open_action:
+            open_action_status = "PENDING"
+        elif now < session.cash_open:
+            open_action_status = "DUE"
+        else:
+            open_action_status = "MISSED"
+        open_action_pending = open_action_status in ("PENDING", "DUE")
+
+        if self.state.last_close_action_date == day_key:
+            close_action_status = "PROCESSED"
+        elif now < session.weekly_close:
+            close_action_status = "PENDING"
+        elif now < session.close_bar_open:
+            close_action_status = "DUE"
+        else:
+            close_action_status = "OVERDUE" if is_final_day else "MISSED"
+        close_action_pending = close_action_status in ("PENDING", "DUE", "OVERDUE")
 
         self.log_check(now, "POSITION_OPEN", True, ticket=int(position.ticket), entry=entry, volume=float(position.volume))
         self.log_check(now, "CURRENT_M1_AVAILABLE", bar_available, bar_time=current_bar.local_datetime.strftime("%H:%M") if bar_available else None)
         self.log_check(now, "ENTRY_SIGNAL_OPEN_AVAILABLE", self.state.entry_signal_daily_open > 0 and not self.state.entry_signal_open_pending, signal_open=self.state.entry_signal_daily_open, pending=self.state.entry_signal_open_pending)
         self.log_check(now, "EXIT_LATCH_CLEAR", not bool(self.state.exit_latched_reason), exit_latch=self.state.exit_latched_reason or "none")
-        self.log_check(now, "OPEN_MINUS_3_REACHED", now >= session.open_action, scheduled=session.open_action.strftime("%H:%M:%S"), processed=not open_action_pending)
-        self.log_check(now, "CLOSE_MINUS_3_REACHED", now >= session.weekly_close, scheduled=session.weekly_close.strftime("%H:%M:%S"), processed=not close_action_pending)
+        self.log_check(now, "OPEN_MINUS_3_REACHED", now >= session.open_action, scheduled=session.open_action.strftime("%H:%M:%S"), action_status=open_action_status, action_pending=open_action_pending)
+        self.log_check(now, "CLOSE_MINUS_3_REACHED", now >= session.weekly_close, scheduled=session.weekly_close.strftime("%H:%M:%S"), action_status=close_action_status, action_pending=close_action_pending)
         self.log_check(now, "TO", due, due_reason=due_reason, final_day=due_final_day)
         check_count = 9
 
@@ -792,9 +810,9 @@ class OPPWContinuousStrategy:
             bid = float(trade_tick.bid)
             tpp = self.cfg.tpps[weekday]
             oh = bid > entry * (1.0 + tpp)
-            self.log_check(now, "OH", oh, scheduled=session.open_action.strftime("%H:%M:%S"), action_pending=open_action_pending, bid=bid, entry=entry, tpp=tpp, threshold=entry * (1.0 + tpp))
+            self.log_check(now, "OH", oh, scheduled=session.open_action.strftime("%H:%M:%S"), action_status=open_action_status, action_pending=open_action_pending, execution_eligible=(open_action_status == "DUE"), bid=bid, entry=entry, tpp=tpp, threshold=entry * (1.0 + tpp))
         except RuntimeError as exc:
-            self.log_check(now, "OH", False, scheduled=session.open_action.strftime("%H:%M:%S"), action_pending=open_action_pending, error=str(exc))
+            self.log_check(now, "OH", False, scheduled=session.open_action.strftime("%H:%M:%S"), action_status=open_action_status, action_pending=open_action_pending, execution_eligible=(open_action_status == "DUE"), error=str(exc))
         check_count += 1
 
         if bar_available:
@@ -852,16 +870,15 @@ class OPPWContinuousStrategy:
                 self.log_check(now, "BH", bh, break_even_armed=self.state.break_even, bar_high=bar.high, threshold=entry * self.cfg.break_even_ratio)
                 check_count += 1
 
-        if now >= session.weekly_close and close_action_pending:
-            try:
-                signal_price = self.live_signal_price()
-                signal_reference = self.state.entry_signal_daily_open
-                tpp = self.cfg.tpps[weekday]
-                ch = signal_reference > 0 and signal_price > signal_reference * (1.0 + tpp)
-                self.log_check(now, "CH", ch, scheduled=session.weekly_close.strftime("%H:%M:%S"), signal_price=signal_price, signal_reference=signal_reference, tpp=tpp, threshold=signal_reference * (1.0 + tpp) if signal_reference > 0 else 0.0)
-            except RuntimeError as exc:
-                self.log_check(now, "CH", False, scheduled=session.weekly_close.strftime("%H:%M:%S"), error=str(exc))
-            check_count += 1
+        try:
+            signal_price = self.live_signal_price()
+            signal_reference = self.state.entry_signal_daily_open
+            tpp = self.cfg.tpps[weekday]
+            ch = signal_reference > 0 and signal_price > signal_reference * (1.0 + tpp)
+            self.log_check(now, "CH", ch, scheduled=session.weekly_close.strftime("%H:%M:%S"), action_status=close_action_status, action_pending=close_action_pending, execution_eligible=(close_action_status in ("DUE", "OVERDUE")), signal_price=signal_price, signal_reference=signal_reference, tpp=tpp, threshold=signal_reference * (1.0 + tpp) if signal_reference > 0 else 0.0)
+        except RuntimeError as exc:
+            self.log_check(now, "CH", False, scheduled=session.weekly_close.strftime("%H:%M:%S"), action_status=close_action_status, action_pending=close_action_pending, execution_eligible=(close_action_status in ("DUE", "OVERDUE")), error=str(exc))
+        check_count += 1
 
         if now >= session.close_processing:
             close_bar_time = session.close_bar_open.time().replace(second=0, microsecond=0)
@@ -1425,7 +1442,12 @@ class OPPWContinuousStrategy:
         current_day = now.date()
         session = self.session_times(current_day)
         day_key = current_day.isoformat()
-        if self.state.last_open_action_date == day_key or now < session.open_action or now >= session.cash_open:
+        if self.state.last_open_action_date == day_key or now < session.open_action:
+            return False
+        if now >= session.cash_open:
+            self.state.last_open_action_date = day_key
+            self.state.save(self.cfg.state_file)
+            self.log.warning("EVENT SCHEDULED_CHECK_MISSED name=OH day=%s scheduled=%s now=%s reason=started_or_reconnected_after_open", current_day, session.open_action.isoformat(), now.isoformat())
             return False
 
         tick = self.require_fresh_tick(position.symbol)
