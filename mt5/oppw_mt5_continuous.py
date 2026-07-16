@@ -34,7 +34,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-BUILD_ID = "2026-07-16-weekday-sl-enforcement-v18"
+BUILD_ID = "2026-07-16-close-reason-fix-v19"
 SCHEDULED_ACTION_LEAD_SECONDS = 3.0
 
 try:
@@ -62,7 +62,7 @@ from oppw_mt5_config import Config
 
 @dataclass
 class StrategyState:
-    version: int = 3
+    version: int = 4
 
     last_trading_date: str = ""
     last_close_processed_date: str = ""
@@ -83,6 +83,13 @@ class StrategyState:
     break_even: bool = False
     exit_latched_reason: str = ""
     exit_latched_at: str = ""
+
+    active_sl_reason: str = ""
+    active_tp_reason: str = ""
+    active_sl_price: float = 0.0
+    active_tp_price: float = 0.0
+    active_protection_updated_at: str = ""
+    active_protection_position_identifier: int = 0
 
     prev_change: float = 0.0
     prev_full_week_change: float = 0.0
@@ -475,6 +482,132 @@ class OPPWContinuousStrategy:
             return min(candidates, key=lambda leverage: abs(actual_ratio - self.hard_sl_ratio(leverage)))
         return self.choose_leverage()
 
+    def clear_current_position_exit_state(self, clear_last_exit: bool = True) -> None:
+        self.state.exit_latched_reason = ""
+        self.state.exit_latched_at = ""
+        self.state.active_sl_reason = ""
+        self.state.active_tp_reason = ""
+        self.state.active_sl_price = 0.0
+        self.state.active_tp_price = 0.0
+        self.state.active_protection_updated_at = ""
+        self.state.active_protection_position_identifier = 0
+        if clear_last_exit:
+            self.state.last_exit_reason = ""
+            self.state.last_exit_price = 0.0
+            self.state.last_exit_time = ""
+
+    def weekday_sl_reason(self, now: datetime) -> str:
+        session = self.session_times(now.date())
+        first_minute_end = session.cash_open + timedelta(minutes=1)
+        if now.weekday() == 3 and session.cash_open <= now < session.close_processing:
+            return "TSL1" if now < first_minute_end else "TSL2"
+        if now.weekday() == 4 and session.cash_open <= now < session.close_processing:
+            return "TSL3" if now < first_minute_end else "TSL4"
+        return "SL"
+
+    def infer_active_protection(self, position, now: datetime) -> None:
+        identifier = self.position_identifier(position)
+        entry = float(position.price_open)
+        sl = float(position.sl)
+        tp = float(position.tp)
+        info = mt5.symbol_info(position.symbol)
+        tolerance = float(getattr(info, "trade_tick_size", 0.0) or getattr(info, "point", 0.0) or 0.01) * 1.5 if info is not None else 0.01
+
+        self.state.active_protection_position_identifier = identifier
+        self.state.active_sl_price = sl
+        self.state.active_tp_price = tp
+        self.state.active_sl_reason = ""
+        self.state.active_tp_reason = ""
+
+        if sl > 0 and entry > 0:
+            thursday_sl = entry * self.cfg.thursday_sl_ratio
+            friday_sl = entry * self.cfg.friday_sl_ratio
+            hard_sl = entry * self.hard_sl_ratio(self.state.entry_leverage or self.choose_leverage())
+            if abs(sl - thursday_sl) <= tolerance:
+                self.state.active_sl_reason = "TSL1" if now.weekday() == 3 and now < self.session_times(now.date()).cash_open + timedelta(minutes=1) else "TSL2"
+            elif abs(sl - friday_sl) <= tolerance:
+                self.state.active_sl_reason = "TSL3" if now.weekday() == 4 and now < self.session_times(now.date()).cash_open + timedelta(minutes=1) else "TSL4"
+            elif abs(sl - hard_sl) <= tolerance:
+                self.state.active_sl_reason = "SL"
+            else:
+                self.state.active_sl_reason = "BROKER_SL"
+
+        if tp > 0:
+            self.state.active_tp_reason = "BH" if self.state.break_even else "BROKER_TP"
+        self.state.active_protection_updated_at = now.isoformat()
+
+    def record_active_protection(self, position, sl: float, tp: float, sl_reason: str, tp_reason: str, now: Optional[datetime] = None) -> None:
+        now = now or datetime.now(self.tz)
+        identifier = self.position_identifier(position)
+        same_position = self.state.active_protection_position_identifier == identifier
+        tolerance = 1e-8
+        before = (
+            self.state.active_sl_reason, self.state.active_tp_reason,
+            self.state.active_sl_price, self.state.active_tp_price,
+            self.state.active_protection_position_identifier,
+        )
+
+        if sl > 0:
+            same_sl = same_position and abs(self.state.active_sl_price - sl) <= tolerance
+            if not same_sl or not self.state.active_sl_reason:
+                self.state.active_sl_reason = sl_reason or self.state.active_sl_reason or "SL"
+            self.state.active_sl_price = sl
+        else:
+            self.state.active_sl_reason = ""
+            self.state.active_sl_price = 0.0
+
+        if tp > 0:
+            same_tp = same_position and abs(self.state.active_tp_price - tp) <= tolerance
+            if not same_tp or not self.state.active_tp_reason:
+                self.state.active_tp_reason = tp_reason or self.state.active_tp_reason or "TP"
+            self.state.active_tp_price = tp
+        else:
+            self.state.active_tp_reason = ""
+            self.state.active_tp_price = 0.0
+
+        self.state.active_protection_position_identifier = identifier
+        after = (
+            self.state.active_sl_reason, self.state.active_tp_reason,
+            self.state.active_sl_price, self.state.active_tp_price,
+            self.state.active_protection_position_identifier,
+        )
+        if after != before:
+            self.state.active_protection_updated_at = now.isoformat()
+            self.state.save(self.cfg.state_file)
+
+    @staticmethod
+    def deal_reason_name(reason_code: int) -> str:
+        names = {
+            getattr(mt5, "DEAL_REASON_CLIENT", 0): "CLIENT",
+            getattr(mt5, "DEAL_REASON_MOBILE", 1): "MOBILE",
+            getattr(mt5, "DEAL_REASON_WEB", 2): "WEB",
+            getattr(mt5, "DEAL_REASON_EXPERT", 3): "EXPERT",
+            getattr(mt5, "DEAL_REASON_SL", 4): "SL",
+            getattr(mt5, "DEAL_REASON_TP", 5): "TP",
+            getattr(mt5, "DEAL_REASON_SO", 6): "STOP_OUT",
+            getattr(mt5, "DEAL_REASON_ROLLOVER", 7): "ROLLOVER",
+            getattr(mt5, "DEAL_REASON_VMARGIN", 8): "VARIATION_MARGIN",
+            getattr(mt5, "DEAL_REASON_SPLIT", 9): "SPLIT",
+            getattr(mt5, "DEAL_REASON_CORPORATE_ACTION", 10): "CORPORATE_ACTION",
+        }
+        return names.get(reason_code, f"UNKNOWN_{reason_code}")
+
+    def resolve_closed_position_reason(self, exit_deal) -> tuple[str, str]:
+        if exit_deal is None:
+            return self.state.exit_latched_reason or self.state.last_exit_reason or "broker/manual", "UNRESOLVED"
+
+        broker_code = int(getattr(exit_deal, "reason", -1))
+        broker_reason = self.deal_reason_name(broker_code)
+        if broker_code == getattr(mt5, "DEAL_REASON_SL", 4):
+            return self.state.active_sl_reason or "SL", broker_reason
+        if broker_code == getattr(mt5, "DEAL_REASON_TP", 5):
+            return self.state.active_tp_reason or "TP", broker_reason
+        if self.state.exit_latched_reason:
+            return self.state.exit_latched_reason, broker_reason
+        if self.state.last_exit_reason:
+            return self.state.last_exit_reason, broker_reason
+        return "broker/manual", broker_reason
+
     def reconstruct_break_even(self, opened: date, signal_reference: float, now: datetime) -> bool:
         if signal_reference <= 0:
             return False
@@ -525,10 +658,12 @@ class OPPWContinuousStrategy:
         self.state.entry_pending_until_utc = 0
         self.state.break_even = recovered_break_even
         if previous_identifier != identifier:
-            self.state.exit_latched_reason = ""
-            self.state.exit_latched_at = ""
+            self.clear_current_position_exit_state(clear_last_exit=True)
             self.state.last_processed_bar_utc = 0
             self.state.last_close_processed_date = ""
+            self.infer_active_protection(position, now)
+        elif force and self.state.active_protection_position_identifier != identifier:
+            self.infer_active_protection(position, now)
         self.state.save(self.cfg.state_file)
         self.log.info(
             "EVENT POSITION_RECOVERED ticket=%s identifier=%s magic=%s open_time=%s entry=%.5f volume=%s leverage=%s signal_open=%.5f signal_open_pending=%s break_even=%s",
@@ -577,7 +712,7 @@ class OPPWContinuousStrategy:
             if candidates:
                 exit_deal = max(candidates, key=lambda deal: int(getattr(deal, "time_msc", 0) or deal.time * 1000))
 
-        reason = self.state.exit_latched_reason or self.state.last_exit_reason or "broker/manual"
+        reason, broker_reason = self.resolve_closed_position_reason(exit_deal)
         if exit_deal is not None and self.state.entry_price > 0:
             exit_price = float(exit_deal.price)
             change = truncate_four_decimals(exit_price / self.state.entry_price - 1.0)
@@ -585,9 +720,13 @@ class OPPWContinuousStrategy:
             self.state.last_exit_price = exit_price
             exit_timestamp = getattr(exit_deal, "time_msc", 0) / 1000.0 if getattr(exit_deal, "time_msc", 0) else exit_deal.time
             self.state.last_exit_time = datetime.fromtimestamp(exit_timestamp, UTC).astimezone(self.tz).isoformat()
-            self.log.info("EVENT POSITION_CLOSED reason=%s entry=%.5f exit=%.5f change=%.4f", reason, self.state.entry_price, exit_price, change)
+            self.log.info(
+                "EVENT POSITION_CLOSED reason=%s broker_reason=%s deal_ticket=%s entry=%.5f exit=%.5f change=%.4f active_sl_reason=%s active_tp_reason=%s",
+                reason, broker_reason, getattr(exit_deal, "ticket", 0), self.state.entry_price, exit_price, change,
+                self.state.active_sl_reason or "-", self.state.active_tp_reason or "-",
+            )
         else:
-            self.log.warning("EVENT POSITION_DISAPPEARED identifier=%s closing_deal=unresolved", identifier)
+            self.log.warning("EVENT POSITION_DISAPPEARED identifier=%s closing_deal=unresolved reason=%s", identifier, reason)
 
         self.state.last_exit_reason = reason
         self.state.active_position_identifier = 0
@@ -600,6 +739,12 @@ class OPPWContinuousStrategy:
         self.state.break_even = False
         self.state.exit_latched_reason = ""
         self.state.exit_latched_at = ""
+        self.state.active_sl_reason = ""
+        self.state.active_tp_reason = ""
+        self.state.active_sl_price = 0.0
+        self.state.active_tp_price = 0.0
+        self.state.active_protection_updated_at = ""
+        self.state.active_protection_position_identifier = 0
         self.state.entry_pending_until_utc = 0
         self.state.save(self.cfg.state_file)
 
@@ -675,7 +820,8 @@ class OPPWContinuousStrategy:
             f"bid={bid:.5f} ask={ask:.5f} change={pnl_pct:.5%} profit={float(getattr(position, 'profit', 0.0)):.2f} "
             f"swap={float(getattr(position, 'swap', 0.0)):.2f} SL={float(position.sl):.5f} TP={float(position.tp):.5f} "
             f"strategy_leverage={self.state.entry_leverage or '-'} {account_text} BE={self.state.break_even} "
-            f"regime={self.protection_regime(now)} exit_latch={self.state.exit_latched_reason or '-'} "
+            f"regime={self.protection_regime(now)} active_sl_reason={self.state.active_sl_reason or '-'} "
+            f"active_tp_reason={self.state.active_tp_reason or '-'} exit_latch={self.state.exit_latched_reason or '-'} "
             f"final_day={final_day} weekly_exit={due_reason} due={due} bar=[{bar_text}]"
         )
 
@@ -1136,8 +1282,7 @@ class OPPWContinuousStrategy:
         self.state.entry_signal_daily_open = float(signal_open or 0.0)
         self.state.entry_signal_open_pending = signal_open is None
         self.state.break_even = False
-        self.state.exit_latched_reason = ""
-        self.state.exit_latched_at = ""
+        self.clear_current_position_exit_state(clear_last_exit=True)
         self.state.save(self.cfg.state_file)
         self.log.info(
             "EVENT BUY_ACCEPTED retcode=%s order=%s deal=%s preopen_seconds=%.3f signal_open=%.5f signal_open_pending=%s",
@@ -1151,7 +1296,7 @@ class OPPWContinuousStrategy:
         self.emit_status("BUY_ACCEPTED", position)
         return True
 
-    def modify_sltp(self, position, desired_sl: float, desired_tp: float, reason: str) -> bool:
+    def modify_sltp(self, position, desired_sl: float, desired_tp: float, reason: str, sl_reason: str = "", tp_reason: str = "") -> bool:
         info = mt5.symbol_info(position.symbol)
         if info is None:
             raise RuntimeError(f"symbol_info({position.symbol}) failed: {mt5.last_error()}")
@@ -1162,6 +1307,7 @@ class OPPWContinuousStrategy:
         desired_tp = round(desired_tp, digits) if desired_tp else 0.0
         tolerance = max(tick_size * 0.5, float(info.point) * 0.5)
         if not price_changed(float(position.sl), desired_sl, tolerance) and not price_changed(float(position.tp), desired_tp, tolerance):
+            self.record_active_protection(position, desired_sl, desired_tp, sl_reason, tp_reason)
             return True
 
         if not self.cfg.live_enabled:
@@ -1184,6 +1330,7 @@ class OPPWContinuousStrategy:
 
         self.log.info("EVENT SLTP_ACCEPTED reason=%s retcode=%s", reason, result.retcode)
         refreshed = self.managed_position() or position
+        self.record_active_protection(refreshed, desired_sl, desired_tp, sl_reason, tp_reason)
         self.emit_status("SLTP_ACCEPTED", refreshed)
         return True
 
@@ -1279,7 +1426,7 @@ class OPPWContinuousStrategy:
             sl = float(position.sl)
         if float(position.tp) > ask and float(position.tp) < tp:
             tp = float(position.tp)
-        self.modify_sltp(position, sl, tp, f"EXIT {reason}")
+        self.modify_sltp(position, sl, tp, f"EXIT {reason}", sl_reason=reason, tp_reason=reason)
 
     def apply_standard_protection(self, position, now: datetime) -> None:
         if self.state.exit_latched_reason:
@@ -1300,18 +1447,23 @@ class OPPWContinuousStrategy:
         hard_ratio = self.hard_sl_ratio(leverage)
         desired_sl = self.hard_sl_price(position)
         desired_tp = 0.0
+        sl_reason = "SL"
+        tp_reason = ""
         reason_parts = [f"HARD_SL_L{leverage}_RATIO_{hard_ratio:.6f}"]
 
         session = self.session_times(now.date())
         if session.cash_open <= now < session.close_processing:
             if now.weekday() == 3:
                 desired_sl = max(desired_sl, entry * self.cfg.thursday_sl_ratio)
+                sl_reason = self.weekday_sl_reason(now)
                 reason_parts.append(f"THURSDAY_STOP_{self.cfg.thursday_stop:.4%}_RATIO_{self.cfg.thursday_sl_ratio:.6f}")
             elif now.weekday() == 4:
                 desired_sl = max(desired_sl, entry * self.cfg.friday_sl_ratio)
+                sl_reason = self.weekday_sl_reason(now)
                 reason_parts.append(f"FRIDAY_STOP_{self.cfg.friday_stop:.4%}_RATIO_{self.cfg.friday_sl_ratio:.6f}")
             if self.state.break_even:
                 desired_tp = entry * self.cfg.break_even_ratio
+                tp_reason = "BH"
                 reason_parts.append(f"BREAK_EVEN_TP_RATIO_{self.cfg.break_even_ratio:.6f}")
 
         if desired_sl >= bid - distance:
@@ -1323,7 +1475,7 @@ class OPPWContinuousStrategy:
 
         desired_sl = floor_step(desired_sl, tick_size)
         desired_tp = ceil_step(desired_tp, tick_size) if desired_tp > 0 else 0.0
-        self.modify_sltp(position, desired_sl, desired_tp, "+".join(reason_parts))
+        self.modify_sltp(position, desired_sl, desired_tp, "+".join(reason_parts), sl_reason=sl_reason, tp_reason=tp_reason)
 
     # ----- Time-scoped Sim conditions ----------------------------------------
 
