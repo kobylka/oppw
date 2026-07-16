@@ -1,0 +1,25 @@
+	cd D:\OneDrive\su\oppw\optuna\
+	powershell -ep bypass
+	.venv\Scripts\Activate.ps1
+	#run docker
+	$storage = (python -c "from config import OPTUNA_STORAGE; print(OPTUNA_STORAGE)").Trim()
+	optuna-dashboard --host 127.0.0.1 --port 8080 "$storage"
+
+$env:N_TRIALS = "100"
+python worker.py
+
+1..8 | ForEach-Object {
+     Start-Process `
+         powershell `
+         -ArgumentList `
+         "-NoProfile -File run_worker.ps1 -WorkerId $_ -Trials 1000 -EndYear 2025" `
+         -RedirectStandardOutput "logs\worker-$_.out.log" `
+         -RedirectStandardError "logs\worker-$_.err.log"
+ }
+	 
+#remove study
+python -c "import optuna; from config import OPTUNA_STORAGE; optuna.delete_study(study_name='oppw-train-2010-2019-v1', storage=OPTUNA_STORAGE)"
+	 
+#remove postgres and restart docker
+docker compose down -v
+docker compose up -d

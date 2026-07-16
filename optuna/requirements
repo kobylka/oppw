@@ -1,0 +1,8 @@
+numpy>=2.0,<3
+pandas>=2.2,<3
+optuna==4.9.0
+optuna-dashboard==0.20.0
+psycopg[binary]>=3.3,<4
+SQLAlchemy>=2,<3
+python-dotenv>=1,<2
+pyarrow>=18
