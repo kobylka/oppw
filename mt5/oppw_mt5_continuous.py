@@ -34,7 +34,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-BUILD_ID = "2026-07-16-broker-sl-only-v17"
+BUILD_ID = "2026-07-16-weekday-sl-enforcement-v18"
 SCHEDULED_ACTION_LEAD_SECONDS = 3.0
 
 try:
@@ -834,23 +834,31 @@ class OPPWContinuousStrategy:
                 beo = self.state.break_even and bar.open > entry * self.cfg.break_even_ratio
                 self.log_check(now, "BEO", beo, break_even_armed=self.state.break_even, cash_open=bar.open, threshold=entry * self.cfg.break_even_ratio)
                 check_count += 1
+                info = mt5.symbol_info(position.symbol)
+                tick_size = float(getattr(info, "trade_tick_size", 0.0) or getattr(info, "point", 0.0) or 0.01) if info is not None else 0.01
                 if weekday == 3:
-                    tsl1 = bar.open / entry < self.cfg.thursday_sl_ratio
-                    self.log_check(now, "TSL1", tsl1, cash_open=bar.open, entry=entry, ratio=bar.open / entry, threshold=self.cfg.thursday_sl_ratio)
+                    required_sl = floor_step(entry * self.cfg.thursday_sl_ratio, tick_size)
+                    tsl1_set = float(position.sl) > 0 and float(position.sl) + tick_size / 2 >= required_sl
+                    self.log_check(now, "TSL1", tsl1_set, current_sl=float(position.sl), required_sl=required_sl, threshold=self.cfg.thursday_sl_ratio)
                     check_count += 1
                 if weekday == 4:
-                    tsl3 = bar.open / entry < self.cfg.friday_sl_ratio
-                    self.log_check(now, "TSL3", tsl3, cash_open=bar.open, entry=entry, ratio=bar.open / entry, threshold=self.cfg.friday_sl_ratio)
+                    required_sl = floor_step(entry * self.cfg.friday_sl_ratio, tick_size)
+                    tsl3_set = float(position.sl) > 0 and float(position.sl) + tick_size / 2 >= required_sl
+                    self.log_check(now, "TSL3", tsl3_set, current_sl=float(position.sl), required_sl=required_sl, threshold=self.cfg.friday_sl_ratio)
                     check_count += 1
 
             if cash_open_time <= bar_time < close_processing_time:
+                info = mt5.symbol_info(position.symbol)
+                tick_size = float(getattr(info, "trade_tick_size", 0.0) or getattr(info, "point", 0.0) or 0.01) if info is not None else 0.01
                 if weekday == 3:
-                    tsl2 = bar.low / entry < self.cfg.thursday_sl_ratio
-                    self.log_check(now, "TSL2", tsl2, bar_low=bar.low, entry=entry, ratio=bar.low / entry, threshold=self.cfg.thursday_sl_ratio)
+                    required_sl = floor_step(entry * self.cfg.thursday_sl_ratio, tick_size)
+                    tsl2_set = float(position.sl) > 0 and float(position.sl) + tick_size / 2 >= required_sl
+                    self.log_check(now, "TSL2", tsl2_set, current_sl=float(position.sl), required_sl=required_sl, threshold=self.cfg.thursday_sl_ratio)
                     check_count += 1
                 if weekday == 4:
-                    tsl4 = bar.low / entry < self.cfg.friday_sl_ratio
-                    self.log_check(now, "TSL4", tsl4, bar_low=bar.low, entry=entry, ratio=bar.low / entry, threshold=self.cfg.friday_sl_ratio)
+                    required_sl = floor_step(entry * self.cfg.friday_sl_ratio, tick_size)
+                    tsl4_set = float(position.sl) > 0 and float(position.sl) + tick_size / 2 >= required_sl
+                    self.log_check(now, "TSL4", tsl4_set, current_sl=float(position.sl), required_sl=required_sl, threshold=self.cfg.friday_sl_ratio)
                     check_count += 1
                 bh = self.state.break_even and bar.high > entry * self.cfg.break_even_ratio
                 self.log_check(now, "BH", bh, break_even_armed=self.state.break_even, bar_high=bar.high, threshold=entry * self.cfg.break_even_ratio)
@@ -1327,25 +1335,15 @@ class OPPWContinuousStrategy:
             self.arm_exit(position, "BEPRE", now)
 
     def evaluate_cash_open(self, position, bar: M1Bar, now: datetime) -> None:
-        current_day = bar.local_datetime.date()
         entry = float(position.price_open)
         if self.state.break_even and bar.open > entry * self.cfg.break_even_ratio:
             self.arm_exit(position, "BEO", now)
-        elif current_day.weekday() == 3 and bar.open / entry < self.cfg.thursday_sl_ratio:
-            self.arm_exit(position, "TSL1", now)
-        elif current_day.weekday() == 4 and bar.open / entry < self.cfg.friday_sl_ratio:
-            self.arm_exit(position, "TSL3", now)
 
     def evaluate_regular_bar(self, position, bar: M1Bar, now: datetime) -> None:
         if self.state.exit_latched_reason:
             return
         entry = float(position.price_open)
-        weekday = bar.local_datetime.weekday()
-        if weekday == 3 and bar.low / entry < self.cfg.thursday_sl_ratio:
-            self.arm_exit(position, "TSL2", now)
-        elif weekday == 4 and bar.low / entry < self.cfg.friday_sl_ratio:
-            self.arm_exit(position, "TSL4", now)
-        elif self.state.break_even and bar.high > entry * self.cfg.break_even_ratio:
+        if self.state.break_even and bar.high > entry * self.cfg.break_even_ratio:
             self.arm_exit(position, "BH", now)
 
     def process_completed_close(self, current_day: date, now: datetime, position) -> None:
