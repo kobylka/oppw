@@ -1,5 +1,7 @@
 package com.oppw.monitor.data
 
+enum class AuthStatus { CHECKING, UNPAIRED, PAIRING, PAIRED }
+
 data class MonitorAccount(
     val key: String,
     val displayName: String,
@@ -89,6 +91,9 @@ data class MonitorEvent(
 )
 
 data class UiState(
+    val authStatus: AuthStatus = AuthStatus.CHECKING,
+    val deviceName: String = "",
+    val pairingError: String? = null,
     val loading: Boolean = true,
     val refreshing: Boolean = false,
     val accountsLoading: Boolean = true,

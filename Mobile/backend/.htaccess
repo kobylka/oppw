@@ -1,4 +1,14 @@
 Options -Indexes
+SetEnvIf Authorization "(.+)" HTTP_AUTHORIZATION=$1
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteCond %{HTTPS} !=on
+    RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [R=301,L]
+    RewriteRule ^(?:admin|sql|publisher)(?:/|$) - [R=404,L]
+    RewriteRule ^(?:config(?:\.example)?\.php|lib\.php)$ - [R=404,L]
+</IfModule>
+
 <FilesMatch "^(config\.php|config\.example\.php|lib\.php)$">
     Require all denied
 </FilesMatch>

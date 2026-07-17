@@ -9,3 +9,7 @@ app/build/
 *.jks
 *.keystore
 backend/config.php
+keystore.properties
+*.p12
+*.pem
+backend/*.log

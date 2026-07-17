@@ -12,3 +12,13 @@ spy.csv
 quotes.pkl
 optuna/data/cache/quotes.pkl
 Nowy folder/qqq.csv
+mt5/oppw_mt5_config.py
+Mobile/backend/config.php
+Mobile/local.properties
+Mobile/*.jks
+Mobile/*.keystore
+Mobile/keystore.properties
+mt5/oppw_mt5.lock
+Mobile/.gradle/
+Mobile/build/
+Mobile/app/build/

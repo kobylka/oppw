@@ -1,17 +1,30 @@
 # Validation report
 
-Validated in the generation environment:
+Performed in the generation environment:
 
-- All PHP files pass `php -l`.
-- Python publisher passes `python -m py_compile`.
-- `backend/example_payload.json` parses successfully.
-- Android manifest and resource XML files parse successfully.
-- No production credentials are included.
-- The Android app has no trading/order implementation and only performs authenticated HTTPS GET requests to `status.php`.
+- All PHP files pass `php -l` with PHP 8.4.
+- The Python publisher passes `python -m py_compile`.
+- Every Android XML file parses successfully.
+- Pure Kotlin authentication/data models compile with `kotlinc`.
+- Static checks confirm:
+  - no `BuildConfig.API_TOKEN` remains;
+  - no permanent mobile read token is present;
+  - no direct `layout.weight` import remains;
+  - the logs icon uses `Icons.AutoMirrored.Outlined.ListAlt`;
+  - `local.properties` and `backend/config.php` are ignored by Git;
+  - cleartext Android traffic is disabled;
+  - Android backups are disabled for the app.
 
-Not run in this environment:
+Not performed here:
 
-- Full Android Gradle build, because the Android SDK and external Maven/Gradle dependency downloads are not available in the generation container.
-- Live deployment against the user's server or database.
+- A full Gradle Android build, because this environment does not contain the Android SDK or downloaded Android/Compose dependencies.
+- Live MySQL integration tests, because no MySQL server is installed in this environment.
+- End-to-end HTTPS testing against a deployed domain and certificate.
 
-Open the project in Android Studio, run Gradle sync, and execute the included unit test and debug build before production distribution.
+Before production, run:
+
+```powershell
+.\gradlew.bat clean test assembleDebug
+```
+
+Then complete the pairing, refresh, revocation and account-authorization checks in `DEPLOYMENT_CHECKLIST.md`.

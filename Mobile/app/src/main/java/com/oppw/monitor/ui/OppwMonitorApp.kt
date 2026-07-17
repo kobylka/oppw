@@ -5,13 +5,16 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ListAlt
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.Assessment
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.ExpandMore
-import androidx.compose.material.icons.automirrored.outlined.ListAlt
+import androidx.compose.material.icons.outlined.Logout
 import androidx.compose.material.icons.outlined.PieChartOutline
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -21,6 +24,7 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -29,14 +33,17 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.oppw.monitor.data.AuthStatus
 import com.oppw.monitor.data.MonitorAccount
 import com.oppw.monitor.ui.screens.LogsScreen
 import com.oppw.monitor.ui.screens.OverviewScreen
+import com.oppw.monitor.ui.screens.PairDeviceScreen
 import com.oppw.monitor.ui.screens.PositionScreen
 import com.oppw.monitor.ui.theme.AppBackground
 import com.oppw.monitor.ui.theme.PrimaryBlue
@@ -44,11 +51,22 @@ import com.oppw.monitor.ui.theme.TextSecondary
 
 private data class Tab(val label: String, val icon: ImageVector)
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun OppwMonitorApp(viewModel: MainViewModel) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    when (state.authStatus) {
+        AuthStatus.CHECKING -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+        AuthStatus.UNPAIRED, AuthStatus.PAIRING -> PairDeviceScreen(state, viewModel::pairDevice)
+        AuthStatus.PAIRED -> MonitorScaffold(viewModel)
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MonitorScaffold(viewModel: MainViewModel) {
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
     var selectedTab by remember { mutableIntStateOf(0) }
+    var confirmUnpair by remember { mutableStateOf(false) }
     val selectedAccount = state.accounts.firstOrNull { it.key == state.selectedAccountKey }
     val tabs = listOf(
         Tab("Overview", Icons.Outlined.PieChartOutline),
@@ -64,7 +82,7 @@ fun OppwMonitorApp(viewModel: MainViewModel) {
                     Column {
                         Text("OPPW Monitor", fontWeight = FontWeight.Bold)
                         Text(
-                            selectedAccount?.let { "${it.displayName} · ${it.accountType}" } ?: "Select account",
+                            selectedAccount?.let { "${it.displayName} · ${it.accountType}" } ?: state.deviceName,
                             color = TextSecondary,
                             style = androidx.compose.material3.MaterialTheme.typography.labelMedium,
                         )
@@ -72,14 +90,9 @@ fun OppwMonitorApp(viewModel: MainViewModel) {
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = AppBackground),
                 actions = {
-                    AccountSwitcher(
-                        accounts = state.accounts,
-                        selectedAccountKey = state.selectedAccountKey,
-                        onSelect = viewModel::selectAccount,
-                    )
-                    IconButton(onClick = viewModel::refresh) {
-                        Icon(Icons.Outlined.Refresh, contentDescription = "Refresh")
-                    }
+                    AccountSwitcher(state.accounts, state.selectedAccountKey, viewModel::selectAccount)
+                    IconButton(onClick = viewModel::refresh) { Icon(Icons.Outlined.Refresh, contentDescription = "Refresh") }
+                    IconButton(onClick = { confirmUnpair = true }) { Icon(Icons.Outlined.Logout, contentDescription = "Unpair device") }
                 },
             )
         },
@@ -104,14 +117,22 @@ fun OppwMonitorApp(viewModel: MainViewModel) {
             }
         }
     }
+
+    if (confirmUnpair) {
+        AlertDialog(
+            onDismissRequest = { confirmUnpair = false },
+            title = { Text("Unpair this device?") },
+            text = { Text("The server will revoke this device and the local encrypted session will be deleted.") },
+            confirmButton = {
+                TextButton(onClick = { confirmUnpair = false; viewModel.unpairDevice() }) { Text("Unpair") }
+            },
+            dismissButton = { TextButton(onClick = { confirmUnpair = false }) { Text("Cancel") } },
+        )
+    }
 }
 
 @Composable
-private fun AccountSwitcher(
-    accounts: List<MonitorAccount>,
-    selectedAccountKey: String?,
-    onSelect: (String) -> Unit,
-) {
+private fun AccountSwitcher(accounts: List<MonitorAccount>, selectedAccountKey: String?, onSelect: (String) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { expanded = true }, enabled = accounts.isNotEmpty()) {
@@ -131,16 +152,10 @@ private fun AccountSwitcher(
                         }
                     },
                     leadingIcon = {
-                        if (account.key == selectedAccountKey) {
-                            Icon(Icons.Outlined.CheckCircle, contentDescription = null, tint = PrimaryBlue)
-                        } else {
-                            Icon(Icons.Outlined.ExpandMore, contentDescription = null, tint = TextSecondary)
-                        }
+                        if (account.key == selectedAccountKey) Icon(Icons.Outlined.CheckCircle, null, tint = PrimaryBlue)
+                        else Icon(Icons.Outlined.ExpandMore, null, tint = TextSecondary)
                     },
-                    onClick = {
-                        expanded = false
-                        onSelect(account.key)
-                    },
+                    onClick = { expanded = false; onSelect(account.key) },
                 )
             }
         }

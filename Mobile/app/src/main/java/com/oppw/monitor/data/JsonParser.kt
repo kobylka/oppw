@@ -1,9 +1,29 @@
 package com.oppw.monitor.data
 
+import com.oppw.monitor.auth.AuthSession
 import org.json.JSONArray
 import org.json.JSONObject
 
 object JsonParser {
+    fun parseAuthSession(raw: String): AuthSession {
+        val root = JSONObject(raw)
+        if (!root.optBoolean("ok", false)) throw IllegalStateException(root.optString("error", "API returned an error"))
+        val session = root.getJSONObject("session")
+        val device = session.getJSONObject("device")
+        val allowed = session.optJSONArray("allowedAccounts") ?: JSONArray()
+        return AuthSession(
+            accessToken = session.getString("accessToken"),
+            accessTokenExpiresAt = session.getString("accessTokenExpiresAt"),
+            refreshToken = session.getString("refreshToken"),
+            refreshTokenExpiresAt = session.getString("refreshTokenExpiresAt"),
+            deviceId = device.getString("id"),
+            deviceName = device.optString("name", "Android device"),
+            allowedAccountKeys = buildList {
+                for (index in 0 until allowed.length()) add(allowed.getJSONObject(index).getString("key"))
+            },
+        )
+    }
+
     fun parseAccounts(raw: String): List<MonitorAccount> {
         val root = JSONObject(raw)
         if (!root.optBoolean("ok", false)) throw IllegalStateException(root.optString("error", "API returned an error"))

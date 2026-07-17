@@ -1,7 +1,8 @@
 <?php
 declare(strict_types=1);
 require __DIR__ . '/lib.php';
-require_token('write');
+require_method('POST');
+require_write_token();
 
 $data = request_json();
 $db = pdo();

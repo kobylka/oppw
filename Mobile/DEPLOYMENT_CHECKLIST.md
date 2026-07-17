@@ -1,30 +1,23 @@
-# Deployment checklist — multi-account
+# Deployment checklist
 
-## Server
+## Backend
 
-- [ ] MySQL backup created.
-- [ ] `monitor_accounts` table created.
-- [ ] `REAL` and `DEMO` rows exist.
-- [ ] Any additional accounts inserted with unique `account_key` values.
-- [ ] `accounts.php`, `status.php`, and `ingest.php` deployed.
-- [ ] HTTPS certificate valid.
-- [ ] Read and write tokens are different.
-- [ ] `accounts.php` returns all enabled accounts.
-- [ ] `status.php?account=REAL` and `status.php?account=DEMO` return separate data.
-
-## Publishers
-
-- [ ] Real process uses `OPPW_MONITOR_ACCOUNT_KEY=REAL`.
-- [ ] Demo process uses `OPPW_MONITOR_ACCOUNT_KEY=DEMO`.
-- [ ] Each snapshot contains the matching `connection.accountId`.
-- [ ] Publisher failures cannot block the trading loop.
+- [ ] Import `backend/sql/schema.sql` or `migrate_auth.sql`.
+- [ ] Create `backend/config.php` from the example.
+- [ ] Generate independent database, writer and HMAC secrets.
+- [ ] Deploy only behind HTTPS with a valid certificate.
+- [ ] Confirm `config.php`, `lib.php`, `admin/`, `sql/` and `publisher/` are inaccessible over HTTP.
+- [ ] Test `health.php`.
+- [ ] Configure the MT5 publisher with the write token.
+- [ ] Schedule `admin/cleanup.php` daily.
 
 ## Android
 
-- [ ] `local.properties` contains HTTPS API URL and read token.
-- [ ] Gradle sync completes with JDK 17.
-- [ ] Debug APK installs on Samsung Galaxy A53.
-- [ ] Account wallet icon lists Real and Demo.
-- [ ] Switching account changes position, equity, and logs.
-- [ ] Selected account survives app restart.
-- [ ] No trading controls are present.
+- [ ] Set only `OPPW_API_BASE_URL` in `local.properties`.
+- [ ] Run Gradle sync with JDK 17.
+- [ ] Build and install the APK.
+- [ ] Generate a one-time pairing code.
+- [ ] Pair the phone and verify only assigned accounts appear.
+- [ ] Wait at least 15 minutes and verify transparent access-token refresh.
+- [ ] Revoke the device on the server and verify the app returns to pairing after the current access token is rejected.
+- [ ] Generate and protect the release signing key outside Git.

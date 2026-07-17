@@ -10967,3 +10967,124 @@ build: 2026-07-17-minute-status-publishing-v31
 2026-07-17 13:30:00 INFO CONDITION_REPORT_END minute=2026-07-17 13:30 checks=5
 2026-07-17 13:30:00 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-17 13:30 current_price=28760.00000 profit=34.59 profit_percent=0.079166 leveraged_profit_percent=0.633324 equity=28262.87 balance=28228.28 deposit=21.86
 2026-07-17 13:30:00 INFO EVENT STRATEGY_STOPPED
+2026-07-17 13:34:21 INFO EVENT CONNECTED account=REMOVED_DEMO_ACCOUNT_ID server=BOSSAFX-Demo trade=US100 signal=US100 live=True build=2026-07-17-mt5-margin-deposit-v32 script=D:\OneDrive\su\oppw\mt5\oppw_mt5_continuous.py
+2026-07-17 13:34:21 WARNING EVENT RECOVERY_SIGNAL_OPEN_PENDING open_day=2026-07-17 cash_open=2026-07-17T15:30:00+02:00
+2026-07-17 13:34:21 INFO EVENT POSITION_RECOVERED ticket=2129528 identifier=2129528 magic=0 open_time=2026-07-17T09:21:27.738000+02:00 entry=28737.25000 volume=0.01 leverage=8 leverage_source=default_L8 signal_open=0.00000 signal_open_pending=True break_even=False
+2026-07-17 13:34:21 INFO STATUS
+==================== TRADE STATUS - STARTUP ====================
+phase: PREMARKET protection regime: TSL_0.4000%
+time: 2026-07-17 13:34:21 CEST week: 2026-W29
+closest condition: TSL @ 28622.30000 — 130.70000 points below (0.4546%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 09:21:27 CEST
+open price: 28737.25000
+current ask: 28754.50000
+current P/L: 23.94 PLN
+current P/L %: 0.0548%
+current P/L % leveraged: 0.4385%
+equity: 28252.22 PLN deposit: 2177.36 PLN
+SL: 28622.30000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: -
+final trading day: 2026-07-17
+weekly exit: WAIT (due=False)
+previous M1: epoch=1784295180 raw_epoch_utc=2026-07-17T13:33:00.000+00:00 bar_time=2026-07-17T13:33:00.000+02:00 actual_utc=2026-07-17T11:33:00.000+00:00 O=28746.50000 H=28751.50000 L=28738.00000 C=28750.50000
+build: 2026-07-17-mt5-margin-deposit-v32
+======================================================
+
+2026-07-17 13:34:21 INFO EVENT WEEK_PLAN week=2026-W29 sessions=2026-07-13,2026-07-14,2026-07-15,2026-07-16,2026-07-17 final_day=2026-07-17 open_action=2026-07-17 15:29:57 CEST weekly_TO=2026-07-17 21:59:57 CEST
+2026-07-17 13:35:00 INFO STATUS
+==================== TRADE STATUS - MINUTE ====================
+phase: PREMARKET protection regime: TSL_0.4000%
+time: 2026-07-17 13:35:00 CEST week: 2026-W29
+closest condition: TSL @ 28622.30000 — 126.60000 points below (0.4404%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 09:21:27 CEST
+open price: 28737.25000
+current ask: 28749.85000
+current P/L: 17.71 PLN
+current P/L %: 0.0405%
+current P/L % leveraged: 0.3243%
+equity: 28245.99 PLN deposit: 2177.36 PLN
+SL: 28622.30000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: -
+final trading day: 2026-07-17
+weekly exit: WAIT (due=False)
+previous M1: epoch=1784295240 raw_epoch_utc=2026-07-17T13:34:00.000+00:00 bar_time=2026-07-17T13:34:00.000+02:00 actual_utc=2026-07-17T11:34:00.000+00:00 O=28749.50000 H=28755.00000 L=28744.00000 C=28748.90000
+build: 2026-07-17-mt5-margin-deposit-v32
+======================================================
+
+2026-07-17 13:35:00 INFO CONDITION_REPORT_BEGIN minute=2026-07-17 13:35
+2026-07-17 13:35:00 INFO CHECK minute=2026-07-17_13:35 weekday=Friday phase=PREMARKET name=POSITION_OPEN result=TRUE ticket=2129528 entry=28737.25 volume=0.01
+2026-07-17 13:35:00 INFO CHECK minute=2026-07-17_13:35 weekday=Friday phase=PREMARKET name=ENTRY_SIGNAL_OPEN_AVAILABLE result=FALSE signal_open=0.0 pending=True
+2026-07-17 13:35:00 INFO CHECK minute=2026-07-17_13:35 weekday=Friday phase=PREMARKET name=EXIT_LATCH_CLEAR result=TRUE exit_latch=none
+2026-07-17 13:35:00 INFO CHECK minute=2026-07-17_13:35 weekday=Friday phase=PREMARKET name=OH result=FALSE bid=28748.9 threshold=30174.112500000003
+2026-07-17 13:35:00 INFO CHECK minute=2026-07-17_13:35 weekday=Friday phase=PREMARKET name=TSL result=TRUE current_sl=28622.30000 required_sl=28622.30000
+2026-07-17 13:35:00 INFO CONDITION_REPORT_END minute=2026-07-17 13:35 checks=5
+2026-07-17 13:36:00 INFO STATUS
+==================== TRADE STATUS - MINUTE ====================
+phase: PREMARKET protection regime: TSL_0.4000%
+time: 2026-07-17 13:36:00 CEST week: 2026-W29
+closest condition: TSL @ 28622.30000 — 134.45000 points below (0.4675%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 09:21:27 CEST
+open price: 28737.25000
+current ask: 28758.75000
+current P/L: 29.64 PLN
+current P/L %: 0.0679%
+current P/L % leveraged: 0.5428%
+equity: 28257.92 PLN deposit: 2177.36 PLN
+SL: 28622.30000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: -
+final trading day: 2026-07-17
+weekly exit: WAIT (due=False)
+previous M1: epoch=1784295300 raw_epoch_utc=2026-07-17T13:35:00.000+00:00 bar_time=2026-07-17T13:35:00.000+02:00 actual_utc=2026-07-17T11:35:00.000+00:00 O=28748.15000 H=28759.15000 L=28746.25000 C=28756.75000
+build: 2026-07-17-mt5-margin-deposit-v32
+======================================================
+
+2026-07-17 13:36:00 INFO CONDITION_REPORT_BEGIN minute=2026-07-17 13:36
+2026-07-17 13:36:00 INFO CHECK minute=2026-07-17_13:36 weekday=Friday phase=PREMARKET name=POSITION_OPEN result=TRUE ticket=2129528 entry=28737.25 volume=0.01
+2026-07-17 13:36:00 INFO CHECK minute=2026-07-17_13:36 weekday=Friday phase=PREMARKET name=ENTRY_SIGNAL_OPEN_AVAILABLE result=FALSE signal_open=0.0 pending=True
+2026-07-17 13:36:00 INFO CHECK minute=2026-07-17_13:36 weekday=Friday phase=PREMARKET name=EXIT_LATCH_CLEAR result=TRUE exit_latch=none
+2026-07-17 13:36:00 INFO CHECK minute=2026-07-17_13:36 weekday=Friday phase=PREMARKET name=OH result=FALSE bid=28756.75 threshold=30174.112500000003
+2026-07-17 13:36:00 INFO CHECK minute=2026-07-17_13:36 weekday=Friday phase=PREMARKET name=TSL result=TRUE current_sl=28622.30000 required_sl=28622.30000
+2026-07-17 13:36:00 INFO CONDITION_REPORT_END minute=2026-07-17 13:36 checks=5
+2026-07-17 13:37:00 INFO STATUS
+==================== TRADE STATUS - MINUTE ====================
+phase: PREMARKET protection regime: TSL_0.4000%
+time: 2026-07-17 13:37:00 CEST week: 2026-W29
+closest condition: TSL @ 28622.30000 — 135.20000 points below (0.4701%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 09:21:27 CEST
+open price: 28737.25000
+current ask: 28759.50000
+current P/L: 30.78 PLN
+current P/L %: 0.0705%
+current P/L % leveraged: 0.5637%
+equity: 28259.06 PLN deposit: 2177.36 PLN
+SL: 28622.30000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: -
+final trading day: 2026-07-17
+weekly exit: WAIT (due=False)
+previous M1: epoch=1784295360 raw_epoch_utc=2026-07-17T13:36:00.000+00:00 bar_time=2026-07-17T13:36:00.000+02:00 actual_utc=2026-07-17T11:36:00.000+00:00 O=28757.25000 H=28761.50000 L=28752.50000 C=28757.50000
+build: 2026-07-17-mt5-margin-deposit-v32
+======================================================
+
+2026-07-17 13:37:00 INFO CONDITION_REPORT_BEGIN minute=2026-07-17 13:37
+2026-07-17 13:37:00 INFO CHECK minute=2026-07-17_13:37 weekday=Friday phase=PREMARKET name=POSITION_OPEN result=TRUE ticket=2129528 entry=28737.25 volume=0.01
+2026-07-17 13:37:00 INFO CHECK minute=2026-07-17_13:37 weekday=Friday phase=PREMARKET name=ENTRY_SIGNAL_OPEN_AVAILABLE result=FALSE signal_open=0.0 pending=True
+2026-07-17 13:37:00 INFO CHECK minute=2026-07-17_13:37 weekday=Friday phase=PREMARKET name=EXIT_LATCH_CLEAR result=TRUE exit_latch=none
+2026-07-17 13:37:00 INFO CHECK minute=2026-07-17_13:37 weekday=Friday phase=PREMARKET name=OH result=FALSE bid=28757.5 threshold=30174.112500000003
+2026-07-17 13:37:00 INFO CHECK minute=2026-07-17_13:37 weekday=Friday phase=PREMARKET name=TSL result=TRUE current_sl=28622.30000 required_sl=28622.30000
+2026-07-17 13:37:00 INFO CONDITION_REPORT_END minute=2026-07-17 13:37 checks=5

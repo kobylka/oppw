@@ -12,8 +12,7 @@ val localProperties = Properties().apply {
 
 fun quoted(value: String): String = "\"${value.replace("\\", "\\\\").replace("\"", "\\\"")}\""
 
-val apiBaseUrl = localProperties.getProperty("OPPW_API_BASE_URL", "https://eloski.eu/oppw-api/")
-val apiToken = localProperties.getProperty("OPPW_API_TOKEN", "A")
+val apiBaseUrl = localProperties.getProperty("OPPW_API_BASE_URL", "https://example.com/oppw-api/")
 
 android {
     namespace = "com.oppw.monitor"
@@ -23,11 +22,10 @@ android {
         applicationId = "com.oppw.monitor"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "2.0.0"
 
         buildConfigField("String", "API_BASE_URL", quoted(apiBaseUrl))
-        buildConfigField("String", "API_TOKEN", quoted(apiToken))
         buildConfigField("long", "POLL_INTERVAL_MS", "5000L")
     }
 
