@@ -1,0 +1,192 @@
+2026-07-16 15:27:43,930 INFO Connected: account=REMOVED_DEMO_ACCOUNT_ID server=BOSSAFX-Demo trade=US100 signal=US100 live=False
+2026-07-16 15:27:43,931 WARNING DRY RUN: set OPPW_LIVE=1 to permit BUY and SL/TP modification requests
+2026-07-16 15:41:46,063 INFO Connected: account=REMOVED_DEMO_ACCOUNT_ID server=BOSSAFX-Demo trade=US100 signal=US100 live=False
+2026-07-16 15:41:46,064 WARNING DRY RUN: set OPPW_LIVE=1 to permit BUY and SL/TP modification requests
+2026-07-16 15:42:18,784 INFO Connected: account=REMOVED_DEMO_ACCOUNT_ID server=BOSSAFX-Demo trade=US100 signal=US100 live=True
+2026-07-16 15:42:41,448 ERROR MT5 connection lost; reconnecting
+2026-07-16 15:42:53,419 INFO Connected: account=REMOVED_DEMO_ACCOUNT_ID server=BOSSAFX-Demo trade=US100 signal=US100 live=True
+2026-07-16 15:43:42,619 INFO Connected: account=REMOVED_DEMO_ACCOUNT_ID server=BOSSAFX-Demo trade=US100 signal=US100 live=True
+2026-07-16 15:49:52,045 ERROR MT5 connection lost; reconnecting
+2026-07-16 15:49:57,718 INFO Connected: account=REMOVED_DEMO_ACCOUNT_ID server=BOSSAFX-Demo trade=US100 signal=US100 live=True
+2026-07-16 15:50:09,607 INFO Connected: account=REMOVED_DEMO_ACCOUNT_ID server=BOSSAFX-Demo trade=US100 signal=US100 live=True
+2026-07-16 15:53:00,906 ERROR MT5 connection lost; reconnecting
+2026-07-16 15:53:10,502 INFO Connected: account=REMOVED_DEMO_ACCOUNT_ID server=BOSSAFX-Demo trade=US100 signal=US100 live=True
+2026-07-16 16:03:41,251 INFO Connected: account=REMOVED_DEMO_ACCOUNT_ID server=BOSSAFX-Demo trade=US100 signal=US100 live=False
+2026-07-16 16:03:41,251 WARNING DRY RUN: set OPPW_LIVE=1 to permit BUY and SL/TP modification requests
+2026-07-16 16:03:58,143 ERROR MT5 connection lost; reconnecting
+2026-07-16 16:04:04,362 INFO Connected: account=REMOVED_DEMO_ACCOUNT_ID server=BOSSAFX-Demo trade=US100 signal=US100 live=False
+2026-07-16 16:04:04,362 WARNING DRY RUN: set OPPW_LIVE=1 to permit BUY and SL/TP modification requests
+2026-07-16 16:04:31,180 INFO Connected: account=REMOVED_DEMO_ACCOUNT_ID server=BOSSAFX-Demo trade=US100 signal=US100 live=True
+2026-07-16 16:05:51,199 ERROR MT5 connection lost; reconnecting
+2026-07-16 16:06:25,649 INFO Connected: account=REMOVED_DEMO_ACCOUNT_ID server=BOSSAFX-Demo trade=US100 signal=US100 live=True
+2026-07-16 16:09:22,767 INFO Connected: account=REMOVED_DEMO_ACCOUNT_ID server=BOSSAFX-Demo trade=US100 signal=US100 live=True
+2026-07-16 16:09:31,189 ERROR MT5 connection lost; reconnecting
+2026-07-16 16:09:37,615 INFO Connected: account=REMOVED_DEMO_ACCOUNT_ID server=BOSSAFX-Demo trade=US100 signal=US100 live=True
+2026-07-16 16:10:17,387 ERROR MT5 connection lost; reconnecting
+2026-07-16 16:10:58,569 INFO Connected: account=REMOVED_DEMO_ACCOUNT_ID server=BOSSAFX-Demo trade=US100 signal=US100 live=True
+2026-07-16 16:11:39,971 INFO Connected: account=REMOVED_DEMO_ACCOUNT_ID server=BOSSAFX-Demo trade=US100 signal=US100 live=True
+2026-07-16 16:11:39,993 INFO Recovered position ticket=2126333 identifier=2126333 open=29333.25 leverage=8
+2026-07-16 16:11:39,995 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:39,996 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:40,211 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:40,211 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:40,423 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:40,424 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:40,636 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:40,637 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:40,848 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:40,849 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:41,061 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:41,061 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:41,263 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:41,263 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:41,474 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:41,475 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:41,686 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:41,686 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:41,898 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:41,898 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:42,110 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:42,110 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:42,322 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:42,323 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:42,535 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:42,535 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:42,747 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:42,747 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:42,958 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:42,959 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:43,170 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:43,170 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:43,382 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:43,383 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:43,584 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:43,584 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:43,796 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:43,796 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:44,008 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:44,008 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:44,219 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:44,220 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:44,431 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:44,431 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:44,643 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:44,644 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:44,856 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:44,856 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:45,068 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:45,068 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:45,278 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:45,279 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:45,491 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:45,492 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:45,707 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:45,708 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:45,920 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:45,920 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:46,132 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:46,132 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:46,344 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:46,345 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:46,556 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:46,557 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:46,768 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:46,768 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:46,980 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:46,980 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:47,192 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:47,192 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:47,403 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:47,404 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:47,616 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:47,616 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:47,827 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:47,827 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:48,039 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:48,039 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:48,251 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:48,251 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:48,463 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:48,463 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:48,674 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:48,674 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:48,887 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:48,887 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:49,099 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:49,099 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:49,311 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:49,311 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:49,523 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:49,523 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:49,735 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:49,735 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:49,947 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:49,947 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:50,159 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:50,159 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:50,371 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:50,371 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:50,583 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:50,583 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:50,797 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:50,797 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:51,009 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:51,009 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:51,221 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:51,221 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:51,432 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:51,433 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:51,644 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:51,644 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:51,856 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:51,857 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:52,069 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:52,069 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:52,280 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:52,280 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:52,492 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:52,492 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:52,704 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:52,704 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:52,916 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:52,916 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:53,128 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:53,129 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:53,341 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:53,341 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:53,553 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:53,553 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:53,765 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:53,765 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:53,977 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:53,978 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:54,189 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:54,190 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:54,401 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:54,401 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:54,613 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:54,614 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:54,826 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:54,827 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:55,039 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:55,040 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:11:55,252 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:11:55,252 ERROR SL/TP rejected: retcode=10027 comment=AutoTrading disabled by client
+2026-07-16 16:13:03,314 INFO Connected: account=REMOVED_DEMO_ACCOUNT_ID server=BOSSAFX-Demo trade=US100 signal=US100 live=True
+2026-07-16 16:13:03,327 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:22:04,366 INFO Connected: account=REMOVED_DEMO_ACCOUNT_ID server=BOSSAFX-Demo trade=US100 signal=US100 live=False
+2026-07-16 16:22:04,367 WARNING DRY RUN: set OPPW_LIVE=1 to permit BUY and SL/TP modification requests
+2026-07-16 16:22:04,374 WARNING Managed position disappeared, but closing deal could not be resolved for identifier=2126333
+2026-07-16 16:22:35,303 INFO Connected: account=REMOVED_DEMO_ACCOUNT_ID server=BOSSAFX-Demo trade=US100 signal=US100 live=True
+2026-07-16 16:22:35,315 INFO Recovered position ticket=2126333 identifier=2126333 open=29333.25 leverage=8
+2026-07-16 16:23:15,243 ERROR MT5 connection lost; reconnecting
+2026-07-16 16:23:23,606 INFO Connected: account=REMOVED_DEMO_ACCOUNT_ID server=BOSSAFX-Demo trade=US100 signal=US100 live=True
+2026-07-16 16:23:40,237 INFO Connected: account=REMOVED_DEMO_ACCOUNT_ID server=BOSSAFX-Demo trade=US100 signal=US100 live=False
+2026-07-16 16:23:40,238 WARNING DRY RUN: set OPPW_LIVE=1 to permit BUY and SL/TP modification requests
+2026-07-16 16:23:40,246 WARNING Managed position disappeared, but closing deal could not be resolved for identifier=2126333
+2026-07-16 16:23:53,903 INFO Connected: account=REMOVED_DEMO_ACCOUNT_ID server=BOSSAFX-Demo trade=US100 signal=US100 live=True
+2026-07-16 16:23:53,915 INFO Recovered position ticket=2126333 identifier=2126333 open=29333.25 leverage=8
+2026-07-16 16:24:16,196 INFO SL/TP modify: reason=STANDARD ticket=2126333 SL 0.00000->29215.91000 TP 0.00000->0.00000
+2026-07-16 16:26:47,451 ERROR MT5 connection lost; reconnecting
+2026-07-16 16:27:21,089 INFO Connected: account=REMOVED_DEMO_ACCOUNT_ID server=BOSSAFX-Demo trade=US100 signal=US100 live=True
+2026-07-16 16:27:35,872 INFO Connected: account=REMOVED_DEMO_ACCOUNT_ID server=BOSSAFX-Demo trade=US100 signal=US100 live=True

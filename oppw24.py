@@ -123,6 +123,18 @@ class Sim:
                     dukascopy_date = parts[0].strip()  # '03.01.2022'
                     date = dukascopy_date
                     
+                    if date == "20200309": continue
+                    if date == "20200310": continue
+                    if date == "20200311": continue
+                    if date == "20200312": continue
+                    if date == "20200313": continue
+                    if date == "20200316": continue
+                    if date == "20200317": continue
+                    if date == "20200318": continue
+                    if date == "20200319": continue
+                    if date == "20200320": continue
+                    if date == "20251128": continue
+                    
                     if(date not in self.quotes):
                         continue
                     
@@ -166,6 +178,19 @@ class Sim:
                     if line[0] == "<TICKER>":
                         continue
                     date = line[2]
+                    
+                    if date == "20200309": continue
+                    if date == "20200310": continue
+                    if date == "20200311": continue
+                    if date == "20200312": continue
+                    if date == "20200313": continue
+                    if date == "20200316": continue
+                    if date == "20200317": continue
+                    if date == "20200318": continue
+                    if date == "20200319": continue
+                    if date == "20200320": continue
+                    if date == "20251128": continue
+                    
                     if date == start_date:
                         init = True
                     elif init is False:
@@ -413,6 +438,8 @@ class Sim:
 
             qqq_open = quotes[0]
             qqq_close = quotes[3]
+            
+            print(date)
             
             openest = quotes[4][0]
             opon = quotes[934][0]
@@ -787,7 +814,7 @@ if __name__ == "__main__":
     
     tpps = [0.007,0.02,0.05,0.05,0.05]
     print(tpps)
-    result = sim.process(sim_i.quotes, "QQQ","20180413", "20260713", LEVERAGE, tpps, SL, BE, 0.004,0.015, 30000, False,True,True,True)
+    result = sim.process(sim_i.quotes, "QQQ","20180413", "20260710", LEVERAGE, tpps, SL, BE, 0.004,0.015, 30000, False,True,True,True)
     print(result)
     
     #1,79216 125

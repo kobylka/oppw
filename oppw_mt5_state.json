@@ -1,0 +1,23 @@
+{
+  "active_position_identifier": 2126333,
+  "active_position_ticket": 2126333,
+  "break_even": false,
+  "entry_leverage": 8,
+  "entry_pending_until_utc": 0,
+  "entry_price": 29333.25,
+  "entry_signal_daily_open": 29471.75,
+  "exit_latched_at": "",
+  "exit_latched_reason": "",
+  "last_close_processed_date": "",
+  "last_entry_week": "2026-W29",
+  "last_exit_price": 0.0,
+  "last_exit_reason": "broker/manual",
+  "last_exit_time": "",
+  "last_processed_bar_utc": 1784219280,
+  "last_trading_date": "",
+  "open_date": "2026-07-16",
+  "prev_change": 0.0,
+  "prev_full_week_change": 0.0,
+  "prev_open": 29333.25,
+  "version": 1
+}
