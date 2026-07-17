@@ -23,8 +23,13 @@ import logging
 import math
 import os
 import signal
+import shlex
 import sys
+import threading
 import time as time_module
+import urllib.error
+import urllib.request
+from collections import deque
 from dataclasses import asdict, dataclass, fields
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
@@ -32,7 +37,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-BUILD_ID = "2026-07-17-unified-tsl-config-v29"
+BUILD_ID = "2026-07-17-minute-status-publishing-v31"
 SCHEDULED_ACTION_LEAD_SECONDS = 3.0
 
 try:
@@ -205,6 +210,296 @@ def price_changed(current: float, desired: float, tolerance: float) -> bool:
         return False
     return abs(current - desired) >= tolerance
 
+@dataclass(frozen=True)
+class QueuedMonitorEvent:
+    sequence: int
+    payload: dict[str, Any]
+
+
+class MobileMonitorPublisher:
+    """Asynchronous, read-only monitor publisher.
+
+    The strategy thread only supplies immutable snapshots and log events. All
+    HTTPS work, retries, event retention, and equity-history persistence happen
+    on a daemon worker so publishing cannot delay trade execution.
+    """
+
+    def __init__(self, config: Config, logger: logging.Logger, timezone: ZoneInfo):
+        self.cfg = config
+        self.log = logger
+        self.timezone = timezone
+        self.enabled = bool(config.monitor_enabled)
+        self.ready = self.enabled and bool(config.monitor_ingest_url and config.monitor_write_token and config.monitor_account_key)
+        self.condition = threading.Condition()
+        self.events: deque[QueuedMonitorEvent] = deque(maxlen=max(1, config.monitor_event_buffer_size))
+        self.guaranteed_snapshots: deque[dict[str, Any]] = deque(maxlen=max(1, config.monitor_minute_snapshot_buffer_size))
+        self.sequence = 0
+        self.latest_snapshot: Optional[dict[str, Any]] = None
+        self.publish_requested = False
+        self.stopping = False
+        self.thread: Optional[threading.Thread] = None
+        self.last_error_log_monotonic = 0.0
+        self.last_success_utc = ""
+        self.equity_history = self.load_equity_history()
+
+        if self.enabled and not self.ready:
+            self.local_log(
+                logging.WARNING,
+                "EVENT MONITOR_DISABLED reason=missing_configuration required=OPPW_MONITOR_INGEST_URL,OPPW_MONITOR_WRITE_TOKEN,OPPW_MONITOR_ACCOUNT_KEY",
+            )
+        elif self.ready and not config.monitor_ingest_url.lower().startswith("https://"):
+            self.ready = False
+            self.local_log(logging.ERROR, "EVENT MONITOR_DISABLED reason=endpoint_must_use_https")
+
+    def local_log(self, level: int, message: str, *args: Any) -> None:
+        self.log.log(level, message, *args, extra={"skip_mobile_publish": True})
+
+    def load_equity_history(self) -> list[dict[str, Any]]:
+        try:
+            if not self.cfg.monitor_history_file.exists():
+                return []
+            raw = json.loads(self.cfg.monitor_history_file.read_text(encoding="utf-8"))
+            if not isinstance(raw, list):
+                return []
+            result: list[dict[str, Any]] = []
+            for item in raw[-max(1, self.cfg.monitor_equity_history_points):]:
+                if isinstance(item, dict) and isinstance(item.get("time"), str) and isinstance(item.get("value"), (int, float)):
+                    result.append({"time": item["time"], "value": float(item["value"])})
+            return result
+        except Exception:
+            return []
+
+    def save_equity_history(self) -> None:
+        try:
+            path = self.cfg.monitor_history_file
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_suffix(path.suffix + ".tmp")
+            temporary.write_text(json.dumps(self.equity_history, separators=(",", ":")), encoding="utf-8")
+            os.replace(temporary, path)
+        except Exception as exc:
+            self.rate_limited_error("EVENT MONITOR_HISTORY_SAVE_FAILED error=%s", exc)
+
+    def start(self) -> None:
+        if not self.ready or self.thread is not None:
+            return
+        self.thread = threading.Thread(target=self.worker, name="oppw-monitor-publisher", daemon=True)
+        self.thread.start()
+        self.local_log(
+            logging.INFO,
+            "EVENT MONITOR_PUBLISHER_STARTED account_key=%s interval=%.1fs endpoint=%s",
+            self.cfg.monitor_account_key,
+            self.cfg.monitor_publish_interval_seconds,
+            self.cfg.monitor_ingest_url,
+        )
+
+    def stop(self) -> None:
+        if self.thread is None:
+            return
+        with self.condition:
+            self.stopping = True
+            if self.latest_snapshot is not None or self.guaranteed_snapshots:
+                self.publish_requested = True
+            self.condition.notify_all()
+        self.thread.join(timeout=max(1.0, self.cfg.monitor_timeout_seconds + 1.0))
+        self.thread = None
+
+    def enqueue_event(self, event: dict[str, Any]) -> None:
+        if not self.ready:
+            return
+        with self.condition:
+            self.sequence += 1
+            self.events.append(QueuedMonitorEvent(self.sequence, event))
+
+    def submit_snapshot(self, snapshot: dict[str, Any], guaranteed: bool = False) -> None:
+        if not self.ready:
+            return
+        with self.condition:
+            if guaranteed:
+                self.guaranteed_snapshots.append(snapshot)
+            else:
+                self.latest_snapshot = snapshot
+            self.publish_requested = True
+            self.condition.notify_all()
+
+    def rate_limited_error(self, message: str, *args: Any) -> None:
+        now = time_module.monotonic()
+        if now - self.last_error_log_monotonic >= max(5.0, self.cfg.monitor_error_log_interval_seconds):
+            self.last_error_log_monotonic = now
+            self.local_log(logging.ERROR, message, *args)
+
+    def update_equity_history(self, snapshot: dict[str, Any], captured_at: str) -> None:
+        account = snapshot.get("account")
+        if not isinstance(account, dict):
+            return
+        equity = account.get("equity")
+        if not isinstance(equity, (int, float)):
+            return
+
+        should_append = not self.equity_history
+        if self.equity_history:
+            try:
+                previous = datetime.fromisoformat(str(self.equity_history[-1]["time"]).replace("Z", "+00:00"))
+                current = datetime.fromisoformat(captured_at.replace("Z", "+00:00"))
+                should_append = (current - previous).total_seconds() >= self.cfg.monitor_equity_sample_seconds
+            except Exception:
+                should_append = True
+
+        if should_append:
+            self.equity_history.append({"time": captured_at, "value": float(equity)})
+            self.equity_history = self.equity_history[-max(1, self.cfg.monitor_equity_history_points):]
+            self.save_equity_history()
+        snapshot["equityHistory"] = list(self.equity_history)
+
+    def send(self, snapshot: dict[str, Any], events: list[QueuedMonitorEvent]) -> None:
+        captured_at = datetime.now(UTC).isoformat()
+        snapshot_copy = json.loads(json.dumps(snapshot, separators=(",", ":")))
+        self.update_equity_history(snapshot_copy, captured_at)
+        payload = {
+            "accountKey": self.cfg.monitor_account_key,
+            "capturedAt": captured_at,
+            "snapshot": snapshot_copy,
+            "events": [event.payload for event in events],
+        }
+        body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        request = urllib.request.Request(
+            self.cfg.monitor_ingest_url,
+            data=body,
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {self.cfg.monitor_write_token}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": "OPPW-MT5-Publisher/31",
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.cfg.monitor_timeout_seconds) as response:
+                if int(response.status) not in (200, 201):
+                    raise RuntimeError(f"HTTP {response.status}")
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")[:300]
+            raise RuntimeError(f"HTTP {exc.code}: {detail}") from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"connection failed: {exc.reason}") from exc
+
+    def worker(self) -> None:
+        while True:
+            with self.condition:
+                while not self.publish_requested and not self.stopping:
+                    self.condition.wait()
+                if self.stopping and not self.publish_requested and not self.guaranteed_snapshots:
+                    return
+                guaranteed = bool(self.guaranteed_snapshots)
+                snapshot = self.guaranteed_snapshots.popleft() if guaranteed else self.latest_snapshot
+                events = list(self.events)
+                self.publish_requested = bool(self.guaranteed_snapshots)
+
+            if snapshot is None:
+                if self.stopping:
+                    return
+                continue
+
+            succeeded = False
+            try:
+                self.send(snapshot, events)
+                succeeded = True
+                self.last_success_utc = datetime.now(UTC).isoformat()
+                if events:
+                    highest = events[-1].sequence
+                    with self.condition:
+                        while self.events and self.events[0].sequence <= highest:
+                            self.events.popleft()
+            except Exception as exc:
+                self.rate_limited_error("EVENT MONITOR_PUBLISH_FAILED error=%s queued_events=%s", exc, len(events))
+                if guaranteed and not self.stopping:
+                    with self.condition:
+                        self.guaranteed_snapshots.appendleft(snapshot)
+                        self.publish_requested = False
+
+            if self.stopping:
+                if not succeeded:
+                    return
+                with self.condition:
+                    if not self.guaranteed_snapshots:
+                        return
+                    self.publish_requested = True
+
+
+class MobileEventHandler(logging.Handler):
+    def __init__(self, publisher: MobileMonitorPublisher):
+        super().__init__(logging.INFO)
+        self.publisher = publisher
+
+    @staticmethod
+    def parse_value(value: str) -> Any:
+        lowered = value.lower()
+        if lowered in {"true", "false"}:
+            return lowered == "true"
+        try:
+            return int(value)
+        except ValueError:
+            try:
+                return float(value)
+            except ValueError:
+                return value
+
+    @classmethod
+    def parse_details(cls, tokens: list[str]) -> dict[str, Any]:
+        details: dict[str, Any] = {}
+        for token in tokens:
+            if "=" not in token:
+                continue
+            key, value = token.split("=", 1)
+            if key:
+                details[key] = cls.parse_value(value)
+        return details
+
+    @staticmethod
+    def inferred_result(name: str) -> Optional[bool]:
+        positive = ("_ACCEPTED", "_CONNECTED", "_RECOVERED", "_CAPTURED", "_ARMED", "_UPDATED", "_PROCESSED", "_STARTED")
+        negative = ("_REJECTED", "_FAILED", "_LOST", "_SKIPPED", "_DISAPPEARED")
+        if name.endswith(positive):
+            return True
+        if name.endswith(negative):
+            return False
+        return None
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if getattr(record, "skip_mobile_publish", False) or not self.publisher.ready:
+            return
+        try:
+            message = record.getMessage()
+            if not (message.startswith("EVENT ") or message.startswith("CHECK ")):
+                return
+            tokens = shlex.split(message)
+            if len(tokens) < 2:
+                return
+
+            kind = tokens[0]
+            details = self.parse_details(tokens[2:] if kind == "EVENT" else tokens[1:])
+            if kind == "CHECK":
+                name = str(details.get("name", "CHECK"))
+                result_value = details.get("result")
+                result = result_value if isinstance(result_value, bool) else str(result_value).upper() == "TRUE" if result_value is not None else None
+            else:
+                name = tokens[1]
+                if name == "SCHEDULED_CHECK" and details.get("name"):
+                    name = str(details["name"])
+                result_value = details.get("result")
+                result = result_value if isinstance(result_value, bool) else self.inferred_result(name)
+
+            event = {
+                "time": datetime.fromtimestamp(record.created, UTC).isoformat(),
+                "level": record.levelname,
+                "name": name[:100],
+                "result": result,
+                "message": message[:1000],
+                "details": details,
+            }
+            self.publisher.enqueue_event(event)
+        except Exception:
+            self.handleError(record)
+
 
 class SingleInstanceLock:
     def __init__(self, path: Path):
@@ -272,6 +567,13 @@ class OPPWContinuousStrategy:
         self.last_week_plan_key = ""
         self.last_trade_request_monotonic = 0.0
         self._session_times_cache: dict[date, SessionTimes] = {}
+        self.last_monitor_publish_monotonic = 0.0
+        self.last_monitor_minute_key = ""
+        self.monitor_publisher = MobileMonitorPublisher(config, self.log, self.tz)
+        self.monitor_event_handler = MobileEventHandler(self.monitor_publisher)
+        if self.monitor_publisher.ready:
+            self.log.addHandler(self.monitor_event_handler)
+            self.monitor_publisher.start()
 
     # ----- MT5 connection -----------------------------------------------------
 
@@ -908,6 +1210,283 @@ class OPPWContinuousStrategy:
             self.protection_regime(now),
         )
 
+    # ----- Mobile monitoring --------------------------------------------------
+
+    def monitor_tick_snapshot(self, symbol: str, now: datetime) -> tuple[float, float, Optional[float]]:
+        try:
+            tick = self.latest_tick(symbol)
+            bid = float(getattr(tick, "bid", 0.0) or 0.0)
+            ask = float(getattr(tick, "ask", 0.0) or 0.0)
+            timestamp = getattr(tick, "time_msc", 0) / 1000.0 if getattr(tick, "time_msc", 0) else float(getattr(tick, "time", 0.0) or 0.0)
+            age = None
+            if timestamp > 0:
+                age = max(0.0, (now - self.mt5_timestamp_to_local(timestamp)).total_seconds())
+            return bid, ask, age
+        except Exception:
+            return 0.0, 0.0, None
+
+    def monitor_next_action(self, position, now: datetime) -> tuple[str, str]:
+        session = self.session_times(now.date())
+        day_key = now.date().isoformat()
+        if position is not None:
+            if now < session.open_action and self.state.last_open_action_date != day_key:
+                return "OH", session.open_action.isoformat()
+            if now < session.weekly_close and self.state.last_close_action_date != day_key:
+                name = "CH / TO" if self.final_trading_day(now.date()) == now.date() else "CH"
+                return name, session.weekly_close.isoformat()
+            if now < session.close_processing:
+                return "DAILY CLOSE", session.close_processing.isoformat()
+
+        try:
+            end = now.date() + timedelta(days=14)
+            sessions = self.calendar.sessions_in_range(now.date().isoformat(), end.isoformat())
+            for calendar_session in sessions:
+                session_day = calendar_session.date()
+                candidate = self.session_times(session_day).open_action
+                if candidate <= now:
+                    continue
+                if position is None and session_day.weekday() not in (0, 1):
+                    continue
+                if position is None and self.state.last_entry_week == iso_week_key(session_day):
+                    continue
+                return ("BUY WINDOW" if position is None else "OH"), candidate.isoformat()
+        except Exception:
+            pass
+        return "WAIT", ""
+
+    def monitor_closest_condition(self, position, now: datetime, bid: float) -> Optional[dict[str, Any]]:
+        if position is None or bid <= 0:
+            return None
+        entry = float(position.price_open)
+        if entry <= 0:
+            return None
+
+        info = mt5.symbol_info(position.symbol)
+        tick_size = float(getattr(info, "trade_tick_size", 0.0) or getattr(info, "point", 0.0) or 0.01) if info is not None else 0.01
+        tolerance = tick_size * 1.5
+        candidates: list[tuple[str, float]] = []
+
+        def add(name: str, price: float) -> None:
+            if not name or price <= 0:
+                return
+            if any(existing_name == name and abs(existing_price - price) <= tolerance for existing_name, existing_price in candidates):
+                return
+            candidates.append((name, price))
+
+        leverage = self.state.entry_leverage or self.choose_leverage()
+        add("SL", floor_step(entry * self.hard_sl_ratio(leverage), tick_size))
+        weekday_price, weekday_reason = self.weekday_sl_target(position, now)
+        if weekday_reason != "SL":
+            add(weekday_reason, floor_step(weekday_price, tick_size))
+        if float(position.sl) > 0:
+            add(self.state.active_sl_reason or "BROKER_SL", float(position.sl))
+        if self.state.break_even:
+            add(self.state.active_tp_reason or "BH", ceil_step(entry * self.cfg.break_even_ratio, tick_size))
+        if float(position.tp) > 0:
+            add(self.state.active_tp_reason or "BROKER_TP", float(position.tp))
+        weekday_index = now.weekday() if now.weekday() < 5 else 4
+        add("OH", ceil_step(entry * (1.0 + self.cfg.tpps[weekday_index]), tick_size))
+
+        if not candidates:
+            return None
+        name, target = min(candidates, key=lambda item: abs(item[1] - bid))
+        difference = target - bid
+        distance = abs(difference)
+        return {
+            "name": name,
+            "targetPrice": target,
+            "distancePoints": distance,
+            "distancePercent": distance / bid * 100.0,
+            "direction": "at" if abs(difference) <= tolerance else "above" if difference > 0 else "below",
+        }
+
+    def monitor_position_exposure(self, position, bid: float) -> float:
+        if position is None or bid <= 0:
+            return 0.0
+        one_percent_profit = mt5.order_calc_profit(mt5.ORDER_TYPE_BUY, position.symbol, float(position.volume), bid, bid * 1.01)
+        return abs(float(one_percent_profit)) / 0.01 if one_percent_profit is not None else 0.0
+
+    def monitor_position_deposit(self, position, ask: float) -> float:
+        if position is None or ask <= 0:
+            return 0.0
+        info = mt5.symbol_info(position.symbol)
+        if info is None:
+            return 0.0
+        try:
+            minimum_volume_notional = self.minimum_volume_notional(info, ask)
+            sizing_quantum = minimum_volume_notional / self.cfg.sizing_multiplier
+            return float(position.volume) * sizing_quantum
+        except Exception:
+            return 0.0
+
+    def build_mobile_snapshot(self, position, now: datetime, current_bar: Optional[M1Bar]) -> dict[str, Any]:
+        account = mt5.account_info()
+        balance = float(getattr(account, "balance", 0.0)) if account is not None else 0.0
+        equity = float(getattr(account, "equity", 0.0)) if account is not None else 0.0
+        currency = str(getattr(account, "currency", "")).strip() if account is not None else ""
+        account_login = str(getattr(account, "login", self.cfg.login or "")) if account is not None else str(self.cfg.login or "")
+
+        trade_bid, trade_ask, trade_age = self.monitor_tick_snapshot(self.cfg.trade_symbol, now)
+        if self.cfg.signal_symbol == self.cfg.trade_symbol:
+            signal_age = trade_age
+        else:
+            _, _, signal_age = self.monitor_tick_snapshot(self.cfg.signal_symbol, now)
+
+        stale = any(age is None or age > self.cfg.maximum_tick_age_seconds for age in (trade_age, signal_age))
+        connected = self.connected and account is not None
+        health = "CRITICAL" if not connected else "WARNING" if stale else "OK"
+        next_action, next_action_at = self.monitor_next_action(position, now)
+        phase = f"{now:%A} {self.phase(now).replace('_', ' ').title()}"
+
+        position_payload: Optional[dict[str, Any]] = None
+        closest = None
+        deposit = 0.0
+        if position is not None:
+            bid = trade_bid if trade_bid > 0 else float(getattr(position, "price_current", 0.0) or 0.0)
+            ask = trade_ask
+            entry = float(position.price_open)
+            raw_change = bid / entry - 1.0 if bid > 0 and entry > 0 else 0.0
+            leverage = self.state.entry_leverage or self.choose_leverage()
+            profit = float(getattr(position, "profit", 0.0)) + float(getattr(position, "swap", 0.0))
+            timestamp = getattr(position, "time_msc", 0) / 1000.0 if getattr(position, "time_msc", 0) else float(position.time)
+            opened = self.mt5_timestamp_to_local(timestamp)
+            exposure = self.monitor_position_exposure(position, bid)
+            deposit = self.monitor_position_deposit(position, ask if ask > 0 else bid)
+            position_payload = {
+                "open": True,
+                "symbol": str(position.symbol),
+                "side": "BUY",
+                "volume": float(position.volume),
+                "ticket": int(position.ticket),
+                "openedAt": opened.isoformat(),
+                "openPrice": entry,
+                "bid": bid,
+                "ask": ask,
+                "profit": profit,
+                "profitPercent": raw_change * 100.0,
+                "strategyLeverage": float(leverage),
+                "leveragedProfitPercent": raw_change * leverage * 100.0,
+                "exposure": exposure,
+                "effectiveLeverage": exposure / equity if equity > 0 else 0.0,
+                "stopLoss": float(position.sl),
+                "takeProfit": float(position.tp),
+                "breakEvenArmed": bool(self.state.break_even),
+                "protectionRegime": self.protection_regime(now),
+                "activeSlReason": self.state.active_sl_reason,
+                "activeTpReason": self.state.active_tp_reason,
+            }
+            closest = self.monitor_closest_condition(position, now, bid)
+
+        current_price = trade_bid if trade_bid > 0 else trade_ask
+        profit = float(position_payload["profit"]) if position_payload is not None else 0.0
+        profit_percent = float(position_payload["profitPercent"]) if position_payload is not None else 0.0
+        leveraged_profit_percent = float(position_payload["leveragedProfitPercent"]) if position_payload is not None else 0.0
+        strategy_leverage = float(position_payload["strategyLeverage"]) if position_payload is not None else float(self.choose_leverage())
+        current_bar_payload = None if current_bar is None else {
+            "time": current_bar.local_datetime.isoformat(),
+            "open": current_bar.open,
+            "high": current_bar.high,
+            "low": current_bar.low,
+            "close": current_bar.close,
+        }
+
+        return {
+            "connection": {
+                "connected": connected,
+                "lastSync": now.isoformat(),
+                "accountId": account_login,
+                "week": iso_week_key(now.date()),
+                "health": health,
+                "phase": phase,
+                "nextAction": next_action,
+                "nextActionAt": next_action_at,
+                "us100AgeSeconds": trade_age,
+                "qqqAgeSeconds": signal_age,
+            },
+            "account": {
+                "currency": currency,
+                "strategyCapital": balance,
+                "deposit": deposit,
+                "balance": balance,
+                "equity": equity,
+            },
+            "market": {
+                "symbol": self.cfg.trade_symbol,
+                "currentPrice": current_price,
+                "bid": trade_bid,
+                "ask": trade_ask,
+                "tickAgeSeconds": trade_age,
+                "currentM1": current_bar_payload,
+            },
+            "metrics": {
+                "currentPrice": current_price,
+                "currentProfit": profit,
+                "currentProfitPercent": profit_percent,
+                "currentLeveragedProfitPercent": leveraged_profit_percent,
+                "equity": equity,
+                "balance": balance,
+                "deposit": deposit,
+                "strategyLeverage": strategy_leverage,
+                "currency": currency,
+            },
+            "position": position_payload,
+            "closestCondition": closest,
+            "equityHistory": [],
+        }
+
+    def publish_mobile_minute_status(self, position, now: datetime, current_bar: Optional[M1Bar], force: bool = False) -> bool:
+        if not self.monitor_publisher.ready:
+            return False
+        minute_key = now.strftime("%Y-%m-%d %H:%M")
+        if not force and minute_key == self.last_monitor_minute_key:
+            return False
+        self.last_monitor_minute_key = minute_key
+        try:
+            snapshot = self.build_mobile_snapshot(position, now, current_bar)
+            snapshot["statusUpdate"] = {
+                "kind": "MINUTE",
+                "minute": minute_key,
+                "generatedAt": now.isoformat(),
+                "build": BUILD_ID,
+            }
+            self.monitor_publisher.submit_snapshot(snapshot, guaranteed=True)
+            self.last_monitor_publish_monotonic = time_module.monotonic()
+            self.log.info(
+                "EVENT MONITOR_MINUTE_STATUS_QUEUED minute=%s current_price=%.5f profit=%.2f profit_percent=%.6f leveraged_profit_percent=%.6f equity=%.2f balance=%.2f deposit=%.2f",
+                minute_key,
+                float(snapshot["metrics"]["currentPrice"]),
+                float(snapshot["metrics"]["currentProfit"]),
+                float(snapshot["metrics"]["currentProfitPercent"]),
+                float(snapshot["metrics"]["currentLeveragedProfitPercent"]),
+                float(snapshot["metrics"]["equity"]),
+                float(snapshot["metrics"]["balance"]),
+                float(snapshot["metrics"]["deposit"]),
+                extra={"skip_mobile_publish": True},
+            )
+            return True
+        except Exception as exc:
+            self.log.warning("EVENT MONITOR_MINUTE_STATUS_FAILED error=%s", exc, extra={"skip_mobile_publish": True})
+            return False
+
+    def publish_mobile_if_due(self, position, now: datetime, current_bar: Optional[M1Bar], force: bool = False) -> None:
+        if not self.monitor_publisher.ready:
+            return
+        monotonic = time_module.monotonic()
+        if not force and monotonic - self.last_monitor_publish_monotonic < self.cfg.monitor_publish_interval_seconds:
+            return
+        self.last_monitor_publish_monotonic = monotonic
+        try:
+            self.monitor_publisher.submit_snapshot(self.build_mobile_snapshot(position, now, current_bar))
+        except Exception as exc:
+            self.log.warning("EVENT MONITOR_SNAPSHOT_FAILED error=%s", exc, extra={"skip_mobile_publish": True})
+
+    def shutdown_mobile_publisher(self) -> None:
+        try:
+            self.monitor_publisher.stop()
+        except Exception as exc:
+            self.log.warning("EVENT MONITOR_SHUTDOWN_FAILED error=%s", exc, extra={"skip_mobile_publish": True})
+
+
     # ----- Calculations and order sizing -------------------------------------
 
     def choose_leverage(self) -> int:
@@ -1480,6 +2059,7 @@ class OPPWContinuousStrategy:
         self.emit_status("STARTUP", position, now, current_bar)
         self.last_minute_status = now.strftime("%Y-%m-%d %H:%M")
         self.last_meaningful_signature = self.status_signature(position, now)
+        self.publish_mobile_minute_status(position, now, current_bar, force=True)
 
     def cycle(self) -> None:
         now = datetime.now(self.tz)
@@ -1519,6 +2099,9 @@ class OPPWContinuousStrategy:
 
         position = self.managed_position()
         self.log_status_if_needed(position, now, current_bar)
+        minute_published = self.publish_mobile_minute_status(position, now, current_bar)
+        if not minute_published:
+            self.publish_mobile_if_due(position, now, current_bar)
 
     def run(self) -> None:
         self.connect()
@@ -1563,6 +2146,7 @@ def main() -> int:
         strategy.log.exception("EVENT FATAL_STARTUP_FAILURE")
         return 1
     finally:
+        strategy.shutdown_mobile_publisher()
         strategy.disconnect()
         lock.release()
 

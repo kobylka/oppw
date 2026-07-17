@@ -1,0 +1,8 @@
+# Android SDK path is usually added automatically by Android Studio.
+# sdk.dir=C\:\\Users\\YOUR_NAME\\AppData\\Local\\Android\\Sdk
+
+# Must end with a slash and must use HTTPS in production.
+OPPW_API_BASE_URL=https://example.com/oppw-api/
+
+# Read-only token configured in backend/config.php.
+OPPW_API_TOKEN=replace-with-a-long-random-read-token

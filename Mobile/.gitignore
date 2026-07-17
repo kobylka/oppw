@@ -1,0 +1,11 @@
+.gradle/
+.idea/
+local.properties
+*.iml
+/build/
+app/build/
+.externalNativeBuild/
+.cxx/
+*.jks
+*.keystore
+backend/config.php

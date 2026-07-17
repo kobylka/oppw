@@ -1,0 +1,78 @@
+{
+  "capturedAt": "2026-07-16T21:15:00+02:00",
+  "snapshot": {
+    "connection": {
+      "connected": true,
+      "lastSync": "2026-07-16T21:15:00+02:00",
+      "accountId": "DEMO",
+      "week": "2026-W29",
+      "health": "OK",
+      "phase": "Thursday Regular Session",
+      "nextAction": "CH / TO",
+      "nextActionAt": "2026-07-16T21:59:57+02:00",
+      "us100AgeSeconds": 0.3,
+      "qqqAgeSeconds": 0.5
+    },
+    "account": {
+      "currency": "PLN",
+      "strategyCapital": 30000.0,
+      "deposit": 111.12,
+      "balance": 30000.0,
+      "equity": 29632.5
+    },
+    "position": {
+      "open": true,
+      "symbol": "US100",
+      "side": "BUY",
+      "volume": 0.05,
+      "ticket": 2127790,
+      "openedAt": "2026-07-16T15:29:57+02:00",
+      "openPrice": 29311.85,
+      "bid": 29240.0,
+      "ask": 29241.5,
+      "profit": -367.5,
+      "profitPercent": -0.2451,
+      "strategyLeverage": 8.0,
+      "leveragedProfitPercent": -1.9609,
+      "exposure": 222125.0,
+      "effectiveLeverage": 7.4,
+      "stopLoss": 29194.6,
+      "takeProfit": 0.0,
+      "breakEvenArmed": false,
+      "protectionRegime": "THURSDAY_TIGHT_SL",
+      "activeSlReason": "TSL1",
+      "activeTpReason": ""
+    },
+    "closestCondition": {
+      "name": "TSL1",
+      "targetPrice": 29194.6,
+      "distancePoints": 45.4,
+      "distancePercent": 0.1553,
+      "direction": "below"
+    },
+    "equityHistory": [
+      {
+        "time": "2026-07-10T22:00:00+02:00",
+        "value": 30000.0
+      },
+      {
+        "time": "2026-07-14T22:00:00+02:00",
+        "value": 29940.0
+      },
+      {
+        "time": "2026-07-16T21:15:00+02:00",
+        "value": 29632.5
+      }
+    ]
+  },
+  "events": [
+    {
+      "time": "2026-07-16T21:15:00+02:00",
+      "level": "INFO",
+      "name": "TSL2",
+      "result": true,
+      "message": "Thursday stop is installed correctly."
+    }
+  ],
+  "accountKey": "DEMO"
+}
