@@ -7,9 +7,8 @@ Key execution rules
 * OH is evaluated at cash open minus three seconds.
 * CH and final-week TO are evaluated at XNYS session close minus three seconds.
 * Hard SL and weekday SL levels are maintained with TRADE_ACTION_SLTP.
-* Thursday SL remains active for the entire Thursday, including after session close.
-* The first tick received on Friday immediately changes the SL to the Friday level.
-* TSL1/TSL2/TSL3/TSL4 are broker-side SL labels; candle lows do not latch them.
+* One TSL at 0.4% below entry is active continuously from Thursday date change through Friday and the weekend if needed.
+* TSL is a broker-side SL label; candle lows do not latch it.
 * Closing reasons are resolved from the MT5 closing deal and active protection state.
 * Status deposit is read directly from MT5 as float(account.margin).
 
@@ -33,7 +32,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-BUILD_ID = "2026-07-17-mt5-timefix-v27"
+BUILD_ID = "2026-07-17-single-tsl-v28"
 SCHEDULED_ACTION_LEAD_SECONDS = 3.0
 
 try:
@@ -486,32 +485,19 @@ class OPPWContinuousStrategy:
             self.state.last_exit_price = 0.0
             self.state.last_exit_time = ""
 
-    def weekday_sl_reason(self, now: datetime) -> str:
-        session = self.session_times(now.date())
-        first_minute_end = session.cash_open + timedelta(minutes=1)
-        if now.weekday() == 3:
-            return "TSL1" if now < first_minute_end else "TSL2"
-        if now.weekday() == 4:
-            return "TSL3" if now < first_minute_end else "TSL4"
-        return "SL"
-
     def weekday_sl_target(self, position, now: datetime) -> tuple[float, str]:
         entry = float(position.price_open)
         hard_sl = self.hard_sl_price(position)
-        weekday = now.weekday()
 
-        if weekday == 3:
-            return max(hard_sl, entry * self.cfg.thursday_sl_ratio), self.weekday_sl_reason(now)
+        # One 0.4% TSL is active continuously from the Thursday date change
+        # through Friday. Keep it over the weekend if TO did not close the trade.
+        if now.weekday() in (3, 4, 5, 6):
+            return max(hard_sl, entry * self.cfg.thursday_sl_ratio), "TSL"
 
-        # Friday threshold starts on the first Friday tick, including premarket,
-        # and remains in force through the weekend if TO was not executed.
-        if weekday in (4, 5, 6):
-            return max(hard_sl, entry * self.cfg.friday_sl_ratio), self.weekday_sl_reason(now) if weekday == 4 else "TSL4"
-
-        # Do not weaken an unclosed prior-week Friday stop before rollover/TO.
+        # Never weaken a surviving prior-week TSL before the position is closed.
         opened = parse_date(self.state.open_date)
-        if opened is not None and iso_week_key(opened) != iso_week_key(now.date()) and self.state.active_sl_reason in {"TSL3", "TSL4"}:
-            return max(hard_sl, entry * self.cfg.friday_sl_ratio), "TSL4"
+        if opened is not None and iso_week_key(opened) != iso_week_key(now.date()) and self.state.active_sl_reason == "TSL":
+            return max(hard_sl, entry * self.cfg.thursday_sl_ratio), "TSL"
 
         return hard_sl, "SL"
 
@@ -530,13 +516,10 @@ class OPPWContinuousStrategy:
         self.state.active_tp_reason = ""
 
         if sl > 0 and entry > 0:
-            thursday_sl = entry * self.cfg.thursday_sl_ratio
-            friday_sl = entry * self.cfg.friday_sl_ratio
+            tsl = entry * self.cfg.thursday_sl_ratio
             hard_sl = entry * self.hard_sl_ratio(self.state.entry_leverage or self.choose_leverage())
-            if abs(sl - thursday_sl) <= tolerance:
-                self.state.active_sl_reason = "TSL1" if now.weekday() == 3 and now < self.session_times(now.date()).cash_open + timedelta(minutes=1) else "TSL2"
-            elif abs(sl - friday_sl) <= tolerance:
-                self.state.active_sl_reason = "TSL3" if now.weekday() == 4 and now < self.session_times(now.date()).cash_open + timedelta(minutes=1) else "TSL4"
+            if abs(sl - tsl) <= tolerance:
+                self.state.active_sl_reason = "TSL"
             elif abs(sl - hard_sl) <= tolerance:
                 self.state.active_sl_reason = "SL"
             else:
@@ -558,8 +541,9 @@ class OPPWContinuousStrategy:
 
         if sl > 0:
             same_sl = same_position and abs(self.state.active_sl_price - sl) <= tolerance
-            if not same_sl or not self.state.active_sl_reason:
-                self.state.active_sl_reason = sl_reason or self.state.active_sl_reason or "SL"
+            legacy_tsl = self.state.active_sl_reason.startswith("TSL") and self.state.active_sl_reason != "TSL"
+            if not same_sl or not self.state.active_sl_reason or legacy_tsl:
+                self.state.active_sl_reason = sl_reason or ("TSL" if legacy_tsl else self.state.active_sl_reason) or "SL"
             self.state.active_sl_price = sl
         else:
             self.state.active_sl_reason = ""
@@ -767,10 +751,8 @@ class OPPWContinuousStrategy:
     def protection_regime(self, now: datetime) -> str:
         if self.state.exit_latched_reason:
             return f"EXIT_BRACKET:{self.state.exit_latched_reason}"
-        if now.weekday() == 3:
-            return "THURSDAY_TIGHT_SL" + ("+BE_TP" if self.state.break_even else "")
-        if now.weekday() in (4, 5, 6):
-            return "FRIDAY_TIGHT_SL" + ("+BE_TP" if self.state.break_even else "")
+        if now.weekday() in (3, 4, 5, 6) or self.state.active_sl_reason == "TSL":
+            return "TSL_0.4000%" + ("+BE_TP" if self.state.break_even else "")
         return "HARD_SL+BE_TP" if self.state.break_even else "HARD_SL"
 
     def weekly_exit_status(self, position, now: datetime) -> tuple[bool, str, Optional[date]]:
@@ -1273,10 +1255,8 @@ class OPPWContinuousStrategy:
         desired_tp = ceil_step(desired_tp, tick_size) if desired_tp > 0 else 0.0
         leverage = self.state.entry_leverage or self.choose_leverage()
         reason_parts = [f"HARD_SL_L{leverage}_RATIO_{self.hard_sl_ratio(leverage):.6f}"]
-        if sl_reason in {"TSL1", "TSL2"}:
-            reason_parts.append(f"THURSDAY_STOP_{self.cfg.thursday_stop:.4%}_RATIO_{self.cfg.thursday_sl_ratio:.6f}")
-        elif sl_reason in {"TSL3", "TSL4"}:
-            reason_parts.append(f"FRIDAY_STOP_{self.cfg.friday_stop:.4%}_RATIO_{self.cfg.friday_sl_ratio:.6f}")
+        if sl_reason == "TSL":
+            reason_parts.append(f"TSL_STOP_{self.cfg.thursday_stop:.4%}_RATIO_{self.cfg.thursday_sl_ratio:.6f}")
         if desired_tp > 0:
             reason_parts.append(f"BE_{self.cfg.break_even_ratio:.6f}")
         self.modify_sltp(position, desired_sl, desired_tp, "+".join(reason_parts), sl_reason, tp_reason)
@@ -1285,9 +1265,7 @@ class OPPWContinuousStrategy:
 
     def evaluate_premarket_open(self, position, bar: M1Bar, now: datetime) -> None:
         entry = float(position.price_open)
-        if bar.local_datetime.weekday() == 3 and bar.open / entry < self.cfg.thursday_sl_ratio:
-            self.arm_exit(position, "TSL1PRE", now)
-        elif self.state.break_even and bar.open > entry * self.cfg.break_even_ratio:
+        if self.state.break_even and bar.open > entry * self.cfg.break_even_ratio:
             self.arm_exit(position, "BEPRE", now)
 
     def evaluate_cash_open(self, position, bar: M1Bar, now: datetime) -> None:
@@ -1320,15 +1298,12 @@ class OPPWContinuousStrategy:
 
         if position is not None and not self.state.exit_latched_reason:
             signal_reference = self.state.entry_signal_daily_open or self.state.entry_price
-            if weekday == 2 and (trade_close_bar.close + 100000.0) / float(position.price_open) < self.cfg.thursday_sl_ratio:
-                self.arm_exit(position, "TSL0", now)
-            else:
-                opened = parse_date(self.state.open_date)
-                if not self.state.break_even and opened is not None and current_day != opened and signal_close_bar.close < signal_reference * self.cfg.break_even_ratio:
-                    self.state.break_even = True
-                    self.state.save(self.cfg.state_file)
-                    self.log.info("EVENT BREAK_EVEN_ARMED day=%s signal_close=%.5f threshold=%.5f", current_day, signal_close_bar.close, signal_reference * self.cfg.break_even_ratio)
-                    self.emit_status("BREAK_EVEN_ARMED", position, now)
+            opened = parse_date(self.state.open_date)
+            if not self.state.break_even and opened is not None and current_day != opened and signal_close_bar.close < signal_reference * self.cfg.break_even_ratio:
+                self.state.break_even = True
+                self.state.save(self.cfg.state_file)
+                self.log.info("EVENT BREAK_EVEN_ARMED day=%s signal_close=%.5f threshold=%.5f", current_day, signal_close_bar.close, signal_reference * self.cfg.break_even_ratio)
+                self.emit_status("BREAK_EVEN_ARMED", position, now)
 
         self.state.last_trading_date = day_key
         self.state.last_close_processed_date = day_key
