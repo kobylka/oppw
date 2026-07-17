@@ -11358,3 +11358,356 @@ build: 2026-07-17-mt5-margin-deposit-v32
 2026-07-17 16:19:00 INFO CHECK minute=2026-07-17_16:19 weekday=Friday phase=REGULAR name=TSL result=TRUE current_sl=28675.33000 required_sl=28675.33000
 2026-07-17 16:19:00 INFO CONDITION_REPORT_END minute=2026-07-17 16:19 checks=5
 2026-07-17 16:19:00 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-17 16:19 current_price=28854.75000 profit=97.53 profit_percent=0.223164 leveraged_profit_percent=1.785311 equity=27975.76 balance=27878.23 deposit=2187.21
+2026-07-17 16:20:00 INFO STATUS
+==================== TRADE STATUS - MINUTE ====================
+phase: REGULAR protection regime: TSL_0.4000%
+time: 2026-07-17 16:20:00 CEST week: 2026-W29
+closest condition: TSL @ 28675.33000 — 168.92000 points below (0.5856%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 16:07:36 CEST
+open price: 28790.50000
+current ask: 28845.25000
+current P/L: 81.59 PLN
+current P/L %: 0.1867%
+current P/L % leveraged: 1.4935%
+equity: 27959.82 PLN deposit: 2187.21 PLN
+SL: 28675.33000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: -
+final trading day: 2026-07-17
+weekly exit: WAIT (due=False)
+previous M1: epoch=1784305140 raw_epoch_utc=2026-07-17T16:19:00.000+00:00 bar_time=2026-07-17T16:19:00.000+02:00 actual_utc=2026-07-17T14:19:00.000+00:00 O=28855.25000 H=28869.50000 L=28841.75000 C=28849.50000
+build: 2026-07-17-mt5-margin-deposit-v32
+======================================================
+
+2026-07-17 16:20:00 INFO CONDITION_REPORT_BEGIN minute=2026-07-17 16:20
+2026-07-17 16:20:00 INFO CHECK minute=2026-07-17_16:20 weekday=Friday phase=REGULAR name=POSITION_OPEN result=TRUE ticket=2131130 entry=28790.5 volume=0.01
+2026-07-17 16:20:00 INFO CHECK minute=2026-07-17_16:20 weekday=Friday phase=REGULAR name=ENTRY_SIGNAL_OPEN_AVAILABLE result=TRUE signal_open=28605.25 pending=False
+2026-07-17 16:20:00 INFO CHECK minute=2026-07-17_16:20 weekday=Friday phase=REGULAR name=EXIT_LATCH_CLEAR result=TRUE exit_latch=none
+2026-07-17 16:20:00 INFO CHECK minute=2026-07-17_16:20 weekday=Friday phase=REGULAR name=OH result=FALSE bid=28844.25 threshold=30230.025
+2026-07-17 16:20:00 INFO CHECK minute=2026-07-17_16:20 weekday=Friday phase=REGULAR name=TSL result=TRUE current_sl=28675.33000 required_sl=28675.33000
+2026-07-17 16:20:00 INFO CONDITION_REPORT_END minute=2026-07-17 16:20 checks=5
+2026-07-17 16:20:00 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-17 16:20 current_price=28844.25000 profit=81.59 profit_percent=0.186694 leveraged_profit_percent=1.493548 equity=27959.82 balance=27878.23 deposit=2187.21
+2026-07-17 16:21:00 INFO STATUS
+==================== TRADE STATUS - MINUTE ====================
+phase: REGULAR protection regime: TSL_0.4000%
+time: 2026-07-17 16:21:00 CEST week: 2026-W29
+closest condition: TSL @ 28675.33000 — 153.42000 points below (0.5322%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 16:07:36 CEST
+open price: 28790.50000
+current ask: 28829.75000
+current P/L: 58.06 PLN
+current P/L %: 0.1329%
+current P/L % leveraged: 1.0629%
+equity: 27936.29 PLN deposit: 2187.21 PLN
+SL: 28675.33000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: -
+final trading day: 2026-07-17
+weekly exit: WAIT (due=False)
+previous M1: epoch=1784305200 raw_epoch_utc=2026-07-17T16:20:00.000+00:00 bar_time=2026-07-17T16:20:00.000+02:00 actual_utc=2026-07-17T14:20:00.000+00:00 O=28850.00000 H=28864.00000 L=28830.00000 C=28830.50000
+build: 2026-07-17-mt5-margin-deposit-v32
+======================================================
+
+2026-07-17 16:21:00 INFO CONDITION_REPORT_BEGIN minute=2026-07-17 16:21
+2026-07-17 16:21:00 INFO CHECK minute=2026-07-17_16:21 weekday=Friday phase=REGULAR name=POSITION_OPEN result=TRUE ticket=2131130 entry=28790.5 volume=0.01
+2026-07-17 16:21:00 INFO CHECK minute=2026-07-17_16:21 weekday=Friday phase=REGULAR name=ENTRY_SIGNAL_OPEN_AVAILABLE result=TRUE signal_open=28605.25 pending=False
+2026-07-17 16:21:00 INFO CHECK minute=2026-07-17_16:21 weekday=Friday phase=REGULAR name=EXIT_LATCH_CLEAR result=TRUE exit_latch=none
+2026-07-17 16:21:00 INFO CHECK minute=2026-07-17_16:21 weekday=Friday phase=REGULAR name=OH result=FALSE bid=28828.75 threshold=30230.025
+2026-07-17 16:21:00 INFO CHECK minute=2026-07-17_16:21 weekday=Friday phase=REGULAR name=TSL result=TRUE current_sl=28675.33000 required_sl=28675.33000
+2026-07-17 16:21:00 INFO CONDITION_REPORT_END minute=2026-07-17 16:21 checks=5
+2026-07-17 16:21:00 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-17 16:21 current_price=28828.75000 profit=58.06 profit_percent=0.132856 leveraged_profit_percent=1.062851 equity=27936.29 balance=27878.23 deposit=2187.21
+2026-07-17 16:22:00 INFO STATUS
+==================== TRADE STATUS - MINUTE ====================
+phase: REGULAR protection regime: TSL_0.4000%
+time: 2026-07-17 16:22:00 CEST week: 2026-W29
+closest condition: TSL @ 28675.33000 — 178.17000 points below (0.6175%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 16:07:36 CEST
+open price: 28790.50000
+current ask: 28855.00000
+current P/L: 95.63 PLN
+current P/L %: 0.2188%
+current P/L % leveraged: 1.7506%
+equity: 27973.86 PLN deposit: 2187.21 PLN
+SL: 28675.33000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: -
+final trading day: 2026-07-17
+weekly exit: WAIT (due=False)
+previous M1: epoch=1784305260 raw_epoch_utc=2026-07-17T16:21:00.000+00:00 bar_time=2026-07-17T16:21:00.000+02:00 actual_utc=2026-07-17T14:21:00.000+00:00 O=28830.25000 H=28857.28000 L=28815.25000 C=28851.25000
+build: 2026-07-17-mt5-margin-deposit-v32
+======================================================
+
+2026-07-17 16:22:00 INFO CONDITION_REPORT_BEGIN minute=2026-07-17 16:22
+2026-07-17 16:22:00 INFO CHECK minute=2026-07-17_16:22 weekday=Friday phase=REGULAR name=POSITION_OPEN result=TRUE ticket=2131130 entry=28790.5 volume=0.01
+2026-07-17 16:22:00 INFO CHECK minute=2026-07-17_16:22 weekday=Friday phase=REGULAR name=ENTRY_SIGNAL_OPEN_AVAILABLE result=TRUE signal_open=28605.25 pending=False
+2026-07-17 16:22:00 INFO CHECK minute=2026-07-17_16:22 weekday=Friday phase=REGULAR name=EXIT_LATCH_CLEAR result=TRUE exit_latch=none
+2026-07-17 16:22:00 INFO CHECK minute=2026-07-17_16:22 weekday=Friday phase=REGULAR name=OH result=FALSE bid=28853.5 threshold=30230.025
+2026-07-17 16:22:00 INFO CHECK minute=2026-07-17_16:22 weekday=Friday phase=REGULAR name=TSL result=TRUE current_sl=28675.33000 required_sl=28675.33000
+2026-07-17 16:22:00 INFO CONDITION_REPORT_END minute=2026-07-17 16:22 checks=5
+2026-07-17 16:22:00 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-17 16:22 current_price=28853.50000 profit=95.63 profit_percent=0.218822 leveraged_profit_percent=1.750577 equity=27973.86 balance=27878.23 deposit=2187.21
+2026-07-17 16:23:00 INFO STATUS
+==================== TRADE STATUS - MINUTE ====================
+phase: REGULAR protection regime: TSL_0.4000%
+time: 2026-07-17 16:23:00 CEST week: 2026-W29
+closest condition: TSL @ 28675.33000 — 168.92000 points below (0.5856%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 16:07:36 CEST
+open price: 28790.50000
+current ask: 28845.50000
+current P/L: 81.59 PLN
+current P/L %: 0.1867%
+current P/L % leveraged: 1.4935%
+equity: 27959.82 PLN deposit: 2187.21 PLN
+SL: 28675.33000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: -
+final trading day: 2026-07-17
+weekly exit: WAIT (due=False)
+previous M1: epoch=1784305320 raw_epoch_utc=2026-07-17T16:22:00.000+00:00 bar_time=2026-07-17T16:22:00.000+02:00 actual_utc=2026-07-17T14:22:00.000+00:00 O=28851.00000 H=28869.75000 L=28820.53000 C=28841.75000
+build: 2026-07-17-mt5-margin-deposit-v32
+======================================================
+
+2026-07-17 16:23:00 INFO CONDITION_REPORT_BEGIN minute=2026-07-17 16:23
+2026-07-17 16:23:00 INFO CHECK minute=2026-07-17_16:23 weekday=Friday phase=REGULAR name=POSITION_OPEN result=TRUE ticket=2131130 entry=28790.5 volume=0.01
+2026-07-17 16:23:00 INFO CHECK minute=2026-07-17_16:23 weekday=Friday phase=REGULAR name=ENTRY_SIGNAL_OPEN_AVAILABLE result=TRUE signal_open=28605.25 pending=False
+2026-07-17 16:23:00 INFO CHECK minute=2026-07-17_16:23 weekday=Friday phase=REGULAR name=EXIT_LATCH_CLEAR result=TRUE exit_latch=none
+2026-07-17 16:23:00 INFO CHECK minute=2026-07-17_16:23 weekday=Friday phase=REGULAR name=OH result=FALSE bid=28844.25 threshold=30230.025
+2026-07-17 16:23:00 INFO CHECK minute=2026-07-17_16:23 weekday=Friday phase=REGULAR name=TSL result=TRUE current_sl=28675.33000 required_sl=28675.33000
+2026-07-17 16:23:00 INFO CONDITION_REPORT_END minute=2026-07-17 16:23 checks=5
+2026-07-17 16:23:00 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-17 16:23 current_price=28844.25000 profit=81.59 profit_percent=0.186694 leveraged_profit_percent=1.493548 equity=27959.82 balance=27878.23 deposit=2187.21
+2026-07-17 16:24:00 INFO STATUS
+==================== TRADE STATUS - MINUTE ====================
+phase: REGULAR protection regime: TSL_0.4000%
+time: 2026-07-17 16:24:00 CEST week: 2026-W29
+closest condition: TSL @ 28675.33000 — 167.67000 points below (0.5813%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 16:07:36 CEST
+open price: 28790.50000
+current ask: 28844.25000
+current P/L: 79.70 PLN
+current P/L %: 0.1824%
+current P/L % leveraged: 1.4588%
+equity: 27957.93 PLN deposit: 2187.21 PLN
+SL: 28675.33000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: -
+final trading day: 2026-07-17
+weekly exit: WAIT (due=False)
+previous M1: epoch=1784305380 raw_epoch_utc=2026-07-17T16:23:00.000+00:00 bar_time=2026-07-17T16:23:00.000+02:00 actual_utc=2026-07-17T14:23:00.000+00:00 O=28842.00000 H=28856.00000 L=28820.00000 C=28837.50000
+build: 2026-07-17-mt5-margin-deposit-v32
+======================================================
+
+2026-07-17 16:24:00 INFO CONDITION_REPORT_BEGIN minute=2026-07-17 16:24
+2026-07-17 16:24:00 INFO CHECK minute=2026-07-17_16:24 weekday=Friday phase=REGULAR name=POSITION_OPEN result=TRUE ticket=2131130 entry=28790.5 volume=0.01
+2026-07-17 16:24:00 INFO CHECK minute=2026-07-17_16:24 weekday=Friday phase=REGULAR name=ENTRY_SIGNAL_OPEN_AVAILABLE result=TRUE signal_open=28605.25 pending=False
+2026-07-17 16:24:00 INFO CHECK minute=2026-07-17_16:24 weekday=Friday phase=REGULAR name=EXIT_LATCH_CLEAR result=TRUE exit_latch=none
+2026-07-17 16:24:00 INFO CHECK minute=2026-07-17_16:24 weekday=Friday phase=REGULAR name=OH result=FALSE bid=28843.0 threshold=30230.025
+2026-07-17 16:24:00 INFO CHECK minute=2026-07-17_16:24 weekday=Friday phase=REGULAR name=TSL result=TRUE current_sl=28675.33000 required_sl=28675.33000
+2026-07-17 16:24:00 INFO CONDITION_REPORT_END minute=2026-07-17 16:24 checks=5
+2026-07-17 16:24:00 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-17 16:24 current_price=28843.00000 profit=79.70 profit_percent=0.182352 leveraged_profit_percent=1.458815 equity=27957.93 balance=27878.23 deposit=2187.21
+2026-07-17 16:25:00 INFO STATUS
+==================== TRADE STATUS - MINUTE ====================
+phase: REGULAR protection regime: TSL_0.4000%
+time: 2026-07-17 16:25:00 CEST week: 2026-W29
+closest condition: TSL @ 28675.33000 — 189.17000 points below (0.6554%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 16:07:36 CEST
+open price: 28790.50000
+current ask: 28865.75000
+current P/L: 112.33 PLN
+current P/L %: 0.2570%
+current P/L % leveraged: 2.0562%
+equity: 27990.56 PLN deposit: 2187.21 PLN
+SL: 28675.33000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: -
+final trading day: 2026-07-17
+weekly exit: WAIT (due=False)
+previous M1: epoch=1784305440 raw_epoch_utc=2026-07-17T16:24:00.000+00:00 bar_time=2026-07-17T16:24:00.000+02:00 actual_utc=2026-07-17T14:24:00.000+00:00 O=28837.75000 H=28878.50000 L=28837.75000 C=28866.25000
+build: 2026-07-17-mt5-margin-deposit-v32
+======================================================
+
+2026-07-17 16:25:00 INFO CONDITION_REPORT_BEGIN minute=2026-07-17 16:25
+2026-07-17 16:25:00 INFO CHECK minute=2026-07-17_16:25 weekday=Friday phase=REGULAR name=POSITION_OPEN result=TRUE ticket=2131130 entry=28790.5 volume=0.01
+2026-07-17 16:25:00 INFO CHECK minute=2026-07-17_16:25 weekday=Friday phase=REGULAR name=ENTRY_SIGNAL_OPEN_AVAILABLE result=TRUE signal_open=28605.25 pending=False
+2026-07-17 16:25:00 INFO CHECK minute=2026-07-17_16:25 weekday=Friday phase=REGULAR name=EXIT_LATCH_CLEAR result=TRUE exit_latch=none
+2026-07-17 16:25:00 INFO CHECK minute=2026-07-17_16:25 weekday=Friday phase=REGULAR name=OH result=FALSE bid=28864.5 threshold=30230.025
+2026-07-17 16:25:00 INFO CHECK minute=2026-07-17_16:25 weekday=Friday phase=REGULAR name=TSL result=TRUE current_sl=28675.33000 required_sl=28675.33000
+2026-07-17 16:25:00 INFO CONDITION_REPORT_END minute=2026-07-17 16:25 checks=5
+2026-07-17 16:25:00 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-17 16:25 current_price=28864.50000 profit=112.33 profit_percent=0.257029 leveraged_profit_percent=2.056234 equity=27990.56 balance=27878.23 deposit=2187.21
+2026-07-17 16:26:00 INFO STATUS
+==================== TRADE STATUS - MINUTE ====================
+phase: REGULAR protection regime: TSL_0.4000%
+time: 2026-07-17 16:26:00 CEST week: 2026-W29
+closest condition: TSL @ 28675.33000 — 178.92000 points below (0.6201%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 16:07:36 CEST
+open price: 28790.50000
+current ask: 28855.25000
+current P/L: 96.78 PLN
+current P/L %: 0.2214%
+current P/L % leveraged: 1.7714%
+equity: 27975.01 PLN deposit: 2187.21 PLN
+SL: 28675.33000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: -
+final trading day: 2026-07-17
+weekly exit: WAIT (due=False)
+previous M1: epoch=1784305500 raw_epoch_utc=2026-07-17T16:25:00.000+00:00 bar_time=2026-07-17T16:25:00.000+02:00 actual_utc=2026-07-17T14:25:00.000+00:00 O=28866.00000 H=28886.75000 L=28854.50000 C=28859.25000
+build: 2026-07-17-mt5-margin-deposit-v32
+======================================================
+
+2026-07-17 16:26:00 INFO CONDITION_REPORT_BEGIN minute=2026-07-17 16:26
+2026-07-17 16:26:00 INFO CHECK minute=2026-07-17_16:26 weekday=Friday phase=REGULAR name=POSITION_OPEN result=TRUE ticket=2131130 entry=28790.5 volume=0.01
+2026-07-17 16:26:00 INFO CHECK minute=2026-07-17_16:26 weekday=Friday phase=REGULAR name=ENTRY_SIGNAL_OPEN_AVAILABLE result=TRUE signal_open=28605.25 pending=False
+2026-07-17 16:26:00 INFO CHECK minute=2026-07-17_16:26 weekday=Friday phase=REGULAR name=EXIT_LATCH_CLEAR result=TRUE exit_latch=none
+2026-07-17 16:26:00 INFO CHECK minute=2026-07-17_16:26 weekday=Friday phase=REGULAR name=OH result=FALSE bid=28854.25 threshold=30230.025
+2026-07-17 16:26:00 INFO CHECK minute=2026-07-17_16:26 weekday=Friday phase=REGULAR name=TSL result=TRUE current_sl=28675.33000 required_sl=28675.33000
+2026-07-17 16:26:00 INFO CONDITION_REPORT_END minute=2026-07-17 16:26 checks=5
+2026-07-17 16:26:00 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-17 16:26 current_price=28854.25000 profit=96.78 profit_percent=0.221427 leveraged_profit_percent=1.771418 equity=27975.01 balance=27878.23 deposit=2187.21
+2026-07-17 16:27:00 INFO STATUS
+==================== TRADE STATUS - MINUTE ====================
+phase: REGULAR protection regime: TSL_0.4000%
+time: 2026-07-17 16:27:00 CEST week: 2026-W29
+closest condition: TSL @ 28675.33000 — 171.67000 points below (0.5951%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 16:07:36 CEST
+open price: 28790.50000
+current ask: 28848.25000
+current P/L: 85.78 PLN
+current P/L %: 0.1962%
+current P/L % leveraged: 1.5700%
+equity: 27964.01 PLN deposit: 2187.21 PLN
+SL: 28675.33000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: -
+final trading day: 2026-07-17
+weekly exit: WAIT (due=False)
+previous M1: epoch=1784305560 raw_epoch_utc=2026-07-17T16:26:00.000+00:00 bar_time=2026-07-17T16:26:00.000+02:00 actual_utc=2026-07-17T14:26:00.000+00:00 O=28859.00000 H=28862.40000 L=28840.00000 C=28847.00000
+build: 2026-07-17-mt5-margin-deposit-v32
+======================================================
+
+2026-07-17 16:27:00 INFO CONDITION_REPORT_BEGIN minute=2026-07-17 16:27
+2026-07-17 16:27:00 INFO CHECK minute=2026-07-17_16:27 weekday=Friday phase=REGULAR name=POSITION_OPEN result=TRUE ticket=2131130 entry=28790.5 volume=0.01
+2026-07-17 16:27:00 INFO CHECK minute=2026-07-17_16:27 weekday=Friday phase=REGULAR name=ENTRY_SIGNAL_OPEN_AVAILABLE result=TRUE signal_open=28605.25 pending=False
+2026-07-17 16:27:00 INFO CHECK minute=2026-07-17_16:27 weekday=Friday phase=REGULAR name=EXIT_LATCH_CLEAR result=TRUE exit_latch=none
+2026-07-17 16:27:00 INFO CHECK minute=2026-07-17_16:27 weekday=Friday phase=REGULAR name=OH result=FALSE bid=28847.0 threshold=30230.025
+2026-07-17 16:27:00 INFO CHECK minute=2026-07-17_16:27 weekday=Friday phase=REGULAR name=TSL result=TRUE current_sl=28675.33000 required_sl=28675.33000
+2026-07-17 16:27:00 INFO CONDITION_REPORT_END minute=2026-07-17 16:27 checks=5
+2026-07-17 16:27:00 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-17 16:27 current_price=28847.00000 profit=85.78 profit_percent=0.196245 leveraged_profit_percent=1.569962 equity=27964.01 balance=27878.23 deposit=2187.21
+2026-07-17 16:28:00 INFO STATUS
+==================== TRADE STATUS - MINUTE ====================
+phase: REGULAR protection regime: TSL_0.4000%
+time: 2026-07-17 16:28:00 CEST week: 2026-W29
+closest condition: TSL @ 28675.33000 — 180.92000 points below (0.6270%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 16:07:36 CEST
+open price: 28790.50000
+current ask: 28857.25000
+current P/L: 99.82 PLN
+current P/L %: 0.2284%
+current P/L % leveraged: 1.8270%
+equity: 27978.05 PLN deposit: 2187.21 PLN
+SL: 28675.33000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: -
+final trading day: 2026-07-17
+weekly exit: WAIT (due=False)
+previous M1: epoch=1784305620 raw_epoch_utc=2026-07-17T16:27:00.000+00:00 bar_time=2026-07-17T16:27:00.000+02:00 actual_utc=2026-07-17T14:27:00.000+00:00 O=28846.50000 H=28879.75000 L=28836.25000 C=28853.75000
+build: 2026-07-17-mt5-margin-deposit-v32
+======================================================
+
+2026-07-17 16:28:00 INFO CONDITION_REPORT_BEGIN minute=2026-07-17 16:28
+2026-07-17 16:28:00 INFO CHECK minute=2026-07-17_16:28 weekday=Friday phase=REGULAR name=POSITION_OPEN result=TRUE ticket=2131130 entry=28790.5 volume=0.01
+2026-07-17 16:28:00 INFO CHECK minute=2026-07-17_16:28 weekday=Friday phase=REGULAR name=ENTRY_SIGNAL_OPEN_AVAILABLE result=TRUE signal_open=28605.25 pending=False
+2026-07-17 16:28:00 INFO CHECK minute=2026-07-17_16:28 weekday=Friday phase=REGULAR name=EXIT_LATCH_CLEAR result=TRUE exit_latch=none
+2026-07-17 16:28:00 INFO CHECK minute=2026-07-17_16:28 weekday=Friday phase=REGULAR name=OH result=FALSE bid=28856.25 threshold=30230.025
+2026-07-17 16:28:00 INFO CHECK minute=2026-07-17_16:28 weekday=Friday phase=REGULAR name=TSL result=TRUE current_sl=28675.33000 required_sl=28675.33000
+2026-07-17 16:28:00 INFO CONDITION_REPORT_END minute=2026-07-17 16:28 checks=5
+2026-07-17 16:28:00 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-17 16:28 current_price=28856.25000 profit=99.82 profit_percent=0.228374 leveraged_profit_percent=1.826992 equity=27978.05 balance=27878.23 deposit=2187.21
+2026-07-17 16:29:00 INFO STATUS
+==================== TRADE STATUS - MINUTE ====================
+phase: REGULAR protection regime: TSL_0.4000%
+time: 2026-07-17 16:29:00 CEST week: 2026-W29
+closest condition: TSL @ 28675.33000 — 161.17000 points below (0.5589%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 16:07:36 CEST
+open price: 28790.50000
+current ask: 28837.75000
+current P/L: 69.85 PLN
+current P/L %: 0.1598%
+current P/L % leveraged: 1.2782%
+equity: 27948.08 PLN deposit: 2187.21 PLN
+SL: 28675.33000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: -
+final trading day: 2026-07-17
+weekly exit: WAIT (due=False)
+previous M1: epoch=1784305680 raw_epoch_utc=2026-07-17T16:28:00.000+00:00 bar_time=2026-07-17T16:28:00.000+02:00 actual_utc=2026-07-17T14:28:00.000+00:00 O=28854.25000 H=28859.00000 L=28829.00000 C=28837.00000
+build: 2026-07-17-mt5-margin-deposit-v32
+======================================================
+
+2026-07-17 16:29:00 INFO CONDITION_REPORT_BEGIN minute=2026-07-17 16:29
+2026-07-17 16:29:00 INFO CHECK minute=2026-07-17_16:29 weekday=Friday phase=REGULAR name=POSITION_OPEN result=TRUE ticket=2131130 entry=28790.5 volume=0.01
+2026-07-17 16:29:00 INFO CHECK minute=2026-07-17_16:29 weekday=Friday phase=REGULAR name=ENTRY_SIGNAL_OPEN_AVAILABLE result=TRUE signal_open=28605.25 pending=False
+2026-07-17 16:29:00 INFO CHECK minute=2026-07-17_16:29 weekday=Friday phase=REGULAR name=EXIT_LATCH_CLEAR result=TRUE exit_latch=none
+2026-07-17 16:29:00 INFO CHECK minute=2026-07-17_16:29 weekday=Friday phase=REGULAR name=OH result=FALSE bid=28836.5 threshold=30230.025
+2026-07-17 16:29:00 INFO CHECK minute=2026-07-17_16:29 weekday=Friday phase=REGULAR name=TSL result=TRUE current_sl=28675.33000 required_sl=28675.33000
+2026-07-17 16:29:00 INFO CONDITION_REPORT_END minute=2026-07-17 16:29 checks=5
+2026-07-17 16:29:00 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-17 16:29 current_price=28836.50000 profit=69.85 profit_percent=0.159775 leveraged_profit_percent=1.278199 equity=27948.08 balance=27878.23 deposit=2187.21
+2026-07-17 16:30:00 INFO STATUS
+==================== TRADE STATUS - MINUTE ====================
+phase: REGULAR protection regime: TSL_0.4000%
+time: 2026-07-17 16:30:00 CEST week: 2026-W29
+closest condition: TSL @ 28675.33000 — 155.57000 points below (0.5396%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 16:07:36 CEST
+open price: 28790.50000
+current ask: 28831.85000
+current P/L: 61.34 PLN
+current P/L %: 0.1403%
+current P/L % leveraged: 1.1226%
+equity: 27939.57 PLN deposit: 2187.21 PLN
+SL: 28675.33000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: -
+final trading day: 2026-07-17
+weekly exit: WAIT (due=False)
+previous M1: epoch=1784305740 raw_epoch_utc=2026-07-17T16:29:00.000+00:00 bar_time=2026-07-17T16:29:00.000+02:00 actual_utc=2026-07-17T14:29:00.000+00:00 O=28837.50000 H=28839.50000 L=28816.50000 C=28830.50000
+build: 2026-07-17-mt5-margin-deposit-v32
+======================================================
+
+2026-07-17 16:30:00 INFO CONDITION_REPORT_BEGIN minute=2026-07-17 16:30
+2026-07-17 16:30:00 INFO CHECK minute=2026-07-17_16:30 weekday=Friday phase=REGULAR name=POSITION_OPEN result=TRUE ticket=2131130 entry=28790.5 volume=0.01
+2026-07-17 16:30:00 INFO CHECK minute=2026-07-17_16:30 weekday=Friday phase=REGULAR name=ENTRY_SIGNAL_OPEN_AVAILABLE result=TRUE signal_open=28605.25 pending=False
+2026-07-17 16:30:00 INFO CHECK minute=2026-07-17_16:30 weekday=Friday phase=REGULAR name=EXIT_LATCH_CLEAR result=TRUE exit_latch=none
+2026-07-17 16:30:00 INFO CHECK minute=2026-07-17_16:30 weekday=Friday phase=REGULAR name=OH result=FALSE bid=28830.9 threshold=30230.025
+2026-07-17 16:30:00 INFO CHECK minute=2026-07-17_16:30 weekday=Friday phase=REGULAR name=TSL result=TRUE current_sl=28675.33000 required_sl=28675.33000
+2026-07-17 16:30:00 INFO CONDITION_REPORT_END minute=2026-07-17 16:30 checks=5
+2026-07-17 16:30:00 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-17 16:30 current_price=28830.90000 profit=61.34 profit_percent=0.140324 leveraged_profit_percent=1.122593 equity=27939.57 balance=27878.23 deposit=2187.21
+2026-07-17 16:30:56 INFO EVENT STRATEGY_STOPPED
