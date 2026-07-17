@@ -5,6 +5,9 @@ return [
     'dsn' => 'mysql:host=127.0.0.1;dbname=oppw_monitor;charset=utf8mb4',
     'db_user' => 'oppw_monitor',
     'db_password' => 'replace-with-database-password',
+	
+	'pairing_admin_enabled' => false,
+	'pairing_admin_token' => 'PUT_A_LONG_RANDOM_TOKEN_HERE',
 
     // Used only by the MT5 publisher. Never put this token in the Android app.
     'write_token' => 'replace-with-a-long-random-write-token',
