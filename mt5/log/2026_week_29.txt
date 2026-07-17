@@ -11294,3 +11294,35 @@ build: 2026-07-17-mt5-margin-deposit-v32
 ======================================================
 
 2026-07-17 15:37:57 INFO EVENT STRATEGY_STOPPED
+2026-07-17 16:14:00 INFO STATUS
+==================== TRADE STATUS - MINUTE ====================
+phase: REGULAR protection regime: TSL_0.4000%
+time: 2026-07-17 16:14:00 CEST week: 2026-W29
+closest condition: TSL @ 28675.33000 — 134.17000 points below (0.4657%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 16:07:36 CEST
+open price: 28790.50000
+current ask: 28810.50000
+current P/L: 28.85 PLN
+current P/L %: 0.0660%
+current P/L % leveraged: 0.5280%
+equity: 27907.08 PLN deposit: 2187.21 PLN
+SL: 28675.33000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: -
+final trading day: 2026-07-17
+weekly exit: WAIT (due=False)
+previous M1: epoch=1784304780 raw_epoch_utc=2026-07-17T16:13:00.000+00:00 bar_time=2026-07-17T16:13:00.000+02:00 actual_utc=2026-07-17T14:13:00.000+00:00 O=28813.65000 H=28835.00000 L=28793.00000 C=28809.40000
+build: 2026-07-17-mt5-margin-deposit-v32
+======================================================
+
+2026-07-17 16:14:00 INFO CONDITION_REPORT_BEGIN minute=2026-07-17 16:14
+2026-07-17 16:14:00 INFO CHECK minute=2026-07-17_16:14 weekday=Friday phase=REGULAR name=POSITION_OPEN result=TRUE ticket=2131130 entry=28790.5 volume=0.01
+2026-07-17 16:14:00 INFO CHECK minute=2026-07-17_16:14 weekday=Friday phase=REGULAR name=ENTRY_SIGNAL_OPEN_AVAILABLE result=TRUE signal_open=28605.25 pending=False
+2026-07-17 16:14:00 INFO CHECK minute=2026-07-17_16:14 weekday=Friday phase=REGULAR name=EXIT_LATCH_CLEAR result=TRUE exit_latch=none
+2026-07-17 16:14:00 INFO CHECK minute=2026-07-17_16:14 weekday=Friday phase=REGULAR name=OH result=FALSE bid=28809.5 threshold=30230.025
+2026-07-17 16:14:00 INFO CHECK minute=2026-07-17_16:14 weekday=Friday phase=REGULAR name=TSL result=TRUE current_sl=28675.33000 required_sl=28675.33000
+2026-07-17 16:14:00 INFO CONDITION_REPORT_END minute=2026-07-17 16:14 checks=5
+2026-07-17 16:14:00 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-17 16:14 current_price=28809.50000 profit=28.85 profit_percent=0.065994 leveraged_profit_percent=0.527952 equity=27907.08 balance=27878.23 deposit=2187.21
