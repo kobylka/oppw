@@ -33,7 +33,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-BUILD_ID = "2026-07-16-friday-first-tick-margin-v23"
+BUILD_ID = "2026-07-17-recovery-leverage-previous-m1-v24"
 SCHEDULED_ACTION_LEAD_SECONDS = 3.0
 
 try:
@@ -397,6 +397,11 @@ class OPPWContinuousStrategy:
         local_dt = self.mt5_bar_timestamp_to_local(raw_ts)
         return M1Bar(raw_ts, local_dt, float(row["open"]), float(row["high"]), float(row["low"]), float(row["close"]))
 
+    def previous_m1_bar(self, symbol: str, now: datetime) -> Optional[M1Bar]:
+        previous_minute = now.astimezone(self.tz).replace(second=0, microsecond=0) - timedelta(minutes=1)
+        previous_time = previous_minute.time().replace(tzinfo=None)
+        return self.m1_bar_at(symbol, previous_minute.date(), previous_time)
+
     def m1_bar_at(self, symbol: str, local_day: date, local_time: time) -> Optional[M1Bar]:
         local_start = datetime.combine(local_day, local_time, self.tz)
         query_start = self.local_to_mt5_bar_query_time(local_start)
@@ -461,13 +466,7 @@ class OPPWContinuousStrategy:
 
     def infer_position_leverage(self, position) -> int:
         from_comment = self.parse_leverage_from_comment(getattr(position, "comment", ""))
-        if from_comment > 0:
-            return from_comment
-        if float(position.sl) > 0 and float(position.price_open) > 0:
-            actual_ratio = float(position.sl) / float(position.price_open)
-            candidates = (self.cfg.base_leverage, self.cfg.loss_leverage)
-            return min(candidates, key=lambda leverage: abs(actual_ratio - self.hard_sl_ratio(leverage)))
-        return self.choose_leverage()
+        return from_comment if from_comment in {8, 10} else 8
 
     def clear_current_position_exit_state(self, clear_last_exit: bool = True) -> None:
         self.state.exit_latched_reason = ""
@@ -634,7 +633,9 @@ class OPPWContinuousStrategy:
             return False
 
         opened = datetime.fromtimestamp(int(position.time), UTC).astimezone(self.tz)
+        comment_leverage = self.parse_leverage_from_comment(getattr(position, "comment", ""))
         leverage = self.infer_position_leverage(position)
+        leverage_source = "comment" if comment_leverage in {8, 10} else "default_L8"
         signal_open = self.signal_cash_open(self.cfg.signal_symbol, opened.date())
         cash_open = self.session_times(opened.date()).cash_open
         signal_pending = signal_open is None and (opened < cash_open or self.state.entry_signal_open_pending)
@@ -673,9 +674,9 @@ class OPPWContinuousStrategy:
 
         self.state.save(self.cfg.state_file)
         self.log.info(
-            "EVENT POSITION_RECOVERED ticket=%s identifier=%s magic=%s open_time=%s entry=%.5f volume=%s leverage=%s signal_open=%.5f signal_open_pending=%s break_even=%s",
+            "EVENT POSITION_RECOVERED ticket=%s identifier=%s magic=%s open_time=%s entry=%.5f volume=%s leverage=%s leverage_source=%s signal_open=%.5f signal_open_pending=%s break_even=%s",
             position.ticket, identifier, getattr(position, "magic", 0), opened.isoformat(), float(position.price_open),
-            position.volume, leverage, float(signal_open), signal_pending, recovered_break_even,
+            position.volume, leverage, leverage_source, float(signal_open), signal_pending, recovered_break_even,
         )
         return True
 
@@ -871,7 +872,8 @@ class OPPWContinuousStrategy:
         opened = datetime.fromtimestamp(int(position.time), UTC).astimezone(self.tz)
         side = "BUY" if int(getattr(position, "type", mt5.POSITION_TYPE_BUY)) == int(mt5.POSITION_TYPE_BUY) else "SELL"
         closest = self.closest_price_condition(position, now, bid)
-        bar_text = "none" if current_bar is None else f"{current_bar.local_datetime:%H:%M} O={current_bar.open:.5f} H={current_bar.high:.5f} L={current_bar.low:.5f} C={current_bar.close:.5f}"
+        previous_bar = self.previous_m1_bar(position.symbol, now)
+        previous_bar_text = "None" if previous_bar is None else f"{previous_bar.local_datetime:%Y-%m-%d %H:%M} O={previous_bar.open:.5f} H={previous_bar.high:.5f} L={previous_bar.low:.5f} C={previous_bar.close:.5f}"
 
         lines.extend([
             f"position: {side} {position.symbol} {float(position.volume):.4f} lot",
@@ -894,7 +896,7 @@ class OPPWContinuousStrategy:
             f"exit latch: {self.state.exit_latched_reason or '-'}",
             f"final trading day: {final_day or '-'}",
             f"weekly exit: {due_reason} (due={due})",
-            f"current M1: {bar_text}",
+            f"previous M1: {previous_bar_text}",
             f"build: {BUILD_ID}",
             "======================================================",
         ])
