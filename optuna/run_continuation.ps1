@@ -8,7 +8,7 @@ for ($worker = 1; $worker -le 16; $worker++) {
 Set-Location '$ProjectPath'
 
 `$env:SAMPLER_TYPE = 'nsgaii-warm'
-`$env:STUDY_NAME = 'oppw-train-2022-2025-sobol-8192-v1'
+`$env:STUDY_NAME = 'oppw-train-2018-2026-v1'
 `$env:WORKER_SEED = '$seed'
 `$env:N_TRIALS = '1024'
 

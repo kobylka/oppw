@@ -44,7 +44,7 @@ if(TRAIN_END_YEAR == 2014):
 TRAIN_START_YEAR = 2018
 TRAIN_END_YEAR = 2026
 TRAIN_START_DATE = f"20180413"
-TRAIN_END_DATE = f"20260713"
+TRAIN_END_DATE = f"20260717"
 
 QUARANTINE_START_DATE = "20200101"
 QUARANTINE_END_DATE = "20220101"
@@ -62,11 +62,11 @@ STUDY_NAME = (
 )
 
 INITIAL_BALANCE = 30_000.0
-LEVERAGE = 3.0
+LEVERAGE = 8.0
 
 # Existing general/disaster stop expressed as price ratio.
 # Example: 0.95 means exit at 5% below entry.
-DISASTER_STOP_RATIO = 0.8333
+DISASTER_STOP_RATIO = 0.9375
 
 BREAK_EVEN_RATIO = 0.9965
 
@@ -85,14 +85,18 @@ MIN_WORST_YEAR_CAGR = -0.9
 MIN_NEIGHBORHOOD_P10_CAGR = 0.0
 
 # Parameter ranges expressed in 0.001 increments.
-P1_RANGE = (5, 5)
-P2_RANGE = (30, 30)
-P3_RANGE = (40, 40)
-P4_RANGE = (50, 50)
-P5_RANGE = (40, 40)
+P1_RANGE = (5, 30)
+P2_RANGE = (5, 30)
+P3_RANGE = (5, 50)
+P4_RANGE = (5, 50)
+P5_RANGE = (5, 50)
 
-THURSDAY_STOP = (15, 15)
-FRIDAY_STOP = (15, 15)
+THURSDAY_STOP = (5, 15)
+FRIDAY_STOP = (5, 15)
+
+
+MINUTE_OPEN = (4, 1320)
+MINUTE_CLOSE = (4, 1334)
 
 # This makes targets non-decreasing through the week.
 ENFORCE_NONDECREASING_TARGETS = True

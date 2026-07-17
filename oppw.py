@@ -396,16 +396,6 @@ class Sim:
                 if(open_price*SL > opon):
                     close_price = opon
                     trade_type = "FUCK"
-                elif(self.break_even == True):
-                    if(opon > open_price*BE):
-                        close_price = opon
-                        trade_type = "BO"   
-                    elif(high > open_price*BE):
-                        close_price = open_price*BE
-                        trade_type = "BH"
-                
-            if(close < open_price*BE):
-                self.break_even = True
             
             if(close_price > 0 and open_price > 0):
                 self.sell(open_price, close_price, open_date, close_date, trade_type, debug)
@@ -455,6 +445,13 @@ class Sim:
                 close_date = date
                 close_price = open_price*friday_SL
                 trade_type = "TSL4"
+            elif(self.break_even == True):
+                    if(opon > open_price*BE):
+                        close_price = opon
+                        trade_type = "BO"   
+                    elif(high > open_price*BE):
+                        close_price = open_price*BE
+                        trade_type = "BH"
             elif(high > open_price*(1+tpp) and open_price > 0 and False):
                 close_date = date
                 close_price = open_price*(1+tpp)
@@ -471,6 +468,9 @@ class Sim:
                 close_date = date
                 close_price = close
                 trade_type = "TO"
+                
+            if(close < open_price*BE and is_monday is False and open_price > 0 and date_diff(open_date, date) > 0):
+                self.break_even = True
             
             if open_price > 0:
                 current_change = close / open_price - 1.0
@@ -579,7 +579,7 @@ if __name__ == "__main__":
         if("QQQ" not in sim.quotes[date]):
             print(date)
     
-    LEVERAGE =3
+    LEVERAGE = 8
     SL = (100-50/LEVERAGE)/100
     BE = 0.9965
     
@@ -588,6 +588,6 @@ if __name__ == "__main__":
     sim_i = Sim()
     
     tpps = [0.007,0.02,0.05,0.05,0.05]
-    result = sim.process(sim_i.quotes, "QQQ", "20181001", "20181231", LEVERAGE, tpps, SL, BE, 0.005,0.015, 1000000, False,True,True,True)
+    result = sim.process(sim_i.quotes, "QQQ", "20220103", "20260717", LEVERAGE, tpps, SL, BE, 0.005,0.015, 30000, False,True,True,True)
     print(result)
     print()

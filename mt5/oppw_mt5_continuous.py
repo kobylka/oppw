@@ -33,7 +33,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-BUILD_ID = "2026-07-17-rearranged-status-v26"
+BUILD_ID = "2026-07-17-mt5-timefix-v27"
 SCHEDULED_ACTION_LEAD_SECONDS = 3.0
 
 try:
@@ -372,9 +372,12 @@ class OPPWContinuousStrategy:
             raise RuntimeError(f"symbol_info_tick({symbol}) failed: {mt5.last_error()}")
         return tick
 
-    def mt5_bar_timestamp_to_local(self, timestamp: float) -> datetime:
+    def mt5_timestamp_to_local(self, timestamp: float) -> datetime:
         wall_clock = datetime.fromtimestamp(timestamp, UTC).replace(tzinfo=None)
         return wall_clock.replace(tzinfo=self.tz)
+
+    def mt5_bar_timestamp_to_local(self, timestamp: float) -> datetime:
+        return self.mt5_timestamp_to_local(timestamp)
 
     def local_to_mt5_bar_query_time(self, local_dt: datetime) -> datetime:
         wall_clock = local_dt.astimezone(self.tz).replace(tzinfo=None)
@@ -383,7 +386,8 @@ class OPPWContinuousStrategy:
     def require_fresh_tick(self, symbol: str) -> Any:
         tick = self.latest_tick(symbol)
         timestamp = getattr(tick, "time_msc", 0) / 1000.0 if getattr(tick, "time_msc", 0) else tick.time
-        age = datetime.now(UTC).timestamp() - timestamp
+        tick_local = self.mt5_timestamp_to_local(timestamp)
+        age = (datetime.now(self.tz) - tick_local).total_seconds()
         if age > self.cfg.maximum_tick_age_seconds:
             raise RuntimeError(f"Stale tick for {symbol}: age={age:.1f}s")
         return tick
@@ -632,7 +636,8 @@ class OPPWContinuousStrategy:
         if same_position and not force:
             return False
 
-        opened = datetime.fromtimestamp(int(position.time), UTC).astimezone(self.tz)
+        position_timestamp = getattr(position, "time_msc", 0) / 1000.0 if getattr(position, "time_msc", 0) else position.time
+        opened = self.mt5_timestamp_to_local(position_timestamp)
         comment_leverage = self.parse_leverage_from_comment(getattr(position, "comment", ""))
         leverage = self.infer_position_leverage(position)
         leverage_source = "comment" if comment_leverage in {8, 10} else "default_L8"
@@ -726,7 +731,7 @@ class OPPWContinuousStrategy:
             self.state.prev_change = change
             self.state.last_exit_price = exit_price
             exit_timestamp = getattr(exit_deal, "time_msc", 0) / 1000.0 if getattr(exit_deal, "time_msc", 0) else exit_deal.time
-            self.state.last_exit_time = datetime.fromtimestamp(exit_timestamp, UTC).astimezone(self.tz).isoformat()
+            self.state.last_exit_time = self.mt5_timestamp_to_local(exit_timestamp).isoformat()
             self.state.last_exit_reason = reason
             self.log.info(
                 "EVENT POSITION_CLOSED reason=%s broker_reason=%s deal_ticket=%s entry=%.5f exit=%.5f change=%.4f active_sl_reason=%s active_tp_reason=%s",
@@ -863,18 +868,21 @@ class OPPWContinuousStrategy:
         leverage = self.state.entry_leverage or self.choose_leverage()
         leveraged_pnl_pct = raw_pnl_pct * leverage
         current_pnl = float(getattr(position, "profit", 0.0)) + float(getattr(position, "swap", 0.0))
-        opened = datetime.fromtimestamp(int(position.time), UTC).astimezone(self.tz)
+        position_timestamp = getattr(position, "time_msc", 0) / 1000.0 if getattr(position, "time_msc", 0) else position.time
+        opened = self.mt5_timestamp_to_local(position_timestamp)
         closest = self.closest_price_condition(position, now, bid)
         previous_bar = self.previous_m1_bar(position.symbol, now)
         if previous_bar is None:
             previous_bar_text = "None"
         else:
-            bar_utc = datetime.fromtimestamp(previous_bar.utc_timestamp, UTC)
+            raw_epoch_utc = datetime.fromtimestamp(previous_bar.utc_timestamp, UTC)
             bar_local = previous_bar.local_datetime
+            actual_utc = bar_local.astimezone(UTC)
             previous_bar_text = (
                 f"epoch={previous_bar.utc_timestamp} "
-                f"UTC={bar_utc.isoformat(timespec='milliseconds')} "
-                f"Warsaw={bar_local.isoformat(timespec='milliseconds')} "
+                f"raw_epoch_utc={raw_epoch_utc.isoformat(timespec='milliseconds')} "
+                f"bar_time={bar_local.isoformat(timespec='milliseconds')} "
+                f"actual_utc={actual_utc.isoformat(timespec='milliseconds')} "
                 f"O={previous_bar.open:.5f} H={previous_bar.high:.5f} "
                 f"L={previous_bar.low:.5f} C={previous_bar.close:.5f}"
             )

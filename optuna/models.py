@@ -21,6 +21,9 @@ class StrategyParams:
 
     thursday_stop: int
     friday_stop: int
+    
+    minute_open: int
+    minute_close: int
 
     @property
     def tpps(self) -> list[float]:
@@ -63,5 +66,7 @@ class StrategyParams:
             p4=int(values["p4"]),
             p5=int(values["p5"]),
             thursday_stop=int(values["thursday_stop"]),
-            friday_stop=int(values["friday_stop"])
+            friday_stop=int(values["friday_stop"]),
+            minute_open=int(values["minute_open"]),
+            minute_close=int(values["minute_close"])
         )

@@ -15,6 +15,8 @@ from config import (
     P4_RANGE,
     P5_RANGE,
     THURSDAY_STOP,
+    MINUTE_OPEN,
+    MINUTE_CLOSE,
     TRAIN_END_DATE,
     TRAIN_END_YEAR,
     TRAIN_START_DATE,
@@ -24,6 +26,8 @@ from models import StrategyParams
 
 
 def valid_parameters(params: StrategyParams) -> bool:
+    if params.minute_close <= params.minute_open:
+        raise optuna.TrialPruned()
     return True
 
 
@@ -45,6 +49,16 @@ def suggest_parameters(
             "friday_stop",
             *FRIDAY_STOP,
             step = 5
+        ),
+        minute_open=trial.suggest_int(
+            "minute_open",
+            *MINUTE_OPEN,
+            step = 6
+        ),
+        minute_close=trial.suggest_int(
+            "minute_close",
+            *MINUTE_CLOSE,
+            step = 6
         ),
     )
 

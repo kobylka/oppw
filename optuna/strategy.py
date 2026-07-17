@@ -63,6 +63,10 @@ class Sim:
         self.classD = 0
         
         self.prev_change = 0
+        self.prev_open = 0
+        
+        self.loses = []
+        self.wins = []
             
         self.lost = 0
         self.dd = 0
@@ -238,9 +242,28 @@ class Sim:
                 
                 self.days_in_position += trade_period
                 
+                if(change < 0):
+                    self.loses.append(change*LEVERAGE)
+                else:
+                    self.wins.append(change*LEVERAGE)
+                    
+                
+                ratio = round(len(self.wins)/(len(self.wins)+len(self.loses)),4)
+                
+                if(len(self.wins) > 0):
+                    avg_win  = round(sum(self.wins) / len(self.wins),3)
+                else:
+                    avg_win = 0
+                    
+                if(len(self.loses) > 0):
+                    avg_loss = round(sum(self.loses) / len(self.loses),3)
+                else:
+                    avg_loss = 0
+                
+                
                 if(debug == True):
                     #print(self.balance)
-                    print(LEVERAGE, granular, self.balance,self.trade_no, time,trade_type, open_date, close_date, date_diff(open_date, close_date)+1, change, math.pow(self.balance/self.deposited, 1/self.trade_no))
+                    print(LEVERAGE, granular, self.balance,self.trade_no, time,trade_type, open_date, close_date, date_diff(open_date, close_date)+1, change, math.pow(self.balance/self.deposited, 1/self.trade_no), ratio, avg_loss, avg_win)
                 if(change*lev < -0.1): self.lost += granular*20**lev
                 
                 if(self.balance > self.max_equity):
@@ -297,6 +320,8 @@ class Sim:
         BE,
         thursday_stop,
         friday_stop,
+        minute_open,
+        minute_close,
         initial_balance=12000.0,
         allow_deposits=False,
         apply_tax=False,
@@ -332,6 +357,7 @@ class Sim:
         self.classD = 0
         
         self.prev_change = 0
+        self.prev_full_week_change = 0
             
         self.lost = 0
         self.dd = 0
@@ -392,15 +418,15 @@ class Sim:
             qqq_close = quotes[3]
             
             openest = quotes[4][0]
-            opon = quotes[934][0]
-            close = quotes[1334][3]
+            opon = quotes[minute_open][0]
+            close = quotes[minute_close][3]
 
             tpp = tpps[weekday_index]
 
             close_price = 0
             close_date = date
             trade_type = ""
-            i = 1324
+            i = minute_close
 
             new_week_entry = (date_diff(prev_date, date) > 1 and weekday_index in (0, 1))
 
@@ -444,10 +470,19 @@ class Sim:
             # Calculate leverage, stop and sizing after the exit.
             # --------------------------------------------------------
 
-            if self.prev_change < -0.007 and self.leverage == 8:
+            if (self.prev_full_week_change < -0.025 or self.prev_change < -0.007) and self.leverage == 8:
                 LEVERAGE = 10
             else:
                 LEVERAGE = self.leverage
+            
+            if(self.prev_open > 0):
+                current_week_change = close/self.prev_open-1
+                if(is_thursday and add_days(date,1) not in self.quotes):
+                    self.prev_full_week_change = current_week_change
+                elif(is_friday):
+                    self.prev_full_week_change = current_week_change
+                elif(is_wednesday and add_days(date,1) not in self.quotes and add_days(date,2) not in self.quotes):
+                    self.prev_full_week_change = current_week_change
 
             SL = (100 - 50 / LEVERAGE) / 100
 
@@ -473,7 +508,7 @@ class Sim:
                     trade_type = "GAP DOWN"
 
             if close_price == 0 and open_price > 0:
-                for i in range(4, 934):
+                for i in range(4, minute_open):
                     o = quotes[i][0]
                     l = quotes[i][2]
 
@@ -515,6 +550,7 @@ class Sim:
 
             if new_week_entry and open_price == 0:
                 open_price = opon
+                self.prev_open = opon
                 open_date = date
                 qqq_open_price = qqq_open
                 self.trade_no += 1
@@ -523,7 +559,7 @@ class Sim:
             # Cash-open exits.
             # --------------------------------------------------------
 
-            i = 934
+            i = minute_open
 
             if open_price > 0:
                 if open_price * SL > opon:
@@ -556,7 +592,7 @@ class Sim:
             # --------------------------------------------------------
 
             if close_price == 0 and open_price > 0:
-                for i in range(934, 1325):
+                for i in range(minute_open, minute_close+1):
                     o = quotes[i][0]
                     h = quotes[i][1]
                     l = quotes[i][2]
@@ -597,20 +633,13 @@ class Sim:
 
             if open_price > 0 and close_price == 0:
                 if qqq_close > qqq_open_price * (1 + tpp):
-                    i = 1324
+                    i = minute_close
                     close_date = date
                     close_price = close
                     trade_type = "CH"
-                    
-                #elif (is_wednesday and (close+1) / open_price < thursday_SL):
-                elif (is_wednesday and (close+100000) / open_price < thursday_SL):
-                    i = 1324
-                    close_date = date
-                    close_price = close
-                    trade_type = "TSL0"
 
                 elif is_friday:
-                    i = 1324
+                    i = minute_close
                     close_date = date
                     close_price = close
                     trade_type = "TO"
