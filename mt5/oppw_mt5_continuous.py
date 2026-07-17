@@ -37,7 +37,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-BUILD_ID = "2026-07-17-minute-status-publishing-v31"
+BUILD_ID = "2026-07-17-mt5-margin-deposit-v32"
 SCHEDULED_ACTION_LEAD_SECONDS = 3.0
 
 try:
@@ -1306,19 +1306,6 @@ class OPPWContinuousStrategy:
         one_percent_profit = mt5.order_calc_profit(mt5.ORDER_TYPE_BUY, position.symbol, float(position.volume), bid, bid * 1.01)
         return abs(float(one_percent_profit)) / 0.01 if one_percent_profit is not None else 0.0
 
-    def monitor_position_deposit(self, position, ask: float) -> float:
-        if position is None or ask <= 0:
-            return 0.0
-        info = mt5.symbol_info(position.symbol)
-        if info is None:
-            return 0.0
-        try:
-            minimum_volume_notional = self.minimum_volume_notional(info, ask)
-            sizing_quantum = minimum_volume_notional / self.cfg.sizing_multiplier
-            return float(position.volume) * sizing_quantum
-        except Exception:
-            return 0.0
-
     def build_mobile_snapshot(self, position, now: datetime, current_bar: Optional[M1Bar]) -> dict[str, Any]:
         account = mt5.account_info()
         balance = float(getattr(account, "balance", 0.0)) if account is not None else 0.0
@@ -1340,7 +1327,7 @@ class OPPWContinuousStrategy:
 
         position_payload: Optional[dict[str, Any]] = None
         closest = None
-        deposit = 0.0
+        deposit = float(getattr(account, "margin", 0.0)) if account is not None else 0.0
         if position is not None:
             bid = trade_bid if trade_bid > 0 else float(getattr(position, "price_current", 0.0) or 0.0)
             ask = trade_ask
@@ -1351,7 +1338,6 @@ class OPPWContinuousStrategy:
             timestamp = getattr(position, "time_msc", 0) / 1000.0 if getattr(position, "time_msc", 0) else float(position.time)
             opened = self.mt5_timestamp_to_local(timestamp)
             exposure = self.monitor_position_exposure(position, bid)
-            deposit = self.monitor_position_deposit(position, ask if ask > 0 else bid)
             position_payload = {
                 "open": True,
                 "symbol": str(position.symbol),
