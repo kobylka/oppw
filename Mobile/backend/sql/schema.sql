@@ -34,8 +34,12 @@ CREATE TABLE strategy_events (
     result BOOLEAN NULL,
     message VARCHAR(1000) NOT NULL DEFAULT '',
     details JSON NULL,
+    event_hash CHAR(64) NULL,
     PRIMARY KEY (id),
+    UNIQUE KEY uq_strategy_event_hash (strategy_key, event_hash),
     INDEX idx_event_strategy_time (strategy_key, event_time, id),
+    INDEX idx_event_strategy_id (strategy_key, id),
+    INDEX idx_event_strategy_name (strategy_key, name, id),
     CONSTRAINT fk_event_account FOREIGN KEY (strategy_key) REFERENCES monitor_accounts(account_key)
 ) ENGINE=InnoDB;
 
@@ -144,9 +148,23 @@ CREATE TABLE IF NOT EXISTS strategy_trades (
     opened_at DATETIME(3) NOT NULL,
     closed_at DATETIME(3) NULL,
     open_price DECIMAL(20, 8) NOT NULL DEFAULT 0,
+    entry_reference_price DECIMAL(20, 8) NULL,
+    entry_slippage_points DECIMAL(20, 8) NULL,
+    entry_slippage_percent DECIMAL(12, 6) NULL,
     close_price DECIMAL(20, 8) NULL,
+    exit_reference_price DECIMAL(20, 8) NULL,
+    exit_slippage_points DECIMAL(20, 8) NULL,
+    exit_slippage_percent DECIMAL(12, 6) NULL,
     profit DECIMAL(20, 4) NULL,
     profit_percent DECIMAL(12, 6) NULL,
+    best_price DECIMAL(20, 8) NULL,
+    worst_price DECIMAL(20, 8) NULL,
+    mfe_points DECIMAL(20, 8) NULL,
+    mfe_percent DECIMAL(12, 6) NULL,
+    mae_points DECIMAL(20, 8) NULL,
+    mae_percent DECIMAL(12, 6) NULL,
+    max_profit DECIMAL(20, 4) NULL,
+    max_drawdown DECIMAL(20, 4) NULL,
     exit_reason VARCHAR(100) NOT NULL DEFAULT '',
     balance_before DECIMAL(20, 4) NULL,
     balance_after DECIMAL(20, 4) NULL,
@@ -173,4 +191,35 @@ CREATE TABLE IF NOT EXISTS account_cash_flows (
     UNIQUE KEY uq_cash_flow_reference (strategy_key, reference_key),
     INDEX idx_cash_flow_strategy_time (strategy_key, occurred_at),
     CONSTRAINT fk_cash_flow_account FOREIGN KEY (strategy_key) REFERENCES monitor_accounts(account_key) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+
+-- v7 push notification registration and delivery deduplication
+CREATE TABLE IF NOT EXISTS monitor_push_tokens (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    device_id CHAR(32) NOT NULL,
+    fcm_token_hash CHAR(64) NOT NULL,
+    fcm_token VARCHAR(4096) NOT NULL,
+    platform VARCHAR(16) NOT NULL DEFAULT 'ANDROID',
+    app_version VARCHAR(32) NOT NULL DEFAULT '',
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    last_success_at DATETIME(3) NULL,
+    last_error VARCHAR(500) NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_push_token_hash (fcm_token_hash),
+    INDEX idx_push_device_enabled (device_id, enabled),
+    CONSTRAINT fk_push_device FOREIGN KEY (device_id) REFERENCES monitor_devices(device_id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS monitor_push_deliveries (
+    delivery_hash CHAR(64) NOT NULL,
+    strategy_key VARCHAR(64) NOT NULL,
+    title VARCHAR(120) NOT NULL,
+    body VARCHAR(500) NOT NULL,
+    created_at DATETIME(3) NOT NULL,
+    PRIMARY KEY (delivery_hash),
+    INDEX idx_push_delivery_account_time (strategy_key, created_at),
+    CONSTRAINT fk_push_delivery_account FOREIGN KEY (strategy_key) REFERENCES monitor_accounts(account_key) ON DELETE CASCADE
 ) ENGINE=InnoDB;

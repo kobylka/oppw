@@ -28,4 +28,9 @@ return [
     // that overwrites X-Forwarded-Proto itself.
     'require_https' => true,
     'trust_forwarded_proto' => false,
+
+    // Optional Firebase Cloud Messaging. Keep the service-account JSON outside the web root.
+    'push_enabled' => false,
+    'firebase_project_id' => '',
+    'firebase_service_account_file' => '/etc/oppw-firebase-service-account.json',
 ];

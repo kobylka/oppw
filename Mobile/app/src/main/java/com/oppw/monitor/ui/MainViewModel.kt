@@ -5,14 +5,23 @@ import android.content.Context
 import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.paging.Pager
+import androidx.paging.PagingConfig
+import androidx.paging.PagingData
+import com.google.firebase.FirebaseApp
+import com.google.firebase.messaging.FirebaseMessaging
 import com.oppw.monitor.BuildConfig
 import com.oppw.monitor.auth.AuthenticationRequiredException
 import com.oppw.monitor.data.AuthStatus
+import com.oppw.monitor.data.EventsPagingSource
 import com.oppw.monitor.data.MonitorAccount
+import com.oppw.monitor.data.MonitorEvent
 import com.oppw.monitor.data.StatusRepository
 import com.oppw.monitor.data.UiState
+import com.oppw.monitor.notifications.NotificationHelper
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -20,18 +29,24 @@ import kotlinx.coroutines.launch
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = StatusRepository(application)
-    private val preferences = application.getSharedPreferences("oppw_monitor", Context.MODE_PRIVATE)
+    private val preferences = application.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
     private val _uiState = MutableStateFlow(UiState(deviceName = repository.currentDeviceName() ?: defaultDeviceName()))
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
+    private val _logTotalMatching = MutableStateFlow(0)
+    val logTotalMatching: StateFlow<Int> = _logTotalMatching.asStateFlow()
     private var pollingJob: Job? = null
     private var clockJob: Job? = null
     private var lastAccountsRefreshMs = 0L
+    private var realUnlockedUntilMs = 0L
+    private var staleNotificationShown = false
+    private var statusMonitoringStartedMs = System.currentTimeMillis()
 
     init {
         startClock()
         if (repository.hasSession()) {
             _uiState.value = _uiState.value.copy(authStatus = AuthStatus.PAIRED)
             startPolling()
+            registerPushToken()
         } else {
             _uiState.value = _uiState.value.copy(authStatus = AuthStatus.UNPAIRED, loading = false, accountsLoading = false)
         }
@@ -45,7 +60,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             runCatching { repository.pair(normalizedCode, normalizedName) }
                 .onSuccess { session ->
+                    statusMonitoringStartedMs = System.currentTimeMillis()
                     _uiState.value = UiState(authStatus = AuthStatus.PAIRED, deviceName = session.deviceName)
+                    registerPushToken()
                     startPolling()
                 }
                 .onFailure { error ->
@@ -64,15 +81,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         pollingJob?.cancel()
         pollingJob = null
         viewModelScope.launch {
+            runCatching { repository.unregisterPushToken() }
             runCatching { repository.unpair() }
-            preferences.edit().remove(PREF_SELECTED_ACCOUNT).apply()
+            NotificationHelper.cancelApiStale(getApplication<Application>())
+            preferences.edit().clear().apply()
             lastAccountsRefreshMs = 0L
-            _uiState.value = UiState(
-                authStatus = AuthStatus.UNPAIRED,
-                loading = false,
-                accountsLoading = false,
-                deviceName = defaultDeviceName(),
-            )
+            realUnlockedUntilMs = 0L
+            statusMonitoringStartedMs = System.currentTimeMillis()
+            _uiState.value = UiState(authStatus = AuthStatus.UNPAIRED, loading = false, accountsLoading = false, deviceName = defaultDeviceName())
         }
     }
 
@@ -81,12 +97,93 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { load(manual = true, forceAccounts = true) }
     }
 
-    fun selectAccount(accountKey: String) {
+    fun requestAccountSelection(accountKey: String) {
         val current = _uiState.value
-        if (current.authStatus != AuthStatus.PAIRED || accountKey == current.selectedAccountKey) return
-        if (current.accounts.none { it.key == accountKey }) return
-        preferences.edit().putString(PREF_SELECTED_ACCOUNT, accountKey).apply()
-        _uiState.value = current.copy(loading = true, selectedAccountKey = accountKey, response = null, error = null)
+        val account = current.accounts.firstOrNull { it.key == accountKey } ?: return
+        if (current.authStatus != AuthStatus.PAIRED || accountKey == current.selectedAccountKey && current.pendingBiometricAccountKey == null) return
+        if (account.isReal && !realAccountUnlocked()) {
+            NotificationHelper.cancelApiStale(getApplication<Application>())
+            preferences.edit().putString(PREF_SELECTED_ACCOUNT, accountKey).putBoolean(PREF_SELECTED_ACCOUNT_REAL, true).apply()
+            _uiState.value = current.copy(
+                selectedAccountKey = accountKey,
+                pendingBiometricAccountKey = accountKey,
+                biometricError = null,
+                response = null,
+                analytics = null,
+                loading = false,
+            )
+            return
+        }
+        applyAccountSelection(accountKey)
+    }
+
+    fun biometricSucceeded(accountKey: String) {
+        realUnlockedUntilMs = Long.MAX_VALUE
+        _uiState.value = _uiState.value.copy(pendingBiometricAccountKey = null, biometricError = null, loading = true)
+        applyAccountSelection(accountKey)
+    }
+
+    fun biometricFailed(message: String) {
+        _uiState.value = _uiState.value.copy(biometricError = message)
+    }
+
+    fun useDemoWithoutBiometric() {
+        val demo = _uiState.value.accounts.firstOrNull { !it.isReal } ?: return
+        realUnlockedUntilMs = 0L
+        _uiState.value = _uiState.value.copy(pendingBiometricAccountKey = null, biometricError = null)
+        applyAccountSelection(demo.key)
+    }
+
+    fun onAppBackgrounded() {
+        val state = _uiState.value
+        if (state.accounts.firstOrNull { it.key == state.selectedAccountKey }?.isReal == true && realAccountUnlocked()) {
+            realUnlockedUntilMs = System.currentTimeMillis() + REAL_BACKGROUND_GRACE_MS
+        }
+    }
+
+    fun onAppForegrounded() {
+        if (realUnlockedUntilMs == 0L || realUnlockedUntilMs == Long.MAX_VALUE) return
+        if (System.currentTimeMillis() >= realUnlockedUntilMs) {
+            lockSelectedRealAccount()
+        } else {
+            realUnlockedUntilMs = Long.MAX_VALUE
+        }
+    }
+
+    fun loadAnalytics(force: Boolean = false) {
+        val current = _uiState.value
+        val key = current.selectedAccountKey ?: return
+        if (current.pendingBiometricAccountKey != null || selectedAccountIsLocked(current)) return
+        if (!force && current.analytics != null) return
+        _uiState.value = current.copy(analyticsLoading = true, analyticsError = null)
+        viewModelScope.launch {
+            runCatching { repository.analytics(key) }
+                .onSuccess { analytics -> _uiState.value = _uiState.value.copy(analytics = analytics, analyticsLoading = false, analyticsError = null) }
+                .onFailure { error -> _uiState.value = _uiState.value.copy(analyticsLoading = false, analyticsError = error.message ?: error::class.java.simpleName) }
+        }
+    }
+
+    fun eventPager(accountKey: String, buySellOnly: Boolean, eventName: String?): Flow<PagingData<MonitorEvent>> {
+        _logTotalMatching.value = 0
+        return Pager(
+            config = PagingConfig(pageSize = 75, initialLoadSize = 75, prefetchDistance = 20, maxSize = 500, enablePlaceholders = false),
+            pagingSourceFactory = { EventsPagingSource(repository, accountKey, buySellOnly, eventName) { total -> _logTotalMatching.value = total } },
+        ).flow
+    }
+
+    private fun applyAccountSelection(accountKey: String) {
+        val isReal = _uiState.value.accounts.firstOrNull { it.key == accountKey }?.isReal == true
+        preferences.edit().putString(PREF_SELECTED_ACCOUNT, accountKey).putBoolean(PREF_SELECTED_ACCOUNT_REAL, isReal).apply()
+        _uiState.value = _uiState.value.copy(
+            loading = true,
+            selectedAccountKey = accountKey,
+            pendingBiometricAccountKey = null,
+            biometricError = null,
+            response = null,
+            analytics = null,
+            analyticsError = null,
+            error = null,
+        )
         viewModelScope.launch { load(manual = true, forceAccounts = false) }
     }
 
@@ -94,9 +191,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         clockJob?.cancel()
         clockJob = viewModelScope.launch {
             while (true) {
-                _uiState.value = _uiState.value.copy(nowEpochMs = System.currentTimeMillis())
+                val now = System.currentTimeMillis()
+                var next = _uiState.value.copy(nowEpochMs = now)
+                if (next.selectedAccountKey != null && next.accounts.firstOrNull { it.key == next.selectedAccountKey }?.isReal == true && realUnlockedUntilMs > 0L && realUnlockedUntilMs != Long.MAX_VALUE && now >= realUnlockedUntilMs) {
+                    lockSelectedRealAccount()
+                    next = _uiState.value.copy(nowEpochMs = now)
+                }
+                _uiState.value = next
+                checkForegroundStaleness(now)
                 delay(1_000L)
             }
+        }
+    }
+
+    private fun checkForegroundStaleness(now: Long) {
+        val state = _uiState.value
+        if (state.authStatus != AuthStatus.PAIRED || state.pendingBiometricAccountKey != null) return
+        val reference = state.lastSuccessfulFetchEpochMs.takeIf { it > 0L } ?: statusMonitoringStartedMs
+        val seconds = (now - reference).coerceAtLeast(0L) / 1000L
+        if (seconds >= BuildConfig.API_STALE_SECONDS && !staleNotificationShown) {
+            staleNotificationShown = true
+            NotificationHelper.showApiStale(getApplication<Application>(), seconds)
         }
     }
 
@@ -113,42 +228,53 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun load(manual: Boolean, forceAccounts: Boolean) {
         val previous = _uiState.value
         if (previous.authStatus != AuthStatus.PAIRED) return
-        _uiState.value = previous.copy(loading = previous.response == null, refreshing = manual, error = null)
+        _uiState.value = previous.copy(loading = previous.response == null && previous.pendingBiometricAccountKey == null, refreshing = manual, error = null)
 
         var accounts = previous.accounts
         var selectedKey = previous.selectedAccountKey
-        runCatching {
+        try {
             accounts = loadAccountsIfNeeded(previous.accounts, forceAccounts)
             require(accounts.isNotEmpty()) { "No permitted monitor accounts are configured for this device" }
             selectedKey = resolveSelectedAccount(accounts, previous.selectedAccountKey)
-            _uiState.value = _uiState.value.copy(accountsLoading = false, accounts = accounts, selectedAccountKey = selectedKey)
-            repository.refresh(requireNotNull(selectedKey))
-        }.onSuccess { response ->
+            val selectedAccount = accounts.first { it.key == selectedKey }
+            if (selectedAccount.isReal && !realAccountUnlocked()) {
+                _uiState.value = _uiState.value.copy(
+                    loading = false,
+                    refreshing = false,
+                    accountsLoading = false,
+                    accounts = accounts,
+                    selectedAccountKey = selectedKey,
+                    response = null,
+                    analytics = null,
+                    pendingBiometricAccountKey = selectedKey,
+                )
+                return
+            }
+            _uiState.value = _uiState.value.copy(accountsLoading = false, accounts = accounts, selectedAccountKey = selectedKey, pendingBiometricAccountKey = null)
+            val response = repository.refresh(selectedKey)
             val now = System.currentTimeMillis()
-            _uiState.value = UiState(
-                authStatus = AuthStatus.PAIRED,
-                deviceName = previous.deviceName,
+            staleNotificationShown = false
+            NotificationHelper.cancelApiStale(getApplication<Application>())
+            preferences.edit().putLong(PREF_BACKGROUND_LAST_SUCCESS, now).apply()
+            _uiState.value = _uiState.value.copy(
+                loading = false,
+                refreshing = false,
                 accountsLoading = false,
                 accounts = accounts,
                 selectedAccountKey = selectedKey,
+                pendingBiometricAccountKey = null,
                 response = response,
                 lastSuccessfulFetchEpochMs = now,
                 nowEpochMs = now,
+                error = null,
             )
-        }.onFailure { error ->
+        } catch (error: Throwable) {
             if (error is AuthenticationRequiredException) {
                 pollingJob?.cancel()
                 repository.clearSession()
-                _uiState.value = UiState(
-                    authStatus = AuthStatus.UNPAIRED,
-                    loading = false,
-                    accountsLoading = false,
-                    deviceName = defaultDeviceName(),
-                    pairingError = error.message,
-                )
+                _uiState.value = UiState(authStatus = AuthStatus.UNPAIRED, loading = false, accountsLoading = false, deviceName = defaultDeviceName(), pairingError = error.message)
             } else {
-                val current = _uiState.value
-                _uiState.value = current.copy(
+                _uiState.value = _uiState.value.copy(
                     loading = false,
                     refreshing = false,
                     accountsLoading = accounts.isEmpty(),
@@ -173,16 +299,37 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             .firstOrNull { key -> accounts.any { it.key == key } }
             ?: accounts.firstOrNull { it.isDefault }?.key
             ?: accounts.first().key
-        preferences.edit().putString(PREF_SELECTED_ACCOUNT, selected).apply()
+        val isReal = accounts.firstOrNull { it.key == selected }?.isReal == true
+        preferences.edit().putString(PREF_SELECTED_ACCOUNT, selected).putBoolean(PREF_SELECTED_ACCOUNT_REAL, isReal).apply()
         return selected
     }
 
-    private fun defaultDeviceName(): String = listOf(Build.MANUFACTURER, Build.MODEL)
-        .map { it.trim() }
-        .filter { it.isNotBlank() }
-        .distinct()
-        .joinToString(" ")
-        .ifBlank { "Android device" }
+    private fun lockSelectedRealAccount() {
+        val state = _uiState.value
+        val key = state.selectedAccountKey ?: return
+        if (state.accounts.firstOrNull { it.key == key }?.isReal != true) return
+        realUnlockedUntilMs = 0L
+        _uiState.value = state.copy(
+            response = null,
+            analytics = null,
+            pendingBiometricAccountKey = key,
+            biometricError = null,
+            loading = false,
+        )
+    }
+
+    private fun selectedAccountIsLocked(state: UiState): Boolean = state.accounts.firstOrNull { it.key == state.selectedAccountKey }?.isReal == true && !realAccountUnlocked()
+    private fun realAccountUnlocked(): Boolean = System.currentTimeMillis() < realUnlockedUntilMs
+
+    private fun registerPushToken() {
+        if (FirebaseApp.getApps(getApplication<Application>()).isEmpty()) return
+        FirebaseMessaging.getInstance().token.addOnSuccessListener { token ->
+            viewModelScope.launch { runCatching { repository.registerPushToken(token) } }
+        }
+    }
+
+
+    private fun defaultDeviceName(): String = listOf(Build.MANUFACTURER, Build.MODEL).map { it.trim() }.filter { it.isNotBlank() }.distinct().joinToString(" ").ifBlank { "Android device" }
 
     override fun onCleared() {
         pollingJob?.cancel()
@@ -191,7 +338,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     companion object {
+        private const val PREFERENCES = "oppw_monitor"
         private const val PREF_SELECTED_ACCOUNT = "selected_account"
+        private const val PREF_SELECTED_ACCOUNT_REAL = "selected_account_is_real"
+        private const val PREF_BACKGROUND_LAST_SUCCESS = "background_last_success_ms"
         private const val ACCOUNTS_REFRESH_MS = 60_000L
+        private const val REAL_BACKGROUND_GRACE_MS = 5 * 60_000L
     }
 }

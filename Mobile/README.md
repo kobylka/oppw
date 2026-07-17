@@ -1,99 +1,90 @@
-# OPPW Monitor v6
+# OPPW Monitor v7
 
-Read-only Android monitor for the OPPW MT5 strategy, with device pairing, multiple accounts, HTTPS authentication, MySQL history, trade records and equity charts.
+Read-only Android monitor for the OPPW MetaTrader 5 strategy. The Android app never connects to MT5 or MySQL directly and contains no trading controls.
 
-## v6 changes
-
-- Swipe left/right between Overview, Position, Logs and Settings.
-- Unpair moved to Settings and protected by a confirmation dialog.
-- Logs replace Checks & Logs.
-- Data freshness ages advance every second instead of remaining frozen at the last payload value.
-- Overview shows HTTPS retrieval age, strategy regime, actual weekday buy window, balance, effective leverage and effective P/L percentage.
-- Current-week and previous-week US100 statistics are generated from stored minute snapshots.
-- Separate daily, weekly and all-time equity curves.
-- Position shows bid/ask timestamps and every condition supplied by the strategy publisher.
-- Risk bar sorts SL, entry and current-price markers by their actual prices.
-- Logs support a buy/sell-only switch and exact event-name filtering.
-- Backend stores minute equity/market points, trades, initial balance and cash-flow adjustments.
-
-## Components
-
-- `app/` — Android Studio Kotlin/Jetpack Compose project.
-- `backend/` — authenticated PHP/MySQL HTTPS API.
-- `backend/sql/migrate_v6.sql` — v5-to-v6 database migration and history backfill.
-- `mt5/oppw_mt5_continuous_v33.py` — publishing-only extension of v32.
-- `mt5/oppw_mt5_config.example.py` — credential-free v32-compatible configuration template.
-
-## Upgrade an existing deployment
-
-### 1. Back up MySQL
-
-Export the database through phpMyAdmin before changing the schema.
-
-### 2. Run the migration in phpMyAdmin
-
-Open the database, select **Import**, and import:
+## Architecture
 
 ```text
-backend/sql/migrate_v6.sql
+MT5 v34 publisher -> HTTPS ingest.php -> MySQL <- authenticated HTTPS API <- Android v7
+                                              -> Firebase Cloud Messaging
 ```
 
-The migration creates:
+## v7 highlights
 
-- `strategy_equity_points`
-- `strategy_market_points`
-- `strategy_trades`
-- `account_cash_flows`
+- Swipe navigation: Overview, Position, Analytics, Logs, Settings.
+- Weekly market reference is the first regular-session open of the week, normally Monday or the next trading day after a holiday.
+- Full current-week and previous-week O/H/L/C plus latest-day O/H/L/C.
+- Local-time log display, with Android converting API timestamps to the phone timezone.
+- Cursor-paged logs that load while scrolling. Android Paging retains at most 500 rows in memory.
+- Server-side buy/sell filtering includes `BUY*`, `SELL*`, and `POSITION_CLOSED`; it does not classify `POSITION_OPEN` as a transaction.
+- Bid/ask times display as `HH:mm:ss` without milliseconds.
+- Mobile OH and CH targets share the entry-price target. On Friday both display `entry × 1.05`.
+- FCM notifications for position opened/closed, broker protection loss, MT5 disconnects, and critical publisher events.
+- Foreground and WorkManager stale-API notifications.
+- Real-account biometric gate. Real status and analytics are not requested until fingerprint authentication succeeds. Demo remains immediately available.
+- Trade analytics: MFE, MAE, entry/exit slippage, duration, exit-reason results, weekly summaries, profit factor, expectancy, payoff ratio, capture efficiency, edge ratio, drawdown, recovery factor, consistency, streaks, and time in market.
 
-It also backfills equity and market minute history from existing `strategy_snapshots`.
+## Upgrade from v6
 
-### 3. Upload the backend
+1. Back up MySQL.
+2. Import `backend/sql/migrate_v7.sql` once through phpMyAdmin.
+3. Upload the complete `backend/` directory, preserving your private `config.php` or external configuration file.
+4. Add the optional Firebase fields shown below.
+5. Replace the strategy script with `mt5/oppw_mt5_continuous_v34.py`; keep your private `oppw_mt5_config.py`.
+6. Replace the Android project source, preserve `local.properties`, and rebuild.
 
-Upload the contents of `backend/` over the current backend, but keep your existing private `config.php` or `/etc/oppw-monitor-config.php`.
+The migration must be run once. Re-running its `ALTER TABLE` statements will report duplicate columns or indexes.
 
-New endpoint:
+## Backend configuration
+
+Add to the private PHP configuration:
+
+```php
+'push_enabled' => true,
+'firebase_project_id' => 'your-firebase-project-id',
+'firebase_service_account_file' => '/private/path/firebase-service-account.json',
+```
+
+The service-account JSON must be outside the public document root and readable only by PHP. PHP requires cURL and OpenSSL for FCM HTTP v1.
+
+When push is disabled or incomplete, all status, authentication, analytics, and log functions still work.
+
+To test delivery without terminal access, temporarily enable the existing browser administration settings and open:
 
 ```text
-POST cashflow.php
+https://your-domain.example/oppw-backend/push-admin.php
 ```
 
-It is protected by the MT5 publisher write token and is optional for manually recording a top-up or withdrawal.
+It uses the separate `pairing_admin_token`. Disable `pairing_admin_enabled` again after the test.
 
-### 4. Replace the MT5 publishing companion
+## Firebase Android configuration
 
-Copy:
+Create a Firebase Android app with package:
 
 ```text
-mt5/oppw_mt5_continuous_v33.py
+com.oppw.monitor
 ```
 
-as your active `oppw_mt5_continuous.py`. Keep your private `oppw_mt5_config.py`; the package contains only `oppw_mt5_config.example.py`.
-
-v33 changes only the mobile snapshot publishing methods. BUY, SELL, OH, CH, TO, SL, TSL, BE, sizing, recovery, scheduling and the continuous loop are unchanged from v32.
-
-The publisher adds:
-
-- tick price timestamps;
-- current protection regime;
-- weekday-specific buy-window label;
-- all price conditions: SL/TSL, OH, CH and BE when armed.
-
-### 5. Configure Android
-
-`local.properties`:
+Set these public identifiers in `local.properties` without quotes:
 
 ```properties
-sdk.dir=C\:\\Users\\YOUR_NAME\\AppData\\Local\\Android\\Sdk
 OPPW_API_BASE_URL=https://your-domain.example/oppw-backend/
+OPPW_FIREBASE_APPLICATION_ID=1:123456789:android:abcdef
+OPPW_FIREBASE_PROJECT_ID=your-project-id
+OPPW_FIREBASE_API_KEY=your-public-firebase-api-key
+OPPW_FIREBASE_SENDER_ID=123456789
 ```
 
-Do not use quotes around the URL.
+These Firebase Android identifiers are not database or MT5 secrets. Never put the PHP writer token, MySQL password, MT5 password, or Firebase service-account private key in the Android project.
 
-### 6. Build
+## Build
 
 ```powershell
+.\gradlew.bat --stop
 .\gradlew.bat clean assembleDebug
 ```
+
+If `gradle-wrapper.jar` is absent, `gradlew.bat` runs the included checksum-verified bootstrap script and downloads the official Gradle 9.4.1 wrapper automatically. Android Studio's bundled JBR is used when `JAVA_HOME` is not set.
 
 APK:
 
@@ -101,40 +92,71 @@ APK:
 app\build\outputs\apk\debug\app-debug.apk
 ```
 
-## Percentage definitions
+## Manual market history without a trade
 
-- **P/L % effective** = current absolute P/L ÷ MT5 balance × 100.
-- **Weekly low %** = weekly low relative to the first stored regular-session Friday open.
-- **Daily low %** = latest trading-day low relative to that Friday open.
-- **Minimum balance at 50% margin** = MT5 margin/deposit × 1.765.
+`strategy_market_points` is independent of `strategy_trades`. Store timestamps in UTC. The first row whose `phase` contains `REGULAR` becomes the weekly open.
 
-Before Friday regular trading begins, Friday-open-based percentages are unavailable and the app displays `—`.
+Example Monday opening marker and daily summary:
 
-## Equity history
+```sql
+SET @account = 'DEMO';
 
-- Daily chart: previous 24 hours.
-- Weekly chart: previous seven days.
-- All-time chart: final stored equity point for each UTC day.
-
-The backend uses `strategy_equity_points`, not a local phone cache, so all paired devices see the same history.
-
-## Cash flows
-
-The backend automatically records:
-
-- the first observed balance as `INITIAL`;
-- flat-account balance changes without trade events as `TOP_UP` or `WITHDRAWAL` with source `AUTO_DETECTED`.
-
-A manual cash flow can be recorded with the write token:
-
-```json
-{
-  "accountKey": "REAL",
-  "type": "TOP_UP",
-  "amount": 10000,
-  "balanceAfter": 40000,
-  "note": "Broker deposit"
-}
+INSERT INTO strategy_market_points(
+    strategy_key, captured_minute, current_price, bid, ask,
+    m1_open, m1_high, m1_low, m1_close, phase
+) VALUES
+(@account, '2026-07-13 13:30:00', 23000.00, NULL, NULL, 23000.00, 23000.00, 23000.00, 23000.00, 'REGULAR'),
+(@account, '2026-07-13 19:59:00', 23100.00, NULL, NULL, 23000.00, 23200.00, 22800.00, 23100.00, 'REGULAR')
+ON DUPLICATE KEY UPDATE
+    current_price = VALUES(current_price),
+    m1_open = VALUES(m1_open),
+    m1_high = VALUES(m1_high),
+    m1_low = VALUES(m1_low),
+    m1_close = VALUES(m1_close),
+    phase = VALUES(phase);
 ```
 
-Post it to `cashflow.php`. The Android app remains read-only.
+Insert one daily summary for every missing trading day. No position or trade row is required.
+
+## Logs
+
+`events.php` accepts:
+
+```text
+account=DEMO
+limit=75
+before_id=<oldest loaded id>
+buy_sell_only=1
+event_name=POSITION_CLOSED
+```
+
+Pages are returned newest first. The API also returns the total number of matching events. The app shows `loaded of total`, automatically requests older pages near the bottom, and discards distant pages once the 500-row cache limit is reached.
+
+## Biometric policy
+
+- Real-account data locks immediately after app restart.
+- A successful fingerprint unlock remains valid while the app is active and for up to five minutes in the background.
+- When it expires, cached Real status and analytics are removed from UI state.
+- Demo requires no biometric prompt.
+- Background WorkManager does not download a selected Real account while it is locked.
+
+## Trade analytics data
+
+The backend derives analytics from `strategy_trades`. The ingest endpoint:
+
+- opens or updates a trade whenever a position snapshot exists;
+- tracks best/worst observed price, MFE, MAE, maximum unrealized profit/drawdown;
+- stores entry/exit reference prices and slippage when corresponding order-request events are available;
+- closes the trade when the snapshot transitions from open to flat;
+- stores the first observed balance and detects flat-account top-ups/withdrawals.
+
+Metrics are only as granular as the publisher snapshot interval. With five-second snapshots, MFE and MAE are five-second sampled values, not tick-perfect values.
+
+## MT5 integrity
+
+v34 differs from v33 only in mobile publishing metadata:
+
+- build/user-agent version;
+- the displayed CH target now uses the same trade-entry target as OH.
+
+Trading conditions, order execution, scheduling, sizing, SL/TP handling, recovery, and the continuous execution loop are unchanged.

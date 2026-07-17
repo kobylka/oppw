@@ -1,7 +1,21 @@
 @ECHO OFF
+SETLOCAL
 SET DIR=%~dp0
-IF NOT EXIST "%DIR%gradle\wrapper\gradle-wrapper.jar" (
-  ECHO gradle-wrapper.jar is missing. Open the project in Android Studio or run: gradle wrapper --gradle-version 9.4.1
-  EXIT /B 1
+SET WRAPPER_JAR=%DIR%gradle\wrapper\gradle-wrapper.jar
+
+IF NOT EXIST "%WRAPPER_JAR%" (
+  ECHO Official Gradle wrapper JAR is missing. Downloading Gradle 9.4.1 wrapper...
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%DIR%bootstrap-gradle-wrapper.ps1"
+  IF ERRORLEVEL 1 EXIT /B 1
 )
-java -classpath "%DIR%gradle\wrapper\gradle-wrapper.jar" org.gradle.wrapper.GradleWrapperMain %*
+
+IF NOT DEFINED JAVA_HOME (
+  IF EXIST "C:\Program Files\Android\Android Studio\jbr\bin\java.exe" SET "JAVA_HOME=C:\Program Files\Android\Android Studio\jbr"
+)
+
+IF DEFINED JAVA_HOME (
+  "%JAVA_HOME%\bin\java.exe" -classpath "%WRAPPER_JAR%" org.gradle.wrapper.GradleWrapperMain %*
+) ELSE (
+  java -classpath "%WRAPPER_JAR%" org.gradle.wrapper.GradleWrapperMain %*
+)
+ENDLOCAL

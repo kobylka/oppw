@@ -1,0 +1,35 @@
+--- /mnt/data/oppw_mt5_continuous_v33.py	2026-07-17 16:58:15.191200033 +0000
++++ mt5/oppw_mt5_continuous_v34.py	2026-07-17 17:20:43.241627162 +0000
+@@ -37,7 +37,7 @@
+ from zoneinfo import ZoneInfo
+ 
+ BASE_DIR = Path(__file__).resolve().parent
+-BUILD_ID = "2026-07-17-mobile-dashboard-v33"
++BUILD_ID = "2026-07-17-mobile-dashboard-v34"
+ SCHEDULED_ACTION_LEAD_SECONDS = 3.0
+ 
+ try:
+@@ -369,7 +369,7 @@
+                 "Authorization": f"Bearer {self.cfg.monitor_write_token}",
+                 "Content-Type": "application/json",
+                 "Accept": "application/json",
+-                "User-Agent": "OPPW-MT5-Publisher/33",
++                "User-Agent": "OPPW-MT5-Publisher/34",
+             },
+         )
+         try:
+@@ -1298,9 +1298,11 @@
+         tpp = self.cfg.tpps[weekday_index]
+         add("OH", ceil_step(entry * (1.0 + tpp), tick_size), trade_bid, self.cfg.trade_symbol)
+ 
+-        signal_reference = self.state.entry_signal_daily_open or self.state.entry_price or entry
+-        if signal_price > 0 and signal_reference > 0:
+-            add("CH", signal_reference * (1.0 + tpp), signal_price, self.cfg.signal_symbol)
++        # The mobile dashboard displays OH and CH against the same trade-entry
++        # target. On Friday both are exactly entry * 1.05. This is presentation
++        # metadata only; the production CH execution rule is unchanged.
++        if signal_price > 0:
++            add("CH", ceil_step(entry * (1.0 + tpp), tick_size), signal_price, self.cfg.signal_symbol)
+ 
+         if self.state.break_even:
+             add("BE", ceil_step(entry * self.cfg.break_even_ratio, tick_size), trade_bid, self.cfg.trade_symbol)

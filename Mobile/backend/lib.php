@@ -275,3 +275,150 @@ function require_mobile_session(?string $accountKey = null): array
     $touchDevice->execute([$deviceId]);
     return ['device_id' => $deviceId, 'device_name' => (string)$session['device_name']];
 }
+
+function push_enabled(): bool
+{
+    $cfg = config();
+    return (bool)($cfg['push_enabled'] ?? false)
+        && trim((string)($cfg['firebase_project_id'] ?? '')) !== ''
+        && is_file((string)($cfg['firebase_service_account_file'] ?? ''));
+}
+
+function fcm_service_account(): array
+{
+    static $account;
+    if ($account !== null) return $account;
+    $path = (string)(config()['firebase_service_account_file'] ?? '');
+    if ($path === '' || !is_file($path)) throw new RuntimeException('Firebase service account file is missing');
+    $decoded = json_decode((string)file_get_contents($path), true, 512, JSON_THROW_ON_ERROR);
+    foreach (['client_email', 'private_key', 'token_uri'] as $key) {
+        if (trim((string)($decoded[$key] ?? '')) === '') throw new RuntimeException("Firebase service account field is missing: $key");
+    }
+    return $account = $decoded;
+}
+
+function fcm_access_token(): string
+{
+    $cfg = config();
+    $cacheFile = rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'oppw-fcm-' . hash('sha256', (string)$cfg['firebase_project_id']) . '.json';
+    if (is_file($cacheFile)) {
+        try {
+            $cached = json_decode((string)file_get_contents($cacheFile), true, 32, JSON_THROW_ON_ERROR);
+            if (is_string($cached['token'] ?? null) && (int)($cached['expires_at'] ?? 0) > time() + 60) return $cached['token'];
+        } catch (Throwable) {
+        }
+    }
+
+    $service = fcm_service_account();
+    $now = time();
+    $header = base64url_encode(json_encode(['alg' => 'RS256', 'typ' => 'JWT'], JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR));
+    $claims = base64url_encode(json_encode([
+        'iss' => $service['client_email'],
+        'scope' => 'https://www.googleapis.com/auth/firebase.messaging',
+        'aud' => $service['token_uri'],
+        'iat' => $now,
+        'exp' => $now + 3600,
+    ], JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR));
+    $unsigned = $header . '.' . $claims;
+    if (!openssl_sign($unsigned, $signature, (string)$service['private_key'], OPENSSL_ALGO_SHA256)) {
+        throw new RuntimeException('Unable to sign Firebase service-account JWT');
+    }
+    $assertion = $unsigned . '.' . base64url_encode($signature);
+    $body = http_build_query([
+        'grant_type' => 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+        'assertion' => $assertion,
+    ]);
+    $response = http_request_json((string)$service['token_uri'], 'POST', $body, ['Content-Type: application/x-www-form-urlencoded']);
+    $token = trim((string)($response['body']['access_token'] ?? ''));
+    if ($token === '') throw new RuntimeException('Firebase OAuth token response did not contain access_token');
+    $expiresAt = $now + max(300, (int)($response['body']['expires_in'] ?? 3600));
+    @file_put_contents($cacheFile, json_encode(['token' => $token, 'expires_at' => $expiresAt], JSON_THROW_ON_ERROR), LOCK_EX);
+    return $token;
+}
+
+function http_request_json(string $url, string $method, string $body, array $headers = []): array
+{
+    if (!function_exists('curl_init')) throw new RuntimeException('PHP cURL extension is required');
+    $handle = curl_init($url);
+    curl_setopt_array($handle, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_CUSTOMREQUEST => $method,
+        CURLOPT_POSTFIELDS => $body,
+        CURLOPT_HTTPHEADER => $headers,
+        CURLOPT_CONNECTTIMEOUT => 5,
+        CURLOPT_TIMEOUT => 10,
+        CURLOPT_HEADER => false,
+    ]);
+    $raw = curl_exec($handle);
+    $status = (int)curl_getinfo($handle, CURLINFO_RESPONSE_CODE);
+    $error = curl_error($handle);
+    curl_close($handle);
+    if ($raw === false) throw new RuntimeException('HTTP request failed: ' . $error);
+    $decoded = [];
+    if (trim((string)$raw) !== '') {
+        try { $decoded = json_decode((string)$raw, true, 512, JSON_THROW_ON_ERROR); } catch (Throwable) { $decoded = ['raw' => substr((string)$raw, 0, 1000)]; }
+    }
+    if ($status < 200 || $status >= 300) throw new RuntimeException("HTTP $status: " . substr((string)$raw, 0, 500));
+    return ['status' => $status, 'body' => $decoded];
+}
+
+function fcm_send_to_token(string $token, string $title, string $body, array $data = []): void
+{
+    if (!push_enabled()) return;
+    $project = rawurlencode((string)config()['firebase_project_id']);
+    $type = strtoupper((string)($data['type'] ?? ''));
+    $channelId = in_array($type, ['POSITION_OPENED', 'POSITION_CLOSED'], true) ? 'oppw_trade' : 'oppw_critical';
+    $payload = [
+        'message' => [
+            'token' => $token,
+            'notification' => ['title' => $title, 'body' => $body],
+            'data' => array_map(static fn(mixed $value): string => (string)$value, $data),
+            'android' => [
+                'priority' => 'HIGH',
+                'notification' => [
+                    'channel_id' => $channelId,
+                    'sound' => 'default',
+                    'default_vibrate_timings' => true,
+                    'visibility' => 'PRIVATE',
+                ],
+            ],
+        ],
+    ];
+    http_request_json(
+        "https://fcm.googleapis.com/v1/projects/$project/messages:send",
+        'POST',
+        json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR),
+        ['Authorization: Bearer ' . fcm_access_token(), 'Content-Type: application/json; charset=utf-8']
+    );
+}
+
+function send_account_push(PDO $db, string $accountKey, string $dedupKey, string $title, string $body, array $data = []): void
+{
+    if (!push_enabled()) return;
+    $hash = hash('sha256', $accountKey . '|' . $dedupKey);
+    $insert = $db->prepare('INSERT IGNORE INTO monitor_push_deliveries(delivery_hash, strategy_key, title, body, created_at) VALUES (?, ?, ?, ?, UTC_TIMESTAMP(3))');
+    $insert->execute([$hash, $accountKey, substr($title, 0, 120), substr($body, 0, 500)]);
+    if ($insert->rowCount() === 0) return;
+
+    $stmt = $db->prepare(
+        'SELECT DISTINCT t.fcm_token
+           FROM monitor_push_tokens t
+           JOIN monitor_devices d ON d.device_id = t.device_id AND d.enabled = TRUE
+           JOIN monitor_device_accounts a ON a.device_id = t.device_id AND a.account_key = ?
+          WHERE t.enabled = TRUE'
+    );
+    $stmt->execute([$accountKey]);
+    foreach ($stmt->fetchAll() as $row) {
+        try {
+            fcm_send_to_token((string)$row['fcm_token'], $title, $body, $data + ['accountKey' => $accountKey]);
+            $touch = $db->prepare('UPDATE monitor_push_tokens SET last_success_at = UTC_TIMESTAMP(3), last_error = NULL WHERE fcm_token_hash = ?');
+            $touch->execute([hash('sha256', (string)$row['fcm_token'])]);
+        } catch (Throwable $error) {
+            error_log('OPPW push failed: ' . $error->getMessage());
+            $message = substr($error->getMessage(), 0, 500);
+            $disable = str_contains(strtoupper($message), 'UNREGISTERED') || str_contains($message, 'HTTP 404');
+            $fail = $db->prepare('UPDATE monitor_push_tokens SET last_error = ?, enabled = IF(?, FALSE, enabled) WHERE fcm_token_hash = ?');
+            $fail->execute([$message, $disable ? 1 : 0, hash('sha256', (string)$row['fcm_token'])]);
+        }
+    }
+}

@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
@@ -20,14 +21,19 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import androidx.paging.LoadState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.paging.compose.collectAsLazyPagingItems
 import com.oppw.monitor.data.MonitorEvent
 import com.oppw.monitor.data.UiState
+import com.oppw.monitor.ui.MainViewModel
 import com.oppw.monitor.ui.components.AppCard
 import com.oppw.monitor.ui.components.ErrorPanel
 import com.oppw.monitor.ui.components.LoadingPanel
@@ -44,26 +50,25 @@ import com.oppw.monitor.util.liveSourceAge
 import com.oppw.monitor.util.shortDateTime
 
 @Composable
-fun LogsScreen(state: UiState, onRetry: () -> Unit) {
+fun LogsScreen(state: UiState, viewModel: MainViewModel, onRetry: () -> Unit) {
     when {
         state.loading && state.response == null -> LoadingPanel()
         state.response == null -> ErrorPanel(state.error ?: "No data", onRetry)
+        state.selectedAccountKey == null -> ErrorPanel("No selected account", onRetry)
         else -> {
             val response = state.response!!
             val connection = response.snapshot.connection
             val us100Age = liveSourceAge(connection.us100AgeSeconds, connection.lastSync, state.nowEpochMs)
             val qqqAge = liveSourceAge(connection.qqqAgeSeconds, connection.lastSync, state.nowEpochMs)
-            val names = response.events.map { it.name }.filter { it.isNotBlank() }.distinct().sorted()
             var buySellOnly by rememberSaveable { mutableStateOf(false) }
             var selectedEvent by rememberSaveable { mutableStateOf(ALL_EVENTS) }
-            val filteredEvents = response.events.filter { event ->
-                (!buySellOnly || event.isBuySellEvent()) && (selectedEvent == ALL_EVENTS || event.name == selectedEvent)
-            }
+            val accountKey = state.selectedAccountKey!!
+            val eventName = selectedEvent.takeUnless { it == ALL_EVENTS }
+            val flow = remember(accountKey, buySellOnly, eventName) { viewModel.eventPager(accountKey, buySellOnly, eventName) }
+            val events = flow.collectAsLazyPagingItems()
+            val totalMatching by viewModel.logTotalMatching.collectAsStateWithLifecycle()
 
-            LazyColumn(
-                Modifier.fillMaxSize().padding(horizontal = 14.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
+            LazyColumn(Modifier.fillMaxSize().padding(horizontal = 14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 item {
                     AppCard(Modifier.fillMaxWidth()) {
                         SectionTitle("Data freshness", if (connection.connected) "Connected" else "Disconnected")
@@ -76,19 +81,33 @@ fun LogsScreen(state: UiState, onRetry: () -> Unit) {
                 }
                 item {
                     AppCard(Modifier.fillMaxWidth()) {
-                        SectionTitle("Log filters", "${filteredEvents.size}/${response.events.size}")
+                        SectionTitle("Log filters", "${events.itemCount} loaded of $totalMatching · max 500 retained")
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                             Column {
                                 Text("Buy/sell events only", style = MaterialTheme.typography.titleMedium)
-                                Text("BUY, SELL, position open and close", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                                Text("Order-related BUY/SELL events and POSITION_CLOSED", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
                             }
                             Switch(checked = buySellOnly, onCheckedChange = { buySellOnly = it })
                         }
-                        EventNameSelector(names, selectedEvent) { selectedEvent = it }
+                        EventNameSelector(response.eventTypes, selectedEvent) { selectedEvent = it }
                     }
                 }
-                items(filteredEvents, key = { it.id }) { event -> EventCard(event) }
-                if (filteredEvents.isEmpty()) {
+
+                if (events.loadState.refresh is LoadState.Loading) {
+                    item { Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() } }
+                }
+
+                items(count = events.itemCount, key = { index -> events[index]?.id ?: "event-$index" }) { index ->
+                    events[index]?.let { event -> EventCard(event) }
+                }
+
+                when (val append = events.loadState.append) {
+                    is LoadState.Loading -> item { Box(Modifier.fillMaxWidth().padding(20.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() } }
+                    is LoadState.Error -> item { ErrorPanel("Could not load older logs: ${append.error.message}", events::retry) }
+                    else -> Unit
+                }
+
+                if (events.itemCount == 0 && events.loadState.refresh !is LoadState.Loading) {
                     item {
                         AppCard(Modifier.fillMaxWidth()) {
                             Text("No matching events", style = MaterialTheme.typography.titleMedium)
@@ -96,7 +115,10 @@ fun LogsScreen(state: UiState, onRetry: () -> Unit) {
                         }
                     }
                 }
-                state.error?.let { error -> item { ErrorPanel("Showing cached data. $error", onRetry) } }
+
+                val refreshError = events.loadState.refresh as? LoadState.Error
+                refreshError?.let { item { ErrorPanel("Could not load logs: ${it.error.message}", events::retry) } }
+                state.error?.let { error -> item { ErrorPanel("Showing cached status. $error", onRetry) } }
             }
         }
     }
@@ -111,7 +133,7 @@ private fun EventNameSelector(names: List<String>, selected: String, onSelected:
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             DropdownMenuItem(text = { Text("All event types") }, onClick = { expanded = false; onSelected(ALL_EVENTS) })
-            names.forEach { name ->
+            names.filter { it.isNotBlank() }.distinct().sorted().forEach { name ->
                 DropdownMenuItem(text = { Text(name) }, onClick = { expanded = false; onSelected(name) })
             }
         }
@@ -134,11 +156,6 @@ private fun EventCard(event: MonitorEvent) {
             }
         }
     }
-}
-
-private fun MonitorEvent.isBuySellEvent(): Boolean {
-    val normalized = name.uppercase()
-    return normalized.startsWith("BUY") || normalized.startsWith("SELL") || normalized in setOf("POSITION_OPEN", "POSITION_CLOSED", "POSITION_DISAPPEARED")
 }
 
 private fun eventColor(event: MonitorEvent): Color = when {

@@ -1,87 +1,102 @@
-.gitignore
-AUTHENTICATION.md
-CHANGELOG_V6.md
-DEPLOYMENT_CHECKLIST.md
-FILE_MANIFEST.txt
-README.md
-VALIDATION.md
-app/build.gradle.kts
-app/proguard-rules.pro
-app/src/main/AndroidManifest.xml
-app/src/main/java/com/oppw/monitor/MainActivity.kt
-app/src/main/java/com/oppw/monitor/auth/AuthModels.kt
-app/src/main/java/com/oppw/monitor/auth/SecureSessionStore.kt
-app/src/main/java/com/oppw/monitor/data/JsonParser.kt
-app/src/main/java/com/oppw/monitor/data/Models.kt
-app/src/main/java/com/oppw/monitor/data/SampleData.kt
-app/src/main/java/com/oppw/monitor/data/StatusApiClient.kt
-app/src/main/java/com/oppw/monitor/data/StatusRepository.kt
-app/src/main/java/com/oppw/monitor/ui/MainViewModel.kt
-app/src/main/java/com/oppw/monitor/ui/OppwMonitorApp.kt
-app/src/main/java/com/oppw/monitor/ui/components/Charts.kt
-app/src/main/java/com/oppw/monitor/ui/components/Common.kt
-app/src/main/java/com/oppw/monitor/ui/components/RiskBar.kt
-app/src/main/java/com/oppw/monitor/ui/screens/LogsScreen.kt
-app/src/main/java/com/oppw/monitor/ui/screens/OverviewScreen.kt
-app/src/main/java/com/oppw/monitor/ui/screens/PairDeviceScreen.kt
-app/src/main/java/com/oppw/monitor/ui/screens/PositionScreen.kt
-app/src/main/java/com/oppw/monitor/ui/screens/SettingsScreen.kt
-app/src/main/java/com/oppw/monitor/ui/theme/Color.kt
-app/src/main/java/com/oppw/monitor/ui/theme/Theme.kt
-app/src/main/java/com/oppw/monitor/ui/theme/Type.kt
-app/src/main/java/com/oppw/monitor/util/Formatters.kt
-app/src/main/res/drawable/ic_launcher_background.xml
-app/src/main/res/drawable/ic_launcher_foreground.xml
-app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
-app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
-app/src/main/res/mipmap-anydpi/ic_launcher.xml
-app/src/main/res/mipmap-anydpi/ic_launcher_round.xml
-app/src/main/res/values/strings.xml
-app/src/main/res/values/themes.xml
-app/src/main/res/xml/network_security_config.xml
-app/src/test/java/com/oppw/monitor/JsonParserTest.kt
-backend/.htaccess
-backend/README.md
-backend/accounts.php
-backend/admin/.htaccess
-backend/admin/cleanup.php
-backend/admin/create_pairing_code.php
-backend/admin/list_devices.php
-backend/admin/revoke_device.php
-backend/admin/set_device_accounts.php
-backend/apache-vhost.example.conf
-backend/auth/me.php
-backend/auth/pair.php
-backend/auth/refresh.php
-backend/auth/unpair.php
-backend/cashflow.php
-backend/config.example.php
-backend/example_payload.json
-backend/health.php
-backend/ingest.php
-backend/lib.php
-backend/nginx.example.conf
-backend/pairing-admin.php
-backend/publisher/.htaccess
-backend/publisher/oppw_status_publisher.py
-backend/sql/.htaccess
-backend/sql/migrate_auth.sql
-backend/sql/migrate_multi_account.sql
-backend/sql/migrate_v6.sql
-backend/sql/schema.sql
-backend/status.php
-bootstrap-gradle-wrapper.ps1
-bootstrap-gradle-wrapper.sh
-build.gradle.kts
-docs/ui-concept.png
-gradle.properties
-gradle/wrapper/gradle-wrapper.properties
-gradlew
-gradlew.bat
-local.properties.example
-mt5/__pycache__/oppw_mt5_config.cpython-313.pyc
-mt5/__pycache__/oppw_mt5_config.example.cpython-313.pyc
-mt5/__pycache__/oppw_mt5_continuous_v33.cpython-313.pyc
-mt5/oppw_mt5_config.example.py
-mt5/oppw_mt5_continuous_v33.py
-settings.gradle.kts
+OPPW Monitor v7 file manifest
+SHA-256  bytes  path
+
+c1c2c04b32487d5c965333301395b5e1fcb729d668d5a0e8ba968d2a359e64b1         318  .gitignore
+8ce4c6ffa7b2c517ee6ac33bc2acfc88e6f7c9379481050fd1b045da3a13de5b        2200  AUTHENTICATION.md
+aed39086f1f0257095da16e658e8fc5c99196b7a9c7ccaed4acb614d54c2b203         572  CHANGELOG_V7.md
+eefd6c6401ac068c35603627dc05b172f2b9bc5169403f76f80b2f478d241f5e        1214  DEPLOYMENT_CHECKLIST.md
+a847a3fda855ff61427170fac3c6f405d3800be3d6d6d84bcd6b930f10daf175         315  MT5_V34_AUDIT.txt
+3aef4a2e8cfa913b0dbbc1fd46346398cb44212d50f55b9165cfdbb0c42405e6        6775  README.md
+6cb28c3d2b08fbe3ec1399da50fcd2460dc7afe5bff492428a7a7de49ebd9cdc        1042  VALIDATION.md
+96be66946a0b01976e950604d60885b5211dada2f2acc9a3a56eb6395117c19b        3571  app/build.gradle.kts
+8da5c39ab0f666ac475a5d0f045a3fca84952d8ed5b950b13b6ce409abb8f3cb         180  app/proguard-rules.pro
+7474617db7293ade1629cb0acd727d1ee72d1c730ff2b2a14cfcd94c68def0b8        1687  app/src/main/AndroidManifest.xml
+a60a3618a85d71109b2abefe62cfb4be91727511f53617c5273a9cfe54f8c2ad        1780  app/src/main/java/com/oppw/monitor/MainActivity.kt
+2c236cee23f9a1adbfc28d76506f02f99448829fb6db5480179d98d41d663337        1071  app/src/main/java/com/oppw/monitor/OppwApplication.kt
+180274353da6b662ab1f5b681176f454bae012a31e3bf931c8801449cdb1f404         476  app/src/main/java/com/oppw/monitor/auth/AuthModels.kt
+6b9cbcda4c9af7041e78e84fcebeeaf228ead02bcbfb06cfb324ec33183928fc        4031  app/src/main/java/com/oppw/monitor/auth/SecureSessionStore.kt
+7e3f98ae0616986e2e7eb1978fbf86d5ef2821dc587534dde4b73ba27fbd7a84         892  app/src/main/java/com/oppw/monitor/data/EventsPagingSource.kt
+9338a25a3ccfdfa96a8b2c68c3ddf0c88f3619759313f5e96533f5517a4994cb       14156  app/src/main/java/com/oppw/monitor/data/JsonParser.kt
+50e5cafc1c2245fe52beb8196eaa5d18c976c50dab95157e3dc77e72abf9bd5c        6649  app/src/main/java/com/oppw/monitor/data/Models.kt
+852b3f7c46c75094362ba0f4a572293f4a1d7db21ccf9a6b2ed1508f0d8b0ff4        1237  app/src/main/java/com/oppw/monitor/data/SampleData.kt
+dd44f0fe3a3fe5d80ab17f0a01da29fd70f2ad95f5130c9bb5cb1a9f000e16ca        7016  app/src/main/java/com/oppw/monitor/data/StatusApiClient.kt
+0045d715c7b8602f6bf251aed504b6279c801a43bc324a9fdb6d733bb2dea9ed        1131  app/src/main/java/com/oppw/monitor/data/StatusRepository.kt
+34d1f8b653d7c76f55f76b5427d269f0028aaefacd93bb7a4a3cbb52eddf0a29        2836  app/src/main/java/com/oppw/monitor/notifications/NotificationHelper.kt
+ad1df52107f8f20a2661e468aa497d30d780a9552b7eaabee7246f95ddcab2d3        1171  app/src/main/java/com/oppw/monitor/notifications/OppwFirebaseMessagingService.kt
+aa4c2eb66795d48c35436b2058ac4c95b2c3ce5e9228b5193632567a448c117e        2356  app/src/main/java/com/oppw/monitor/notifications/StaleStatusWorker.kt
+915d24f0b94eec0670eba938ca2b10324f56181422560af04d6437b3616a9811        1493  app/src/main/java/com/oppw/monitor/security/BiometricAuthenticator.kt
+80af6bf03991e0b84bac69bce3db0457ae0bd0bfae89947a3adb7b46585db1d9       16055  app/src/main/java/com/oppw/monitor/ui/MainViewModel.kt
+7a22afc6a6ab7fc5b6b13a81521630586b86d6edab6875871d50641ed1bddb04       10250  app/src/main/java/com/oppw/monitor/ui/OppwMonitorApp.kt
+93925e73f47cb9ef5f77f2a1f888d5015a0a3aa6f4fb781e79e90da2ed6049af        3000  app/src/main/java/com/oppw/monitor/ui/components/Charts.kt
+0f05c71f944d453dfc0e6de1a948a991ad5dd45d9a530fbe580fc937fc9b8006        3479  app/src/main/java/com/oppw/monitor/ui/components/Common.kt
+1de77dc5f702838814a59785123a01cb249bfec75e25cbe45aea568bf90062dc        2731  app/src/main/java/com/oppw/monitor/ui/components/RiskBar.kt
+c380201afb4bdb197dd7734f708214e2222c28a2978d200410ca469a3d23f4b8        8117  app/src/main/java/com/oppw/monitor/ui/screens/AnalyticsScreen.kt
+0d74ecc673800a5ae6f1a5316c7e60e99ee20b4a959c1203c5e17a8907af79a5        9170  app/src/main/java/com/oppw/monitor/ui/screens/LogsScreen.kt
+1071a14521aa52dca52869c4c426fa479070356772c91f3b8178a8597ab9c76b       12244  app/src/main/java/com/oppw/monitor/ui/screens/OverviewScreen.kt
+61babfa61c590423d67e6e1dd9c36bd747d6797e8083279331869779f2f1cb2f        5430  app/src/main/java/com/oppw/monitor/ui/screens/PairDeviceScreen.kt
+abfa678b0106e252962b9c60f0742697f9365576a82914d4a3d6c192ab21a247        9664  app/src/main/java/com/oppw/monitor/ui/screens/PositionScreen.kt
+a45c983d1de680ce6c4f4e7d9389936abe6ab01c145d744ab0f635135cfd67aa        5541  app/src/main/java/com/oppw/monitor/ui/screens/SettingsScreen.kt
+0d8b6a222c1812522c8d742842355d0defa0c81e4753a7205a2255678a80bb51         437  app/src/main/java/com/oppw/monitor/ui/theme/Color.kt
+9a0a1e18755bfc44794c72b9f163a8339426a8c86ec6fd626c16a6415da5269a         741  app/src/main/java/com/oppw/monitor/ui/theme/Theme.kt
+9f58adc499479ec71ee4ccbe21a765abb9592786075c1b81e409116e2fe1863b        1088  app/src/main/java/com/oppw/monitor/ui/theme/Type.kt
+3573095550cdda2d68b38dbf4ab130152188f0b6c81dc67c9151d1b4552ef48a        2937  app/src/main/java/com/oppw/monitor/util/Formatters.kt
+a4cddd7eae02d5cab275cb625de9e8070e64747dd32149f51c900f862f1cd1ad         259  app/src/main/res/drawable/ic_launcher_background.xml
+a0688dc1b7f70fd9f4ec7904b71e98b617d7443c8ce3a0c60a40ccf062a08664         416  app/src/main/res/drawable/ic_launcher_foreground.xml
+3f28cefdc388d749fea03cf5ba37693cfee676493fc874cca6b1f8ac871d9854         495  app/src/main/res/mipmap-anydpi/ic_launcher.xml
+3f28cefdc388d749fea03cf5ba37693cfee676493fc874cca6b1f8ac871d9854         495  app/src/main/res/mipmap-anydpi/ic_launcher_round.xml
+1c832bf194d8eecd439a92bcced0df144c9f566b934b3d7865e983d8ee8dbdeb         273  app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
+1c832bf194d8eecd439a92bcced0df144c9f566b934b3d7865e983d8ee8dbdeb         273  app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
+2b9c72ce35d216c50c138ae5ba0c9043d7b8a943fa5bdbc715433a358022da9b          75  app/src/main/res/values/strings.xml
+f77dcf2ad055084b5f979cbf8ef447e943c513f37487582026c3d1c097be1460         427  app/src/main/res/values/themes.xml
+dea35ebed76536c24c13f74036f02dc874f944147cb3a49c2ad0550f71e3e0c7         146  app/src/main/res/xml/network_security_config.xml
+00ad44dffaaeaf36cc687ba1c00984e308bba4fab46828ee8c81dd34f7f48160        1164  app/src/test/java/com/oppw/monitor/JsonParserTest.kt
+8380c9cbe2e49ec7f79ceba11343adb158423547272a2936472a638241148615         449  backend/.htaccess
+c1213a0d412843422d1d4b64e0fef8692cb684e88e49867e6e04bb9c1f041e89        1865  backend/README.md
+4159ebbee1b0728f03e47c28dff92ba6b37107398b71dd1259497067e694efc6        1673  backend/accounts.php
+fa28d421a28ed9b6f4b997d5119c2b8adbacff6e2dd119a179b71230f9664934          19  backend/admin/.htaccess
+6a9f2cd52fbf2de4e1ca6227e64afac7c349e5cfab772da90137294f58ca43e8         674  backend/admin/cleanup.php
+19b0a72a6c61414337d04e457a296553971a5603146b2b8f9604d45cf2edf068        2443  backend/admin/create_pairing_code.php
+e2d702eec75ec6496d55e69d808c3c5349e1f29b3fbdc45880a14cf28d442ef8         992  backend/admin/list_devices.php
+485dbf71804f5c66dc170f5550f1094f440da966a86bb4919fba94dd2d7cfce9         955  backend/admin/revoke_device.php
+da7a2c68d8df2ad7d736a096ac6ad8ee7adfa0a53de49d11e9a410d7ff93299a        1776  backend/admin/set_device_accounts.php
+7343c00936f93cce67a4fa4200cccfee998e4dfe2c0855b5868470e11bdae19b       11334  backend/analytics.php
+6bd0fad5b6d166de63ed52ad97104af14e87d6e5884e50223a9061126b24e471         594  backend/apache-vhost.example.conf
+8b61ce35093d18f6c526bf75835fabb98a956b225f3cda1dab79e1893320214e         337  backend/auth/me.php
+da5a3beea0b9ec2dbb9a63523a4698f963da8187910adb387352494a9e0dea64        3010  backend/auth/pair.php
+d32b80868033a9df26a70e9d9daca3752c2aa35813fcebab3cd6e88320ad1ac2        2205  backend/auth/refresh.php
+532f796012e503279b8bc205db3b80b45ea360acef8d2cb5946a1bfe02b44157         890  backend/auth/unpair.php
+8337ee210b5de03bafe918d0f72fe694d37cedfb5d68c6bf26e768e99fa95179        1535  backend/cashflow.php
+7e77d8ab040c0ccd43b8d8ba1d247b501286ee93ab76e464b3737d50a6a7f4ca        1462  backend/config.example.php
+128d69024c54918a8d66b5bde9f6b33a41d0b99263eb559e3a5a57e5d07240a3        2168  backend/events.php
+d0c5516bf7e421366e7f18e115071d8276daa1a2f7740c07cc053533e60eb143        3398  backend/example_payload.json
+bed948d469a8d5984ef5d633016e7a7c9e02d06e1314e592f34a9f28e7ff77a0         357  backend/health.php
+83cad2efc1b164f51ce0c77fb20e6a02cbc50f19d2a912e9e2fcc5694efe860c       16762  backend/ingest.php
+8e2706ed51618ec10c06383db37cb6309e215f2cdb615b660d2db0d143aa347a       17565  backend/lib.php
+192187162e1a2e74b9940542b497d45e74dfdbcfe75a389cf2b6e96ce2be529e         863  backend/nginx.example.conf
+364b2357c37028b60fc9fb4ec422922f3c0f289d41638694a6728f416b3471de        8110  backend/pairing-admin.php
+fa28d421a28ed9b6f4b997d5119c2b8adbacff6e2dd119a179b71230f9664934          19  backend/publisher/.htaccess
+5600b30a64efde99fb515a0f3ff9a9cc5a8487f85ffc4653a7a73402472441a9        3225  backend/publisher/oppw_status_publisher.py
+ea15c7bd687a18177fcdceb533d7a327fa6b88905aa9f55bb99128b378386db5        1243  backend/push/register.php
+0043e8e619c3391037b3f7919fe06514c6f82118af1bfa2e39db9bef71bf2e00         673  backend/push/unregister.php
+b29a484b98ab04b37ca3d5b5262d8c18cb44bc16932503e66894551d87146863        3256  backend/push-admin.php
+fa28d421a28ed9b6f4b997d5119c2b8adbacff6e2dd119a179b71230f9664934          19  backend/sql/.htaccess
+7f8cac0c62e2f56208d844328f65ebacc612e54211e0b0bb8c474ef851ae5153        2556  backend/sql/migrate_auth.sql
+ec730ff0676a80737b335e4dee9a466dfe32d3fd53839571d4c57ef10fcae26a        1414  backend/sql/migrate_multi_account.sql
+9560337c3f984aa8be034ef51588aee04299dd254ccdc03f8892795cc39f00a9        5493  backend/sql/migrate_v6.sql
+3084f75763bf244794d60154b89e92080a10aefeb8b0dc84cf42ebefa22886cf        2678  backend/sql/migrate_v7.sql
+33b18b982975dcb0e64b20728c7fdbb1b393e5df62e9fa956be99e248601d257        9862  backend/sql/schema.sql
+4c940c9e06fe88e1773e0e6cfb1494b7752b468e9cee2b9206964274ff64cc76        9936  backend/status.php
+d76608aec086811289b4ad75cb106efcabe8d31f4839cde87dc63fdad1fea1d5         787  bootstrap-gradle-wrapper.ps1
+740294c4d04e6bb310ccb99383ae1fbb147ddbd4f0cd1115f7396c9c0cc1a139         568  bootstrap-gradle-wrapper.sh
+65664c8119842bd6c44c92be810a0a7ec818e3703007147e6fac9a416f9243b1         261  build.gradle.kts
+0982bd87728fdad2347bdecf2a15108532e5114413fc6db93bcd22beefc5375c     1425380  docs/ui-concept.png
+70fa201501995e6f45c0c475def71093f8115849344c48322ca997cfddba8534         252  gradle/wrapper/gradle-wrapper.properties
+f665f3a2b4e03c47c8b1c8212cd065adc659274d2099c7cf44b5099c76ad5089         166  gradle.properties
+8eead5d386b6643cc9c97bb8d4faad1fd5401573956c3d0874a8bca83e849875         371  gradlew
+3f204815a174ae636126e2d2a935616306570091cfe73b735fcf30abca4421d4         697  gradlew.bat
+d54d118d7e66234a7b1e0e07669354460836970bf3b9670db319d0cde9abe355         361  local.properties.example
+30840320654782807d548a5a1bacc18967a212c8fcd88dc25dddb1f4b797f0d1        5662  mt5/oppw_mt5_config.example.py
+89c337e9ef6baf39e1f329ba93282df7e6d85e16677a7a707ebf7af0db6afae9      104784  mt5/oppw_mt5_continuous.py
+89c337e9ef6baf39e1f329ba93282df7e6d85e16677a7a707ebf7af0db6afae9      104784  mt5/oppw_mt5_continuous_v34.py
+572a6b21d06aab145f744345260f54ca0ce8eabe957382eb0a78926ecc5f7d07        1659  mt5/oppw_mt5_v33_to_v34.diff
+64519bc41c2ce6694fd2ae0ed0289cf674fd0005eb56b987776fdf5662e368d0         331  settings.gradle.kts

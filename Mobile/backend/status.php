@@ -3,7 +3,6 @@ declare(strict_types=1);
 require __DIR__ . '/lib.php';
 
 require_method('GET');
-$cfg = config();
 $db = pdo();
 $requested = trim((string)($_GET['account'] ?? ''));
 $session = require_mobile_session($requested !== '' ? $requested : null);
@@ -86,7 +85,12 @@ function all_time_equity_points(PDO $db, string $accountKey): array
         'time' => atom_datetime(new DateTimeImmutable((string)$value['captured_minute'], new DateTimeZone('UTC'))),
         'value' => (float)$value['equity'],
     ], $statement->fetchAll());
-    return downsample_points($rows, 365);
+    return downsample_points($rows, 730);
+}
+
+function positive_number(array $row, string $field): ?float
+{
+    return is_numeric($row[$field] ?? null) && (float)$row[$field] > 0 ? (float)$row[$field] : null;
 }
 
 function build_market_week_stats(array $rows, string $weekKey, DateTimeZone $localTimezone): ?array
@@ -98,47 +102,81 @@ function build_market_week_stats(array $rows, string $weekKey, DateTimeZone $loc
     }
     if (!$weekRows) return null;
 
-    $currentPrice = null;
-    $fridayOpen = null;
+    $weekOpen = null;
+    $weekOpenDate = '';
+    $weeklyHigh = null;
     $weeklyLow = null;
-    $dailyLows = [];
-    $lastLocal = null;
+    $weeklyClose = null;
+    $currentPrice = null;
+    $lastPointAt = '';
+    $days = [];
 
-    foreach ($weekRows as [$marketRow, $local]) {
-        $price = is_numeric($marketRow['current_price']) ? (float)$marketRow['current_price'] : null;
-        $lowCandidates = [];
-        foreach (['m1_low', 'current_price', 'bid'] as $field) {
-            if (is_numeric($marketRow[$field] ?? null) && (float)$marketRow[$field] > 0) $lowCandidates[] = (float)$marketRow[$field];
+    foreach ($weekRows as [$row, $local]) {
+        $regular = stripos((string)($row['phase'] ?? ''), 'regular') !== false;
+        $price = positive_number($row, 'current_price') ?? positive_number($row, 'bid') ?? positive_number($row, 'ask');
+        $open = positive_number($row, 'm1_open') ?? $price;
+        $high = positive_number($row, 'm1_high') ?? $price;
+        $low = positive_number($row, 'm1_low') ?? $price;
+        $close = positive_number($row, 'm1_close') ?? $price;
+        $dayKey = $local->format('Y-m-d');
+
+        if (!isset($days[$dayKey])) {
+            $days[$dayKey] = ['open' => null, 'high' => null, 'low' => null, 'close' => null, 'last' => ''];
         }
-        $low = $lowCandidates ? min($lowCandidates) : null;
-        if ($price !== null && $price > 0) $currentPrice = $price;
-        if ($low !== null) {
-            $weeklyLow = $weeklyLow === null ? $low : min($weeklyLow, $low);
-            $dayKey = $local->format('Y-m-d');
-            $dailyLows[$dayKey] = isset($dailyLows[$dayKey]) ? min($dailyLows[$dayKey], $low) : $low;
+        if ($regular && $days[$dayKey]['open'] === null && $open !== null) $days[$dayKey]['open'] = $open;
+        if ($high !== null) $days[$dayKey]['high'] = $days[$dayKey]['high'] === null ? $high : max($days[$dayKey]['high'], $high);
+        if ($low !== null) $days[$dayKey]['low'] = $days[$dayKey]['low'] === null ? $low : min($days[$dayKey]['low'], $low);
+        if ($close !== null) $days[$dayKey]['close'] = $close;
+        $days[$dayKey]['last'] = $local->format(DATE_ATOM);
+
+        if ($regular && $weekOpen === null && $open !== null) {
+            $weekOpen = $open;
+            $weekOpenDate = $dayKey;
         }
-        if ($fridayOpen === null && $local->format('N') === '5' && stripos((string)$marketRow['phase'], 'regular') !== false) {
-            $candidate = is_numeric($marketRow['m1_open']) && (float)$marketRow['m1_open'] > 0 ? (float)$marketRow['m1_open'] : $price;
-            if ($candidate !== null && $candidate > 0) $fridayOpen = $candidate;
-        }
-        $lastLocal = $local;
+        if ($high !== null) $weeklyHigh = $weeklyHigh === null ? $high : max($weeklyHigh, $high);
+        if ($low !== null) $weeklyLow = $weeklyLow === null ? $low : min($weeklyLow, $low);
+        if ($close !== null) $weeklyClose = $close;
+        if ($price !== null) $currentPrice = $price;
+        $lastPointAt = $local->format(DATE_ATOM);
     }
 
-    $dailyLowDate = $dailyLows ? array_key_last($dailyLows) : '';
-    $dailyLow = $dailyLowDate !== '' ? $dailyLows[$dailyLowDate] : null;
-    $weeklyLowPercent = $fridayOpen !== null && $weeklyLow !== null ? ($weeklyLow / $fridayOpen - 1.0) * 100.0 : null;
-    $dailyLowPercent = $fridayOpen !== null && $dailyLow !== null ? ($dailyLow / $fridayOpen - 1.0) * 100.0 : null;
+    if ($weekOpen === null) {
+        foreach ($days as $dayKey => $day) {
+            if ($day['open'] !== null) {
+                $weekOpen = (float)$day['open'];
+                $weekOpenDate = $dayKey;
+                break;
+            }
+        }
+    }
+
+    $latestDayDate = $days ? array_key_last($days) : '';
+    $latestDay = $latestDayDate !== '' ? $days[$latestDayDate] : null;
+    $relative = static fn(?float $value): ?float => $weekOpen !== null && $value !== null ? ($value / $weekOpen - 1.0) * 100.0 : null;
 
     return [
         'week' => $weekKey,
         'currentPrice' => $currentPrice,
-        'fridayOpen' => $fridayOpen,
+        'weekOpen' => $weekOpen,
+        'weekOpenDate' => $weekOpenDate,
+        'weeklyHigh' => $weeklyHigh,
         'weeklyLow' => $weeklyLow,
-        'weeklyLowPercent' => $weeklyLowPercent,
-        'dailyLow' => $dailyLow,
-        'dailyLowPercent' => $dailyLowPercent,
-        'dailyLowDate' => $dailyLowDate,
-        'lastPointAt' => $lastLocal?->format(DATE_ATOM) ?? '',
+        'weeklyClose' => $weeklyClose,
+        'weeklyHighPercent' => $relative($weeklyHigh),
+        'weeklyLowPercent' => $relative($weeklyLow),
+        'weeklyClosePercent' => $relative($weeklyClose),
+        'dailyDate' => $latestDayDate,
+        'dailyOpen' => $latestDay !== null && $latestDay['open'] !== null ? (float)$latestDay['open'] : null,
+        'dailyHigh' => $latestDay !== null && $latestDay['high'] !== null ? (float)$latestDay['high'] : null,
+        'dailyLow' => $latestDay !== null && $latestDay['low'] !== null ? (float)$latestDay['low'] : null,
+        'dailyClose' => $latestDay !== null && $latestDay['close'] !== null ? (float)$latestDay['close'] : null,
+        'dailyHighPercent' => $latestDay !== null ? $relative($latestDay['high'] === null ? null : (float)$latestDay['high']) : null,
+        'dailyLowPercent' => $latestDay !== null ? $relative($latestDay['low'] === null ? null : (float)$latestDay['low']) : null,
+        'dailyClosePercent' => $latestDay !== null ? $relative($latestDay['close'] === null ? null : (float)$latestDay['close']) : null,
+        'lastPointAt' => $lastPointAt,
+        // Backward-compatible aliases for older app versions.
+        'fridayOpen' => $weekOpen,
+        'dailyLowDate' => $latestDayDate,
     ];
 }
 
@@ -164,19 +202,9 @@ $snapshot['equityCurves'] = [
     'allTime' => all_time_equity_points($db, $accountKey),
 ];
 
-$limit = max(1, min(200, (int)$cfg['event_limit']));
-$eventsStmt = $db->prepare("SELECT id, event_time, level, name, result, message FROM strategy_events WHERE strategy_key = ? ORDER BY id DESC LIMIT $limit");
-$eventsStmt->execute([$accountKey]);
-$events = array_map(static function (array $event): array {
-    return [
-        'id' => (int)$event['id'],
-        'time' => atom_datetime(new DateTimeImmutable((string)$event['event_time'], new DateTimeZone('UTC'))),
-        'level' => (string)$event['level'],
-        'name' => (string)$event['name'],
-        'result' => $event['result'] === null ? null : (bool)$event['result'],
-        'message' => (string)$event['message'],
-    ];
-}, $eventsStmt->fetchAll());
+$eventTypesStmt = $db->prepare('SELECT DISTINCT name FROM strategy_events WHERE strategy_key = ? ORDER BY name');
+$eventTypesStmt->execute([$accountKey]);
+$eventTypes = array_map(static fn(array $event): string => (string)$event['name'], $eventTypesStmt->fetchAll());
 
 json_response([
     'ok' => true,
@@ -188,5 +216,5 @@ json_response([
         'brokerAccountId' => (string)$account['broker_account_id'],
     ],
     'snapshot' => $snapshot,
-    'events' => $events,
+    'eventTypes' => $eventTypes,
 ]);

@@ -1,0 +1,9 @@
+Baseline: oppw_mt5_continuous_v33.py
+Output: mt5/oppw_mt5_continuous_v34.py
+Changed methods: monitor_all_conditions, send
+
+Expected changes:
+- MobilePublisher.send: publisher User-Agent only.
+- monitor_all_conditions: displayed CH target equals OH entry-price target.
+
+All other parsed functions are AST-identical.

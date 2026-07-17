@@ -4,6 +4,7 @@ import java.text.NumberFormat
 import java.time.Duration
 import java.time.Instant
 import java.time.OffsetDateTime
+import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlin.math.max
@@ -12,8 +13,9 @@ private val number = NumberFormat.getNumberInstance(Locale.US).apply {
     minimumFractionDigits = 2
     maximumFractionDigits = 2
 }
+private val deviceZone: ZoneId get() = ZoneId.systemDefault()
 
-fun money(value: Double, currency: String): String = "${number.format(value)} $currency"
+fun money(value: Double, currency: String): String = "${number.format(value)} $currency".trim()
 fun price(value: Double): String = if (value == 0.0) "—" else String.format(Locale.US, "%,.2f", value)
 fun optionalPrice(value: Double?): String = value?.let(::price) ?: "—"
 fun percent(value: Double): String = String.format(Locale.US, "%+.2f%%", value)
@@ -23,11 +25,11 @@ fun volume(value: Double): String = String.format(Locale.US, "%.2f", value)
 fun age(value: Double?): String = value?.let { String.format(Locale.US, "%.1fs", max(0.0, it)) } ?: "—"
 
 fun shortDateTime(value: String): String = runCatching {
-    OffsetDateTime.parse(value).format(DateTimeFormatter.ofPattern("dd MMM HH:mm:ss"))
+    OffsetDateTime.parse(value).toInstant().atZone(deviceZone).format(DateTimeFormatter.ofPattern("dd MMM HH:mm:ss"))
 }.getOrDefault(value.ifBlank { "—" })
 
 fun timeOnly(value: String): String = runCatching {
-    OffsetDateTime.parse(value).format(DateTimeFormatter.ofPattern("HH:mm:ss.SSS"))
+    OffsetDateTime.parse(value).toInstant().atZone(deviceZone).format(DateTimeFormatter.ofPattern("HH:mm:ss"))
 }.getOrDefault(value.ifBlank { "—" })
 
 fun countdown(target: String, nowEpochMs: Long = System.currentTimeMillis()): String = runCatching {
@@ -37,6 +39,18 @@ fun countdown(target: String, nowEpochMs: Long = System.currentTimeMillis()): St
     val remainingSeconds = seconds % 60
     "%02d:%02d:%02d".format(hours, minutes, remainingSeconds)
 }.getOrDefault("—")
+
+fun duration(seconds: Long): String {
+    if (seconds <= 0) return "0m"
+    val days = seconds / 86_400
+    val hours = (seconds % 86_400) / 3_600
+    val minutes = (seconds % 3_600) / 60
+    return buildList {
+        if (days > 0) add("${days}d")
+        if (hours > 0) add("${hours}h")
+        if (minutes > 0 || isEmpty()) add("${minutes}m")
+    }.joinToString(" ")
+}
 
 fun secondsSince(timestamp: String, nowEpochMs: Long): Double? = runCatching {
     max(0.0, (nowEpochMs - OffsetDateTime.parse(timestamp).toInstant().toEpochMilli()) / 1000.0)

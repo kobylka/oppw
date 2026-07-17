@@ -159,22 +159,40 @@ private fun WeekMarketCard(title: String, stats: MarketWeekStats?, currentLabel:
     AppCard(Modifier.fillMaxWidth()) {
         SectionTitle(title, stats?.week ?: "No history")
         if (stats == null) {
-            Text("No stored minute data for this week yet.", color = TextSecondary)
+            Text("No stored market data for this week yet.", color = TextSecondary)
             return@AppCard
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             Metric(currentLabel, optionalPrice(stats.currentPrice), Modifier.weight(1f))
-            Metric("Friday open", optionalPrice(stats.fridayOpen), Modifier.weight(1f))
+            Metric("Week open", optionalPrice(stats.weekOpen), Modifier.weight(1f))
+        }
+        Text("Week opened: ${stats.weekOpenDate.ifBlank { "—" }}", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Metric("Weekly high", optionalPrice(stats.weeklyHigh), Modifier.weight(1f))
+            Metric("High %", optionalPercent(stats.weeklyHighPercent), Modifier.weight(1f), pnlColor(stats.weeklyHighPercent ?: 0.0))
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             Metric("Weekly low", optionalPrice(stats.weeklyLow), Modifier.weight(1f))
-            Metric("Weekly low %", optionalPercent(stats.weeklyLowPercent), Modifier.weight(1f), pnlColor(stats.weeklyLowPercent ?: 0.0))
+            Metric("Low %", optionalPercent(stats.weeklyLowPercent), Modifier.weight(1f), pnlColor(stats.weeklyLowPercent ?: 0.0))
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            Metric("Daily low", optionalPrice(stats.dailyLow), Modifier.weight(1f))
-            Metric("Daily low %", optionalPercent(stats.dailyLowPercent), Modifier.weight(1f), pnlColor(stats.dailyLowPercent ?: 0.0))
+            Metric("Weekly close", optionalPrice(stats.weeklyClose), Modifier.weight(1f))
+            Metric("Close %", optionalPercent(stats.weeklyClosePercent), Modifier.weight(1f), pnlColor(stats.weeklyClosePercent ?: 0.0))
         }
-        Text("Daily low date: ${stats.dailyLowDate.ifBlank { "—" }}", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+        SectionTitle("Latest day", stats.dailyDate.ifBlank { "—" })
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Metric("Open", optionalPrice(stats.dailyOpen), Modifier.weight(1f))
+            Metric("High", optionalPrice(stats.dailyHigh), Modifier.weight(1f))
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Metric("Low", optionalPrice(stats.dailyLow), Modifier.weight(1f))
+            Metric("Close", optionalPrice(stats.dailyClose), Modifier.weight(1f))
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Metric("High %", optionalPercent(stats.dailyHighPercent), Modifier.weight(1f), pnlColor(stats.dailyHighPercent ?: 0.0))
+            Metric("Low %", optionalPercent(stats.dailyLowPercent), Modifier.weight(1f), pnlColor(stats.dailyLowPercent ?: 0.0))
+            Metric("Close %", optionalPercent(stats.dailyClosePercent), Modifier.weight(1f), pnlColor(stats.dailyClosePercent ?: 0.0))
+        }
     }
 }
 

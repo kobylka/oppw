@@ -1,18 +1,23 @@
-# OPPW Monitor v6 deployment checklist
+# OPPW Monitor v7 deployment checklist
 
-- [ ] Back up the MySQL database.
-- [ ] Import `backend/sql/migrate_v6.sql` through phpMyAdmin.
-- [ ] Confirm the four new tables exist.
-- [ ] Upload the complete v6 backend, retaining the private `config.php`.
-- [ ] Confirm `health.php` returns `{"ok":true,...}`.
-- [ ] Replace the strategy file with `mt5/oppw_mt5_continuous_v33.py`.
-- [ ] Keep the existing private MT5 config and credentials outside Git.
-- [ ] Confirm the strategy logs `MONITOR_MINUTE_STATUS_QUEUED` every minute.
-- [ ] Set an unquoted HTTPS URL in `local.properties`.
-- [ ] Build and install the v6 APK.
-- [ ] Swipe through all four pages.
-- [ ] Confirm freshness values increase every second.
-- [ ] Confirm Settings is the only location containing Unpair.
-- [ ] Confirm market statistics populate after minute snapshots arrive.
-- [ ] Confirm daily/weekly/all-time charts load.
-- [ ] Confirm Logs filters work independently.
+- [ ] Back up the database.
+- [ ] Import `backend/sql/migrate_v7.sql` once.
+- [ ] Upload all v7 backend PHP files.
+- [ ] Preserve the private server configuration and secrets.
+- [ ] Verify `health.php` returns `ok:true`.
+- [ ] Verify `status.php`, `events.php`, and `analytics.php` require a paired bearer token.
+- [ ] Create a Firebase Android app for `com.oppw.monitor` if push is wanted.
+- [ ] Enable Firebase Cloud Messaging API and create a service account.
+- [ ] Place service-account JSON outside the web root.
+- [ ] Add Firebase server fields to private PHP config.
+- [ ] Add Firebase Android identifiers to local.properties.
+- [ ] Replace MT5 publisher with v34 while retaining private config.
+- [ ] Confirm `OPPW_MONITOR_ACCOUNT_KEY` matches REAL/DEMO account rows.
+- [ ] Build and install v7.
+- [ ] Grant notification permission.
+- [ ] Enroll a fingerprint on the device and test Real locking.
+- [ ] Test Demo access without biometrics.
+- [ ] Open Logs and scroll until older pages load.
+- [ ] Test exact-event and buy/sell filters.
+- [ ] Test position open/close push notifications.
+- [ ] Compare Friday OH and CH target values; both should equal entry × 1.05.
