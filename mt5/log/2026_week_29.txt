@@ -11275,3 +11275,22 @@ build: 2026-07-17-mt5-margin-deposit-v32
 2026-07-17 15:24:00 INFO CHECK minute=2026-07-17_15:24 weekday=Friday phase=PREMARKET name=OH result=FALSE bid=28606.5 threshold=30057.037500000002
 2026-07-17 15:24:00 INFO CHECK minute=2026-07-17_15:24 weekday=Friday phase=PREMARKET name=TSL result=TRUE current_sl=28511.24000 required_sl=28511.24000
 2026-07-17 15:24:00 INFO CONDITION_REPORT_END minute=2026-07-17 15:24 checks=5
+2026-07-17 15:37:17 INFO EVENT POSITION_CLOSED reason=TSL broker_reason=SL deal_ticket=1966772 entry=28625.75000 exit=28510.90000 change=-0.0040 active_sl_reason=TSL active_tp_reason=-
+2026-07-17 15:37:17 INFO STATUS
+==================== TRADE STATUS - STATUS_CHANGE ====================
+phase: REGULAR protection regime: TSL_0.4000%
+time: 2026-07-17 15:37:17 CEST week: 2026-W29
+closest condition: none — no open position
+position: FLAT
+leverage: 8x
+current P/L: 0.00 PLN
+current P/L %: 0.0000%
+current P/L % leveraged: 0.0000%
+equity: 27878.23 PLN deposit: 0.00 PLN
+final trading day: 2026-07-17
+weekly exit: WAIT (due=False)
+last exit: TSL
+build: 2026-07-17-mt5-margin-deposit-v32
+======================================================
+
+2026-07-17 15:37:57 INFO EVENT STRATEGY_STOPPED
