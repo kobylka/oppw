@@ -79,8 +79,8 @@ fun SettingsScreen(state: UiState, onRefresh: () -> Unit, onUnpair: () -> Unit) 
         item {
             AppCard(Modifier.fillMaxWidth()) {
                 SectionTitle("Security and alerts")
-                Metric("Real-account protection", "Fingerprint · locks after 5 minutes in background")
-                Metric("Demo access", "Immediate")
+                Metric("Account protection", "Paired-device HTTPS authorization")
+                Metric("Real and Demo access", "Immediate after server authorization")
                 Metric("Push alerts", "Position, protection, connection and stale API")
                 Text("Firebase values must be configured in local.properties and the backend service account must be enabled for remote alerts.", color = TextSecondary)
             }

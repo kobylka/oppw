@@ -22,3 +22,4 @@ mt5/oppw_mt5.lock
 Mobile/.gradle/
 Mobile/build/
 Mobile/app/build/
+Mobile/backend/private/firebase-service-account.json

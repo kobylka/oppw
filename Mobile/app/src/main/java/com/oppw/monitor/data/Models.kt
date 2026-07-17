@@ -228,8 +228,6 @@ data class UiState(
     val accountsLoading: Boolean = true,
     val accounts: List<MonitorAccount> = emptyList(),
     val selectedAccountKey: String? = null,
-    val pendingBiometricAccountKey: String? = null,
-    val biometricError: String? = null,
     val response: MonitorResponse? = null,
     val analytics: AnalyticsResponse? = null,
     val analyticsLoading: Boolean = false,

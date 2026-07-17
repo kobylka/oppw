@@ -21,8 +21,8 @@ android {
         applicationId = "com.oppw.monitor"
         minSdk = 26
         targetSdk = 37
-        versionCode = 7
-        versionName = "7.0.0"
+        versionCode = 8
+        versionName = "7.2.0"
 
         buildConfigField("String", "API_BASE_URL", quoted(local("OPPW_API_BASE_URL", "https://example.com/oppw-api/")))
         buildConfigField("long", "POLL_INTERVAL_MS", "5000L")
@@ -77,7 +77,6 @@ dependencies {
 
     implementation("androidx.paging:paging-runtime:3.5.0")
     implementation("androidx.paging:paging-compose:3.5.0")
-    implementation("androidx.biometric:biometric:1.1.0")
     implementation("androidx.work:work-runtime-ktx:2.11.2")
 
     implementation(platform("com.google.firebase:firebase-bom:34.16.0"))

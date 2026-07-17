@@ -18,10 +18,6 @@ class StaleStatusWorker(context: Context, params: WorkerParameters) : CoroutineW
         if (!repository.hasSession()) return Result.success()
         val preferences = applicationContext.getSharedPreferences("oppw_monitor", Context.MODE_PRIVATE)
         val account = preferences.getString("selected_account", null) ?: return Result.success()
-        val selectedIsReal = preferences.getBoolean("selected_account_is_real", false) || runCatching {
-            repository.accounts().firstOrNull { it.key == account }?.isReal == true
-        }.getOrDefault(false)
-        if (selectedIsReal) return Result.success()
         return runCatching {
             repository.refresh(account)
             NotificationHelper.cancelApiStale(applicationContext)

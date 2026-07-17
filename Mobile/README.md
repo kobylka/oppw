@@ -1,15 +1,15 @@
-# OPPW Monitor v7
+# OPPW Monitor v7.2
 
 Read-only Android monitor for the OPPW MetaTrader 5 strategy. The Android app never connects to MT5 or MySQL directly and contains no trading controls.
 
 ## Architecture
 
 ```text
-MT5 v34 publisher -> HTTPS ingest.php -> MySQL <- authenticated HTTPS API <- Android v7
+MT5 v34 publisher -> HTTPS ingest.php -> MySQL <- authenticated HTTPS API <- Android v7.2
                                               -> Firebase Cloud Messaging
 ```
 
-## v7 highlights
+## v7.2 highlights
 
 - Swipe navigation: Overview, Position, Analytics, Logs, Settings.
 - Weekly market reference is the first regular-session open of the week, normally Monday or the next trading day after a holiday.
@@ -21,7 +21,7 @@ MT5 v34 publisher -> HTTPS ingest.php -> MySQL <- authenticated HTTPS API <- And
 - Mobile OH and CH targets share the entry-price target. On Friday both display `entry × 1.05`.
 - FCM notifications for position opened/closed, broker protection loss, MT5 disconnects, and critical publisher events.
 - Foreground and WorkManager stale-API notifications.
-- Real-account biometric gate. Real status and analytics are not requested until fingerprint authentication succeeds. Demo remains immediately available.
+- Real and Demo accounts are both accessible after server pairing; no fingerprint or biometric hardware is required.
 - Trade analytics: MFE, MAE, entry/exit slippage, duration, exit-reason results, weekly summaries, profit factor, expectancy, payoff ratio, capture efficiency, edge ratio, drawdown, recovery factor, consistency, streaks, and time in market.
 
 ## Upgrade from v6
@@ -132,13 +132,9 @@ event_name=POSITION_CLOSED
 
 Pages are returned newest first. The API also returns the total number of matching events. The app shows `loaded of total`, automatically requests older pages near the bottom, and discards distant pages once the 500-row cache limit is reached.
 
-## Biometric policy
+## Account access policy
 
-- Real-account data locks immediately after app restart.
-- A successful fingerprint unlock remains valid while the app is active and for up to five minutes in the background.
-- When it expires, cached Real status and analytics are removed from UI state.
-- Demo requires no biometric prompt.
-- Background WorkManager does not download a selected Real account while it is locked.
+Both Real and Demo accounts use the same paired-device HTTPS authorization. The app has no local biometric gate and works on phones without fingerprint or face authentication. Server-side per-account permissions remain enforced.
 
 ## Trade analytics data
 

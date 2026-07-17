@@ -1,10 +1,10 @@
 package com.oppw.monitor.ui
 
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -14,12 +14,10 @@ import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.Assessment
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.ExpandMore
-import androidx.compose.material.icons.outlined.Fingerprint
 import androidx.compose.material.icons.outlined.Insights
 import androidx.compose.material.icons.outlined.PieChartOutline
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -29,7 +27,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -43,15 +40,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.oppw.monitor.data.AuthStatus
 import com.oppw.monitor.data.MonitorAccount
-import com.oppw.monitor.security.BiometricAuthenticator
-import com.oppw.monitor.ui.components.AppCard
 import com.oppw.monitor.ui.screens.AnalyticsScreen
 import com.oppw.monitor.ui.screens.LogsScreen
 import com.oppw.monitor.ui.screens.OverviewScreen
@@ -80,7 +73,6 @@ fun OppwMonitorApp(viewModel: MainViewModel) {
 private fun MonitorScaffold(viewModel: MainViewModel) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val selectedAccount = state.accounts.firstOrNull { it.key == state.selectedAccountKey }
-    val activity = LocalContext.current as FragmentActivity
     val tabs = listOf(
         Tab("Overview", Icons.Outlined.PieChartOutline),
         Tab("Position", Icons.Outlined.Assessment),
@@ -91,19 +83,8 @@ private fun MonitorScaffold(viewModel: MainViewModel) {
     val pagerState = rememberPagerState(pageCount = { tabs.size })
     val scope = androidx.compose.runtime.rememberCoroutineScope()
 
-    LaunchedEffect(pagerState.currentPage, state.selectedAccountKey, state.pendingBiometricAccountKey) {
-        if (pagerState.currentPage == 2 && state.pendingBiometricAccountKey == null) viewModel.loadAnalytics()
-    }
-
-    fun unlock(account: MonitorAccount) {
-        viewModel.requestAccountSelection(account.key)
-        if (!account.isReal) return
-        BiometricAuthenticator.authenticate(
-            activity,
-            account.displayName,
-            onSuccess = { viewModel.biometricSucceeded(account.key) },
-            onError = viewModel::biometricFailed,
-        )
+    LaunchedEffect(pagerState.currentPage, state.selectedAccountKey) {
+        if (pagerState.currentPage == 2) viewModel.loadAnalytics()
     }
 
     Scaffold(
@@ -122,7 +103,7 @@ private fun MonitorScaffold(viewModel: MainViewModel) {
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = AppBackground),
                 actions = {
-                    AccountSwitcher(state.accounts, state.selectedAccountKey) { key -> state.accounts.firstOrNull { it.key == key }?.let(::unlock) }
+                    AccountSwitcher(state.accounts, state.selectedAccountKey, viewModel::requestAccountSelection)
                     IconButton(onClick = viewModel::refresh) { Icon(Icons.Outlined.Refresh, contentDescription = "Refresh") }
                 },
             )
@@ -140,42 +121,13 @@ private fun MonitorScaffold(viewModel: MainViewModel) {
             }
         },
     ) { padding ->
-        if (state.pendingBiometricAccountKey != null) {
-            RealAccountGate(
-                account = state.accounts.firstOrNull { it.key == state.pendingBiometricAccountKey },
-                error = state.biometricError,
-                onUnlock = { state.accounts.firstOrNull { it.key == state.pendingBiometricAccountKey }?.let(::unlock) },
-                onUseDemo = viewModel::useDemoWithoutBiometric,
-                modifier = Modifier.fillMaxSize().padding(padding),
-            )
-        } else {
-            HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize().padding(padding), beyondViewportPageCount = 1) { page ->
-                when (page) {
-                    0 -> OverviewScreen(state, viewModel::refresh)
-                    1 -> PositionScreen(state, viewModel::refresh)
-                    2 -> AnalyticsScreen(state, { viewModel.loadAnalytics(true) })
-                    3 -> LogsScreen(state, viewModel, viewModel::refresh)
-                    else -> SettingsScreen(state, viewModel::refresh, viewModel::unpairDevice)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun RealAccountGate(account: MonitorAccount?, error: String?, onUnlock: () -> Unit, onUseDemo: () -> Unit, modifier: Modifier = Modifier) {
-    Box(modifier.padding(18.dp), contentAlignment = Alignment.Center) {
-        AppCard(Modifier.fillMaxWidth()) {
-            Column(verticalArrangement = Arrangement.spacedBy(14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                Icon(Icons.Outlined.Fingerprint, null, tint = PrimaryBlue)
-                Text("Real account locked", style = MaterialTheme.typography.headlineMedium)
-                Text("Fingerprint authentication is required before ${account?.displayName ?: "Real-account"} status or analytics are downloaded.", color = TextSecondary)
-                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                Button(onClick = onUnlock, modifier = Modifier.fillMaxWidth()) {
-                    Icon(Icons.Outlined.Fingerprint, null)
-                    Text("Unlock Real account", Modifier.padding(start = 8.dp))
-                }
-                OutlinedButton(onClick = onUseDemo, modifier = Modifier.fillMaxWidth()) { Text("Use Demo account") }
+        HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize().padding(padding), beyondViewportPageCount = 1) { page ->
+            when (page) {
+                0 -> OverviewScreen(state, viewModel::refresh)
+                1 -> PositionScreen(state, viewModel::refresh)
+                2 -> AnalyticsScreen(state, { viewModel.loadAnalytics(true) })
+                3 -> LogsScreen(state, viewModel, viewModel::refresh)
+                else -> SettingsScreen(state, viewModel::refresh, viewModel::unpairDevice)
             }
         }
     }

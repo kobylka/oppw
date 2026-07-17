@@ -1,8 +1,8 @@
-# OPPW Monitor v7 deployment checklist
+# OPPW Monitor v7.2 deployment checklist
 
 - [ ] Back up the database.
 - [ ] Import `backend/sql/migrate_v7.sql` once.
-- [ ] Upload all v7 backend PHP files.
+- [ ] Upload all v7.2 backend PHP files.
 - [ ] Preserve the private server configuration and secrets.
 - [ ] Verify `health.php` returns `ok:true`.
 - [ ] Verify `status.php`, `events.php`, and `analytics.php` require a paired bearer token.
@@ -13,10 +13,9 @@
 - [ ] Add Firebase Android identifiers to local.properties.
 - [ ] Replace MT5 publisher with v34 while retaining private config.
 - [ ] Confirm `OPPW_MONITOR_ACCOUNT_KEY` matches REAL/DEMO account rows.
-- [ ] Build and install v7.
+- [ ] Build and install v7.2.
 - [ ] Grant notification permission.
-- [ ] Enroll a fingerprint on the device and test Real locking.
-- [ ] Test Demo access without biometrics.
+- [ ] Test both Demo and Real account access without biometric hardware.
 - [ ] Open Logs and scroll until older pages load.
 - [ ] Test exact-event and buy/sell filters.
 - [ ] Test position open/close push notifications.

@@ -49,12 +49,7 @@ Revocation disables refresh and invalidates all active access tokens.
 
 Only token HMACs are stored in MySQL. Raw refresh and access tokens are returned to the phone and are never logged by the backend.
 
-## v7 Real-account biometric gate
+## Android account access
 
-The remote API still authorizes the paired device. Android adds a local biometric privacy gate before requesting any account whose `account_type` is `REAL`.
+After device pairing, both Real and Demo accounts are accessed using the same short-lived access-token and rotating refresh-token flow. There is no local biometric requirement. Account authorization remains enforced by the backend for every request.
 
-- The account list may be downloaded so the app can identify which accounts are Real.
-- Real status, logs and analytics are not requested until fingerprint authentication succeeds.
-- Unlock remains valid while the app is active and for up to five minutes after it enters the background.
-- Demo accounts remain immediately available.
-- Biometrics do not replace server authorization; they protect Real data on the local device.
