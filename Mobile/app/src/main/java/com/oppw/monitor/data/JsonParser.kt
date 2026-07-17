@@ -58,13 +58,20 @@ object JsonParser {
         )
     }
 
-    private fun parseSnapshot(json: JSONObject): MonitorSnapshot = MonitorSnapshot(
-        connection = parseConnection(json.getJSONObject("connection")),
-        account = parseAccount(json.getJSONObject("account")),
-        position = json.optJSONObject("position")?.takeUnless { it.has("open") && !it.optBoolean("open") }?.let(::parsePosition),
-        closestCondition = json.optJSONObject("closestCondition")?.let(::parseClosestCondition),
-        equityHistory = parseEquity(json.optJSONArray("equityHistory") ?: JSONArray()),
-    )
+    private fun parseSnapshot(json: JSONObject): MonitorSnapshot {
+        val closest = json.optJSONObject("closestCondition")?.let(::parseCondition)
+        val conditions = parseConditions(json.optJSONArray("conditions") ?: JSONArray()).ifEmpty { listOfNotNull(closest) }
+        return MonitorSnapshot(
+            connection = parseConnection(json.getJSONObject("connection")),
+            account = parseAccount(json.getJSONObject("account")),
+            position = json.optJSONObject("position")?.takeUnless { it.has("open") && !it.optBoolean("open") }?.let(::parsePosition),
+            closestCondition = closest,
+            conditions = conditions,
+            marketStats = parseMarketStats(json.optJSONObject("marketStats")),
+            equityCurves = parseEquityCurves(json.optJSONObject("equityCurves")),
+            equityHistory = parseEquity(json.optJSONArray("equityHistory") ?: JSONArray()),
+        )
+    }
 
     private fun parseConnection(json: JSONObject) = ConnectionStatus(
         connected = json.optBoolean("connected"),
@@ -73,6 +80,7 @@ object JsonParser {
         week = json.optString("week"),
         health = json.optString("health", "UNKNOWN"),
         phase = json.optString("phase", "Unknown"),
+        regime = json.optString("regime", "None"),
         nextAction = json.optString("nextAction", "None"),
         nextActionAt = json.optString("nextActionAt"),
         us100AgeSeconds = json.optNullableDouble("us100AgeSeconds"),
@@ -96,6 +104,10 @@ object JsonParser {
         openPrice = json.optDouble("openPrice"),
         bid = json.optDouble("bid"),
         ask = json.optDouble("ask"),
+        priceTime = json.optString("priceTime", json.optString("bidAt")),
+        bidAt = json.optString("bidAt", json.optString("priceTime")),
+        askAt = json.optString("askAt", json.optString("priceTime")),
+        tickAgeSeconds = json.optNullableDouble("tickAgeSeconds"),
         profit = json.optDouble("profit"),
         profitPercent = json.optDouble("profitPercent"),
         strategyLeverage = json.optDouble("strategyLeverage"),
@@ -110,12 +122,41 @@ object JsonParser {
         activeTpReason = json.optString("activeTpReason"),
     )
 
-    private fun parseClosestCondition(json: JSONObject) = ClosestCondition(
+    private fun parseCondition(json: JSONObject) = PriceCondition(
         name = json.optString("name"),
         targetPrice = json.optDouble("targetPrice"),
+        currentPrice = json.optDouble("currentPrice"),
         distancePoints = json.optDouble("distancePoints"),
         distancePercent = json.optDouble("distancePercent"),
         direction = json.optString("direction"),
+        active = json.optBoolean("active", true),
+        source = json.optString("source", "US100"),
+    )
+
+    private fun parseConditions(array: JSONArray): List<PriceCondition> = buildList {
+        for (i in 0 until array.length()) add(parseCondition(array.getJSONObject(i)))
+    }
+
+    private fun parseMarketStats(json: JSONObject?): MarketStats = MarketStats(
+        currentWeek = json?.optJSONObject("currentWeek")?.let(::parseMarketWeek),
+        previousWeek = json?.optJSONObject("previousWeek")?.let(::parseMarketWeek),
+    )
+
+    private fun parseMarketWeek(json: JSONObject) = MarketWeekStats(
+        week = json.optString("week"),
+        currentPrice = json.optNullableDouble("currentPrice"),
+        fridayOpen = json.optNullableDouble("fridayOpen"),
+        weeklyLow = json.optNullableDouble("weeklyLow"),
+        weeklyLowPercent = json.optNullableDouble("weeklyLowPercent"),
+        dailyLow = json.optNullableDouble("dailyLow"),
+        dailyLowPercent = json.optNullableDouble("dailyLowPercent"),
+        dailyLowDate = json.optString("dailyLowDate"),
+    )
+
+    private fun parseEquityCurves(json: JSONObject?): EquityCurves = EquityCurves(
+        daily = parseEquity(json?.optJSONArray("daily") ?: JSONArray()),
+        weekly = parseEquity(json?.optJSONArray("weekly") ?: JSONArray()),
+        allTime = parseEquity(json?.optJSONArray("allTime") ?: JSONArray()),
     )
 
     private fun parseEquity(array: JSONArray): List<EquityPoint> = buildList {

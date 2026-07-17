@@ -102,3 +102,75 @@ INSERT INTO monitor_accounts(account_key, display_name, account_type, broker_acc
     ('REAL', 'Real account', 'REAL', '', TRUE, TRUE, 10),
     ('DEMO', 'Demo account', 'DEMO', '', FALSE, TRUE, 20)
 ON DUPLICATE KEY UPDATE display_name = VALUES(display_name), account_type = VALUES(account_type), enabled = TRUE;
+
+
+-- v6 monitoring history, trades and cash flows
+CREATE TABLE IF NOT EXISTS strategy_equity_points (
+    strategy_key VARCHAR(64) NOT NULL,
+    captured_minute DATETIME NOT NULL,
+    balance DECIMAL(20, 4) NOT NULL DEFAULT 0,
+    equity DECIMAL(20, 4) NOT NULL DEFAULT 0,
+    deposit DECIMAL(20, 4) NOT NULL DEFAULT 0,
+    current_profit DECIMAL(20, 4) NOT NULL DEFAULT 0,
+    position_ticket BIGINT UNSIGNED NULL,
+    PRIMARY KEY (strategy_key, captured_minute),
+    INDEX idx_equity_strategy_time (strategy_key, captured_minute),
+    CONSTRAINT fk_equity_account FOREIGN KEY (strategy_key) REFERENCES monitor_accounts(account_key) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS strategy_market_points (
+    strategy_key VARCHAR(64) NOT NULL,
+    captured_minute DATETIME NOT NULL,
+    current_price DECIMAL(20, 8) NULL,
+    bid DECIMAL(20, 8) NULL,
+    ask DECIMAL(20, 8) NULL,
+    m1_open DECIMAL(20, 8) NULL,
+    m1_high DECIMAL(20, 8) NULL,
+    m1_low DECIMAL(20, 8) NULL,
+    m1_close DECIMAL(20, 8) NULL,
+    phase VARCHAR(64) NOT NULL DEFAULT '',
+    PRIMARY KEY (strategy_key, captured_minute),
+    INDEX idx_market_strategy_time (strategy_key, captured_minute),
+    CONSTRAINT fk_market_account FOREIGN KEY (strategy_key) REFERENCES monitor_accounts(account_key) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS strategy_trades (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    strategy_key VARCHAR(64) NOT NULL,
+    position_ticket BIGINT UNSIGNED NOT NULL,
+    symbol VARCHAR(32) NOT NULL DEFAULT '',
+    side VARCHAR(8) NOT NULL DEFAULT 'BUY',
+    volume DECIMAL(20, 8) NOT NULL DEFAULT 0,
+    opened_at DATETIME(3) NOT NULL,
+    closed_at DATETIME(3) NULL,
+    open_price DECIMAL(20, 8) NOT NULL DEFAULT 0,
+    close_price DECIMAL(20, 8) NULL,
+    profit DECIMAL(20, 4) NULL,
+    profit_percent DECIMAL(12, 6) NULL,
+    exit_reason VARCHAR(100) NOT NULL DEFAULT '',
+    balance_before DECIMAL(20, 4) NULL,
+    balance_after DECIMAL(20, 4) NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_trade_ticket (strategy_key, position_ticket),
+    INDEX idx_trade_strategy_opened (strategy_key, opened_at),
+    CONSTRAINT fk_trade_account FOREIGN KEY (strategy_key) REFERENCES monitor_accounts(account_key) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS account_cash_flows (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    strategy_key VARCHAR(64) NOT NULL,
+    occurred_at DATETIME(3) NOT NULL,
+    flow_type VARCHAR(32) NOT NULL,
+    amount DECIMAL(20, 4) NOT NULL,
+    balance_after DECIMAL(20, 4) NOT NULL,
+    source VARCHAR(32) NOT NULL DEFAULT 'MANUAL',
+    reference_key VARCHAR(100) NULL,
+    note VARCHAR(255) NOT NULL DEFAULT '',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_cash_flow_reference (strategy_key, reference_key),
+    INDEX idx_cash_flow_strategy_time (strategy_key, occurred_at),
+    CONSTRAINT fk_cash_flow_account FOREIGN KEY (strategy_key) REFERENCES monitor_accounts(account_key) ON DELETE CASCADE
+) ENGINE=InnoDB;

@@ -18,21 +18,27 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import com.oppw.monitor.data.MarketWeekStats
 import com.oppw.monitor.data.UiState
 import com.oppw.monitor.ui.components.AppCard
+import com.oppw.monitor.ui.components.EquityChart
 import com.oppw.monitor.ui.components.ErrorPanel
 import com.oppw.monitor.ui.components.LoadingPanel
 import com.oppw.monitor.ui.components.Metric
 import com.oppw.monitor.ui.components.SectionTitle
-import com.oppw.monitor.ui.components.Sparkline
 import com.oppw.monitor.ui.components.StatusChip
 import com.oppw.monitor.ui.theme.BrightGreen
 import com.oppw.monitor.ui.theme.DangerRed
 import com.oppw.monitor.ui.theme.PrimaryBlue
 import com.oppw.monitor.ui.theme.TextSecondary
+import com.oppw.monitor.util.age
 import com.oppw.monitor.util.countdown
+import com.oppw.monitor.util.leverage
 import com.oppw.monitor.util.money
+import com.oppw.monitor.util.optionalPercent
+import com.oppw.monitor.util.optionalPrice
 import com.oppw.monitor.util.percent
+import com.oppw.monitor.util.secondsSinceEpoch
 import com.oppw.monitor.util.shortDateTime
 
 @Composable
@@ -46,6 +52,10 @@ fun OverviewScreen(state: UiState, onRetry: () -> Unit) {
             val connection = snapshot.connection
             val account = snapshot.account
             val position = snapshot.position
+            val retrievalAge = secondsSinceEpoch(state.lastSuccessfulFetchEpochMs, state.nowEpochMs)
+            val effectivePnlPercent = if (account.balance != 0.0) (position?.profit ?: 0.0) / account.balance * 100.0 else 0.0
+            val regime = position?.protectionRegime?.ifBlank { null } ?: connection.regime.ifBlank { "None" }
+            val nextActionLabel = displayNextAction(connection.nextAction, connection.nextActionAt)
 
             LazyColumn(
                 Modifier.fillMaxSize().padding(horizontal = 14.dp),
@@ -72,18 +82,21 @@ fun OverviewScreen(state: UiState, onRetry: () -> Unit) {
                         AppCard(Modifier.weight(1f)) {
                             Text("Health", color = TextSecondary)
                             StatusChip(connection.health, connection.health)
+                            Text("HTTPS retrieved ${age(retrievalAge)} ago", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
                         }
                         AppCard(Modifier.weight(1f)) {
                             Text("Phase", color = TextSecondary)
                             Text(connection.phase, color = PrimaryBlue, style = MaterialTheme.typography.titleMedium)
+                            Text("Regime", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                            Text(regime, style = MaterialTheme.typography.bodyMedium)
                         }
                     }
                 }
 
                 item {
                     AppCard(Modifier.fillMaxWidth()) {
-                        SectionTitle("Next action", connection.nextAction)
-                        Text(countdown(connection.nextActionAt), color = BrightGreen, style = MaterialTheme.typography.headlineMedium)
+                        SectionTitle("Next action", nextActionLabel)
+                        Text(countdown(connection.nextActionAt, state.nowEpochMs), color = BrightGreen, style = MaterialTheme.typography.headlineMedium)
                         Text(shortDateTime(connection.nextActionAt), color = TextSecondary)
                     }
                 }
@@ -91,34 +104,86 @@ fun OverviewScreen(state: UiState, onRetry: () -> Unit) {
                 item {
                     AppCard(Modifier.fillMaxWidth()) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-                            Metric("Deposit", money(account.deposit, account.currency), Modifier.weight(1f))
+                            Metric("Balance", money(account.balance, account.currency), Modifier.weight(1f))
                             Metric("Equity", money(account.equity, account.currency), Modifier.weight(1f))
                         }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+                            Metric("Deposit", money(account.deposit, account.currency), Modifier.weight(1f))
                             Metric("Current P/L", money(position?.profit ?: 0.0, account.currency), Modifier.weight(1f), pnlColor(position?.profit ?: 0.0))
+                        }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
                             Metric("Current P/L %", percent(position?.profitPercent ?: 0.0), Modifier.weight(1f), pnlColor(position?.profitPercent ?: 0.0))
+                            Metric("P/L % effective", percent(effectivePnlPercent), Modifier.weight(1f), pnlColor(effectivePnlPercent))
                         }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
                             Metric("Leverage", position?.strategyLeverage?.let { "${it.toInt()}x" } ?: "—", Modifier.weight(1f))
                             Metric("P/L % leveraged", percent(position?.leveragedProfitPercent ?: 0.0), Modifier.weight(1f), pnlColor(position?.leveragedProfitPercent ?: 0.0))
                         }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+                            Metric("Effective leverage", leverage(position?.effectiveLeverage ?: 0.0), Modifier.weight(1f))
+                            Metric("Exposure", money(position?.exposure ?: 0.0, account.currency), Modifier.weight(1f))
+                        }
                     }
                 }
+
+                item { WeekMarketCard("US100 · current week", snapshot.marketStats.currentWeek, currentLabel = "Current price") }
+                item { WeekMarketCard("US100 · previous week", snapshot.marketStats.previousWeek, currentLabel = "Final price") }
 
                 item {
                     AppCard(Modifier.fillMaxWidth()) {
-                        SectionTitle("Equity", "recent")
-                        Sparkline(snapshot.equityHistory.map { it.value })
+                        SectionTitle("Equity curve", "daily")
+                        EquityChart(snapshot.equityCurves.daily.ifEmpty { snapshot.equityHistory }, account.currency)
+                    }
+                }
+                item {
+                    AppCard(Modifier.fillMaxWidth()) {
+                        SectionTitle("Equity curve", "weekly")
+                        EquityChart(snapshot.equityCurves.weekly, account.currency)
+                    }
+                }
+                item {
+                    AppCard(Modifier.fillMaxWidth()) {
+                        SectionTitle("Equity curve", "all time")
+                        EquityChart(snapshot.equityCurves.allTime, account.currency)
                     }
                 }
 
-                state.error?.let { error ->
-                    item { ErrorPanel("Showing cached data. $error", onRetry) }
-                }
-
+                state.error?.let { error -> item { ErrorPanel("Showing cached data. $error", onRetry) } }
             }
         }
     }
 }
 
+@Composable
+private fun WeekMarketCard(title: String, stats: MarketWeekStats?, currentLabel: String) {
+    AppCard(Modifier.fillMaxWidth()) {
+        SectionTitle(title, stats?.week ?: "No history")
+        if (stats == null) {
+            Text("No stored minute data for this week yet.", color = TextSecondary)
+            return@AppCard
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Metric(currentLabel, optionalPrice(stats.currentPrice), Modifier.weight(1f))
+            Metric("Friday open", optionalPrice(stats.fridayOpen), Modifier.weight(1f))
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Metric("Weekly low", optionalPrice(stats.weeklyLow), Modifier.weight(1f))
+            Metric("Weekly low %", optionalPercent(stats.weeklyLowPercent), Modifier.weight(1f), pnlColor(stats.weeklyLowPercent ?: 0.0))
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Metric("Daily low", optionalPrice(stats.dailyLow), Modifier.weight(1f))
+            Metric("Daily low %", optionalPercent(stats.dailyLowPercent), Modifier.weight(1f), pnlColor(stats.dailyLowPercent ?: 0.0))
+        }
+        Text("Daily low date: ${stats.dailyLowDate.ifBlank { "—" }}", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+    }
+}
+
 private fun pnlColor(value: Double): Color = if (value >= 0) BrightGreen else DangerRed
+
+private fun displayNextAction(action: String, timestamp: String): String {
+    if (!action.contains("BUY WINDOW", ignoreCase = true)) return action
+    return runCatching {
+        val day = java.time.OffsetDateTime.parse(timestamp).dayOfWeek.name.lowercase().replaceFirstChar { it.uppercase() }
+        "$day buy window"
+    }.getOrDefault(action)
+}

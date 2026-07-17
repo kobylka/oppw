@@ -1,30 +1,16 @@
-# Validation report
+# Validation
 
-Performed in the generation environment:
+Completed in the generation environment:
 
-- All PHP files pass `php -l` with PHP 8.4.
-- The Python publisher passes `python -m py_compile`.
-- Every Android XML file parses successfully.
-- Pure Kotlin authentication/data models compile with `kotlinc`.
-- Static checks confirm:
-  - no `BuildConfig.API_TOKEN` remains;
-  - no permanent mobile read token is present;
-  - no direct `layout.weight` import remains;
-  - the logs icon uses `Icons.AutoMirrored.Outlined.ListAlt`;
-  - `local.properties` and `backend/config.php` are ignored by Git;
-  - cleartext Android traffic is disabled;
-  - Android backups are disabled for the app.
+- All PHP files pass `php -l`.
+- MT5 v33 and config pass Python bytecode compilation.
+- Kotlin data models and sample data compile with `kotlinc`.
+- MT5 AST comparison shows only these strategy-class methods changed from v32:
+  - `monitor_tick_snapshot`
+  - `monitor_next_action`
+  - `monitor_all_conditions`
+  - `monitor_closest_condition`
+  - `build_mobile_snapshot`
+- No trading, sizing, protection, session, recovery or order method changed.
 
-Not performed here:
-
-- A full Gradle Android build, because this environment does not contain the Android SDK or downloaded Android/Compose dependencies.
-- Live MySQL integration tests, because no MySQL server is installed in this environment.
-- End-to-end HTTPS testing against a deployed domain and certificate.
-
-Before production, run:
-
-```powershell
-.\gradlew.bat clean test assembleDebug
-```
-
-Then complete the pairing, refresh, revocation and account-authorization checks in `DEPLOYMENT_CHECKLIST.md`.
+A complete Android Gradle build requires an Android SDK and must be run in Android Studio or on the deployment computer.

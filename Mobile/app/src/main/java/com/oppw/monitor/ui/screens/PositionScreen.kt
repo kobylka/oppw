@@ -12,6 +12,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.oppw.monitor.data.PriceCondition
 import com.oppw.monitor.data.UiState
 import com.oppw.monitor.ui.components.AppCard
 import com.oppw.monitor.ui.components.ErrorPanel
@@ -24,11 +25,14 @@ import com.oppw.monitor.ui.theme.BrightGreen
 import com.oppw.monitor.ui.theme.DangerRed
 import com.oppw.monitor.ui.theme.PrimaryBlue
 import com.oppw.monitor.ui.theme.TextSecondary
+import com.oppw.monitor.util.age
 import com.oppw.monitor.util.leverage
+import com.oppw.monitor.util.liveSourceAge
 import com.oppw.monitor.util.money
 import com.oppw.monitor.util.percent
 import com.oppw.monitor.util.price
 import com.oppw.monitor.util.shortDateTime
+import com.oppw.monitor.util.timeOnly
 import com.oppw.monitor.util.volume
 
 @Composable
@@ -50,6 +54,9 @@ fun PositionScreen(state: UiState, onRetry: () -> Unit) {
             }
             val account = snapshot.account
             val closest = snapshot.closestCondition
+            val conditions = snapshot.conditions.sortedBy { it.distancePoints }
+            val minimumBalance = account.deposit * 1.765
+            val liveTickAge = liveSourceAge(position.tickAgeSeconds, position.priceTime.ifBlank { snapshot.connection.lastSync }, state.nowEpochMs)
 
             LazyColumn(
                 Modifier.fillMaxSize().padding(horizontal = 14.dp),
@@ -61,10 +68,10 @@ fun PositionScreen(state: UiState, onRetry: () -> Unit) {
                             Column {
                                 Text(position.symbol, style = MaterialTheme.typography.headlineMedium)
                                 Text("Ticket ${position.ticket}", color = TextSecondary)
+                                Text("Opened ${shortDateTime(position.openedAt)}", color = TextSecondary)
                             }
                             StatusChip(position.side, "green")
                         }
-                        Text("Opened ${shortDateTime(position.openedAt)}", color = TextSecondary)
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                             Metric("Volume", volume(position.volume), Modifier.weight(1f))
                             Metric("Open price", price(position.openPrice), Modifier.weight(1f))
@@ -73,6 +80,11 @@ fun PositionScreen(state: UiState, onRetry: () -> Unit) {
                             Metric("Current bid", price(position.bid), Modifier.weight(1f), if (position.profit >= 0) BrightGreen else DangerRed)
                             Metric("Current ask", price(position.ask), Modifier.weight(1f))
                         }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                            Metric("Bid time", timeOnly(position.bidAt.ifBlank { position.priceTime }), Modifier.weight(1f))
+                            Metric("Ask time", timeOnly(position.askAt.ifBlank { position.priceTime }), Modifier.weight(1f))
+                        }
+                        Text("Price age: ${age(liveTickAge)}", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                             Metric("Stop loss", price(position.stopLoss), Modifier.weight(1f), DangerRed)
                             Metric("Take profit", price(position.takeProfit), Modifier.weight(1f), BrightGreen)
@@ -97,6 +109,14 @@ fun PositionScreen(state: UiState, onRetry: () -> Unit) {
 
                 item {
                     AppCard(Modifier.fillMaxWidth()) {
+                        SectionTitle("All conditions", conditions.size.toString())
+                        if (conditions.isEmpty()) Text("No conditions supplied by the strategy publisher.", color = TextSecondary)
+                        conditions.forEach { condition -> ConditionRow(condition, closest?.name == condition.name) }
+                    }
+                }
+
+                item {
+                    AppCard(Modifier.fillMaxWidth()) {
                         SectionTitle("Risk to stop loss")
                         RiskBar(position.stopLoss, position.openPrice, position.bid)
                     }
@@ -113,6 +133,10 @@ fun PositionScreen(state: UiState, onRetry: () -> Unit) {
                             Metric("Effective leverage", leverage(position.effectiveLeverage), Modifier.weight(1f))
                         }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                            Metric("Deposit", money(account.deposit, account.currency), Modifier.weight(1f))
+                            Metric("Minimum balance at 50% margin", money(minimumBalance, account.currency), Modifier.weight(1f))
+                        }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                             Metric("Protection", position.protectionRegime.ifBlank { "—" }, Modifier.weight(1f))
                             Metric("Break-even", if (position.breakEvenArmed) "ARMED" else "OFF", Modifier.weight(1f), if (position.breakEvenArmed) BrightGreen else TextSecondary)
                         }
@@ -122,5 +146,23 @@ fun PositionScreen(state: UiState, onRetry: () -> Unit) {
                 state.error?.let { error -> item { ErrorPanel("Showing cached data. $error", onRetry) } }
             }
         }
+    }
+}
+
+@Composable
+private fun ConditionRow(condition: PriceCondition, closest: Boolean) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(condition.name, color = if (closest) PrimaryBlue else MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleMedium)
+                if (closest) StatusChip("NEAREST")
+            }
+            Text(condition.source, color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+        }
+        Text(
+            "Target ${price(condition.targetPrice)} · Current ${price(condition.currentPrice)} · ${price(condition.distancePoints)} pts ${condition.direction} (${String.format("%.3f", condition.distancePercent)}%)",
+            color = TextSecondary,
+            style = MaterialTheme.typography.bodyMedium,
+        )
     }
 }

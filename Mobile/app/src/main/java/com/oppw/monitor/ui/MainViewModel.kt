@@ -24,9 +24,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _uiState = MutableStateFlow(UiState(deviceName = repository.currentDeviceName() ?: defaultDeviceName()))
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
     private var pollingJob: Job? = null
+    private var clockJob: Job? = null
     private var lastAccountsRefreshMs = 0L
 
     init {
+        startClock()
         if (repository.hasSession()) {
             _uiState.value = _uiState.value.copy(authStatus = AuthStatus.PAIRED)
             startPolling()
@@ -88,6 +90,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { load(manual = true, forceAccounts = false) }
     }
 
+    private fun startClock() {
+        clockJob?.cancel()
+        clockJob = viewModelScope.launch {
+            while (true) {
+                _uiState.value = _uiState.value.copy(nowEpochMs = System.currentTimeMillis())
+                delay(1_000L)
+            }
+        }
+    }
+
     private fun startPolling() {
         pollingJob?.cancel()
         pollingJob = viewModelScope.launch {
@@ -112,6 +124,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.value = _uiState.value.copy(accountsLoading = false, accounts = accounts, selectedAccountKey = selectedKey)
             repository.refresh(requireNotNull(selectedKey))
         }.onSuccess { response ->
+            val now = System.currentTimeMillis()
             _uiState.value = UiState(
                 authStatus = AuthStatus.PAIRED,
                 deviceName = previous.deviceName,
@@ -119,6 +132,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 accounts = accounts,
                 selectedAccountKey = selectedKey,
                 response = response,
+                lastSuccessfulFetchEpochMs = now,
+                nowEpochMs = now,
             )
         }.onFailure { error ->
             if (error is AuthenticationRequiredException) {
@@ -168,6 +183,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         .distinct()
         .joinToString(" ")
         .ifBlank { "Android device" }
+
+    override fun onCleared() {
+        pollingJob?.cancel()
+        clockJob?.cancel()
+        super.onCleared()
+    }
 
     companion object {
         private const val PREF_SELECTED_ACCOUNT = "selected_account"

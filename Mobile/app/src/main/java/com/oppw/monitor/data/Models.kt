@@ -23,7 +23,10 @@ data class MonitorSnapshot(
     val connection: ConnectionStatus,
     val account: AccountStatus,
     val position: PositionStatus?,
-    val closestCondition: ClosestCondition?,
+    val closestCondition: PriceCondition?,
+    val conditions: List<PriceCondition>,
+    val marketStats: MarketStats,
+    val equityCurves: EquityCurves,
     val equityHistory: List<EquityPoint>,
 )
 
@@ -34,6 +37,7 @@ data class ConnectionStatus(
     val week: String,
     val health: String,
     val phase: String,
+    val regime: String,
     val nextAction: String,
     val nextActionAt: String,
     val us100AgeSeconds: Double?,
@@ -57,6 +61,10 @@ data class PositionStatus(
     val openPrice: Double,
     val bid: Double,
     val ask: Double,
+    val priceTime: String,
+    val bidAt: String,
+    val askAt: String,
+    val tickAgeSeconds: Double?,
     val profit: Double,
     val profitPercent: Double,
     val strategyLeverage: Double,
@@ -71,12 +79,37 @@ data class PositionStatus(
     val activeTpReason: String,
 )
 
-data class ClosestCondition(
+data class PriceCondition(
     val name: String,
     val targetPrice: Double,
+    val currentPrice: Double,
     val distancePoints: Double,
     val distancePercent: Double,
     val direction: String,
+    val active: Boolean,
+    val source: String,
+)
+
+data class MarketWeekStats(
+    val week: String,
+    val currentPrice: Double?,
+    val fridayOpen: Double?,
+    val weeklyLow: Double?,
+    val weeklyLowPercent: Double?,
+    val dailyLow: Double?,
+    val dailyLowPercent: Double?,
+    val dailyLowDate: String,
+)
+
+data class MarketStats(
+    val currentWeek: MarketWeekStats?,
+    val previousWeek: MarketWeekStats?,
+)
+
+data class EquityCurves(
+    val daily: List<EquityPoint>,
+    val weekly: List<EquityPoint>,
+    val allTime: List<EquityPoint>,
 )
 
 data class EquityPoint(val time: String, val value: Double)
@@ -101,4 +134,6 @@ data class UiState(
     val selectedAccountKey: String? = null,
     val response: MonitorResponse? = null,
     val error: String? = null,
+    val lastSuccessfulFetchEpochMs: Long = 0L,
+    val nowEpochMs: Long = System.currentTimeMillis(),
 )

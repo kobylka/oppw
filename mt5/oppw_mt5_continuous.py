@@ -37,7 +37,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-BUILD_ID = "2026-07-17-mt5-margin-deposit-v32"
+BUILD_ID = "2026-07-17-mobile-dashboard-v33"
 SCHEDULED_ACTION_LEAD_SECONDS = 3.0
 
 try:
@@ -369,7 +369,7 @@ class MobileMonitorPublisher:
                 "Authorization": f"Bearer {self.cfg.monitor_write_token}",
                 "Content-Type": "application/json",
                 "Accept": "application/json",
-                "User-Agent": "OPPW-MT5-Publisher/31",
+                "User-Agent": "OPPW-MT5-Publisher/33",
             },
         )
         try:
@@ -1212,18 +1212,21 @@ class OPPWContinuousStrategy:
 
     # ----- Mobile monitoring --------------------------------------------------
 
-    def monitor_tick_snapshot(self, symbol: str, now: datetime) -> tuple[float, float, Optional[float]]:
+    def monitor_tick_snapshot(self, symbol: str, now: datetime) -> tuple[float, float, Optional[float], str]:
         try:
             tick = self.latest_tick(symbol)
             bid = float(getattr(tick, "bid", 0.0) or 0.0)
             ask = float(getattr(tick, "ask", 0.0) or 0.0)
             timestamp = getattr(tick, "time_msc", 0) / 1000.0 if getattr(tick, "time_msc", 0) else float(getattr(tick, "time", 0.0) or 0.0)
             age = None
+            tick_time = ""
             if timestamp > 0:
-                age = max(0.0, (now - self.mt5_timestamp_to_local(timestamp)).total_seconds())
-            return bid, ask, age
+                tick_local = self.mt5_timestamp_to_local(timestamp)
+                age = max(0.0, (now - tick_local).total_seconds())
+                tick_time = tick_local.isoformat()
+            return bid, ask, age, tick_time
         except Exception:
-            return 0.0, 0.0, None
+            return 0.0, 0.0, None, ""
 
     def monitor_next_action(self, position, now: datetime) -> tuple[str, str]:
         session = self.session_times(now.date())
@@ -1249,56 +1252,64 @@ class OPPWContinuousStrategy:
                     continue
                 if position is None and self.state.last_entry_week == iso_week_key(session_day):
                     continue
-                return ("BUY WINDOW" if position is None else "OH"), candidate.isoformat()
+                if position is None:
+                    return f"{session_day.strftime('%A').upper()} BUY WINDOW", candidate.isoformat()
+                return "OH", candidate.isoformat()
         except Exception:
             pass
         return "WAIT", ""
 
-    def monitor_closest_condition(self, position, now: datetime, bid: float) -> Optional[dict[str, Any]]:
-        if position is None or bid <= 0:
-            return None
+    def monitor_all_conditions(self, position, now: datetime, trade_bid: float, signal_price: float) -> list[dict[str, Any]]:
+        if position is None or trade_bid <= 0:
+            return []
         entry = float(position.price_open)
         if entry <= 0:
-            return None
+            return []
 
         info = mt5.symbol_info(position.symbol)
         tick_size = float(getattr(info, "trade_tick_size", 0.0) or getattr(info, "point", 0.0) or 0.01) if info is not None else 0.01
         tolerance = tick_size * 1.5
-        candidates: list[tuple[str, float]] = []
+        conditions: list[dict[str, Any]] = []
 
-        def add(name: str, price: float) -> None:
-            if not name or price <= 0:
+        def add(name: str, target: float, current: float, source: str, active: bool = True) -> None:
+            if not name or target <= 0 or current <= 0:
                 return
-            if any(existing_name == name and abs(existing_price - price) <= tolerance for existing_name, existing_price in candidates):
+            if any(item["name"] == name and abs(float(item["targetPrice"]) - target) <= tolerance for item in conditions):
                 return
-            candidates.append((name, price))
+            difference = target - current
+            distance = abs(difference)
+            conditions.append({
+                "name": name,
+                "targetPrice": target,
+                "currentPrice": current,
+                "distancePoints": distance,
+                "distancePercent": distance / current * 100.0,
+                "direction": "at" if abs(difference) <= tolerance else "above" if difference > 0 else "below",
+                "active": bool(active),
+                "source": source,
+            })
 
-        leverage = self.state.entry_leverage or self.choose_leverage()
-        add("SL", floor_step(entry * self.hard_sl_ratio(leverage), tick_size))
-        weekday_price, weekday_reason = self.weekday_sl_target(position, now)
-        if weekday_reason != "SL":
-            add(weekday_reason, floor_step(weekday_price, tick_size))
+        desired_sl, sl_reason = self.weekday_sl_target(position, now)
+        add(sl_reason, floor_step(desired_sl, tick_size), trade_bid, self.cfg.trade_symbol)
         if float(position.sl) > 0:
-            add(self.state.active_sl_reason or "BROKER_SL", float(position.sl))
-        if self.state.break_even:
-            add(self.state.active_tp_reason or "BH", ceil_step(entry * self.cfg.break_even_ratio, tick_size))
-        if float(position.tp) > 0:
-            add(self.state.active_tp_reason or "BROKER_TP", float(position.tp))
-        weekday_index = now.weekday() if now.weekday() < 5 else 4
-        add("OH", ceil_step(entry * (1.0 + self.cfg.tpps[weekday_index]), tick_size))
+            add(self.state.active_sl_reason or "BROKER_SL", float(position.sl), trade_bid, self.cfg.trade_symbol)
 
-        if not candidates:
-            return None
-        name, target = min(candidates, key=lambda item: abs(item[1] - bid))
-        difference = target - bid
-        distance = abs(difference)
-        return {
-            "name": name,
-            "targetPrice": target,
-            "distancePoints": distance,
-            "distancePercent": distance / bid * 100.0,
-            "direction": "at" if abs(difference) <= tolerance else "above" if difference > 0 else "below",
-        }
+        weekday_index = now.weekday() if now.weekday() < 5 else 4
+        tpp = self.cfg.tpps[weekday_index]
+        add("OH", ceil_step(entry * (1.0 + tpp), tick_size), trade_bid, self.cfg.trade_symbol)
+
+        signal_reference = self.state.entry_signal_daily_open or self.state.entry_price or entry
+        if signal_price > 0 and signal_reference > 0:
+            add("CH", signal_reference * (1.0 + tpp), signal_price, self.cfg.signal_symbol)
+
+        if self.state.break_even:
+            add("BE", ceil_step(entry * self.cfg.break_even_ratio, tick_size), trade_bid, self.cfg.trade_symbol)
+
+        return sorted(conditions, key=lambda item: float(item["distancePoints"]))
+
+    @staticmethod
+    def monitor_closest_condition(conditions: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+        return conditions[0] if conditions else None
 
     def monitor_position_exposure(self, position, bid: float) -> float:
         if position is None or bid <= 0:
@@ -1313,19 +1324,22 @@ class OPPWContinuousStrategy:
         currency = str(getattr(account, "currency", "")).strip() if account is not None else ""
         account_login = str(getattr(account, "login", self.cfg.login or "")) if account is not None else str(self.cfg.login or "")
 
-        trade_bid, trade_ask, trade_age = self.monitor_tick_snapshot(self.cfg.trade_symbol, now)
+        trade_bid, trade_ask, trade_age, trade_time = self.monitor_tick_snapshot(self.cfg.trade_symbol, now)
         if self.cfg.signal_symbol == self.cfg.trade_symbol:
-            signal_age = trade_age
+            signal_bid, signal_ask, signal_age, signal_time = trade_bid, trade_ask, trade_age, trade_time
         else:
-            _, _, signal_age = self.monitor_tick_snapshot(self.cfg.signal_symbol, now)
+            signal_bid, signal_ask, signal_age, signal_time = self.monitor_tick_snapshot(self.cfg.signal_symbol, now)
+        signal_price = signal_bid if signal_bid > 0 else signal_ask
 
         stale = any(age is None or age > self.cfg.maximum_tick_age_seconds for age in (trade_age, signal_age))
         connected = self.connected and account is not None
         health = "CRITICAL" if not connected else "WARNING" if stale else "OK"
         next_action, next_action_at = self.monitor_next_action(position, now)
         phase = f"{now:%A} {self.phase(now).replace('_', ' ').title()}"
+        regime = self.protection_regime(now) if position is not None else "None"
 
         position_payload: Optional[dict[str, Any]] = None
+        conditions: list[dict[str, Any]] = []
         closest = None
         deposit = float(getattr(account, "margin", 0.0)) if account is not None else 0.0
         if position is not None:
@@ -1348,6 +1362,10 @@ class OPPWContinuousStrategy:
                 "openPrice": entry,
                 "bid": bid,
                 "ask": ask,
+                "priceTime": trade_time,
+                "bidAt": trade_time,
+                "askAt": trade_time,
+                "tickAgeSeconds": trade_age,
                 "profit": profit,
                 "profitPercent": raw_change * 100.0,
                 "strategyLeverage": float(leverage),
@@ -1357,11 +1375,12 @@ class OPPWContinuousStrategy:
                 "stopLoss": float(position.sl),
                 "takeProfit": float(position.tp),
                 "breakEvenArmed": bool(self.state.break_even),
-                "protectionRegime": self.protection_regime(now),
+                "protectionRegime": regime,
                 "activeSlReason": self.state.active_sl_reason,
                 "activeTpReason": self.state.active_tp_reason,
             }
-            closest = self.monitor_closest_condition(position, now, bid)
+            conditions = self.monitor_all_conditions(position, now, bid, signal_price)
+            closest = self.monitor_closest_condition(conditions)
 
         current_price = trade_bid if trade_bid > 0 else trade_ask
         profit = float(position_payload["profit"]) if position_payload is not None else 0.0
@@ -1384,6 +1403,7 @@ class OPPWContinuousStrategy:
                 "week": iso_week_key(now.date()),
                 "health": health,
                 "phase": phase,
+                "regime": regime,
                 "nextAction": next_action,
                 "nextActionAt": next_action_at,
                 "us100AgeSeconds": trade_age,
@@ -1401,7 +1421,11 @@ class OPPWContinuousStrategy:
                 "currentPrice": current_price,
                 "bid": trade_bid,
                 "ask": trade_ask,
+                "priceTime": trade_time,
                 "tickAgeSeconds": trade_age,
+                "signalSymbol": self.cfg.signal_symbol,
+                "signalPrice": signal_price,
+                "signalPriceTime": signal_time,
                 "currentM1": current_bar_payload,
             },
             "metrics": {
@@ -1416,6 +1440,7 @@ class OPPWContinuousStrategy:
                 "currency": currency,
             },
             "position": position_payload,
+            "conditions": conditions,
             "closestCondition": closest,
             "equityHistory": [],
         }

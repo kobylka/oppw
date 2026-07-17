@@ -2,6 +2,7 @@ package com.oppw.monitor.ui.screens
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -10,9 +11,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -31,6 +40,7 @@ import com.oppw.monitor.ui.theme.PrimaryBlue
 import com.oppw.monitor.ui.theme.TextSecondary
 import com.oppw.monitor.ui.theme.WarningAmber
 import com.oppw.monitor.util.age
+import com.oppw.monitor.util.liveSourceAge
 import com.oppw.monitor.util.shortDateTime
 
 @Composable
@@ -41,6 +51,15 @@ fun LogsScreen(state: UiState, onRetry: () -> Unit) {
         else -> {
             val response = state.response!!
             val connection = response.snapshot.connection
+            val us100Age = liveSourceAge(connection.us100AgeSeconds, connection.lastSync, state.nowEpochMs)
+            val qqqAge = liveSourceAge(connection.qqqAgeSeconds, connection.lastSync, state.nowEpochMs)
+            val names = response.events.map { it.name }.filter { it.isNotBlank() }.distinct().sorted()
+            var buySellOnly by rememberSaveable { mutableStateOf(false) }
+            var selectedEvent by rememberSaveable { mutableStateOf(ALL_EVENTS) }
+            val filteredEvents = response.events.filter { event ->
+                (!buySellOnly || event.isBuySellEvent()) && (selectedEvent == ALL_EVENTS || event.name == selectedEvent)
+            }
+
             LazyColumn(
                 Modifier.fillMaxSize().padding(horizontal = 14.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -49,22 +68,51 @@ fun LogsScreen(state: UiState, onRetry: () -> Unit) {
                     AppCard(Modifier.fillMaxWidth()) {
                         SectionTitle("Data freshness", if (connection.connected) "Connected" else "Disconnected")
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                            Metric("US100", age(connection.us100AgeSeconds), Modifier.weight(1f), freshnessColor(connection.us100AgeSeconds))
-                            Metric("QQQ", age(connection.qqqAgeSeconds), Modifier.weight(1f), freshnessColor(connection.qqqAgeSeconds))
+                            Metric("US100", age(us100Age), Modifier.weight(1f), freshnessColor(us100Age))
+                            Metric("QQQ", age(qqqAge), Modifier.weight(1f), freshnessColor(qqqAge))
                             Metric("Health", connection.health, Modifier.weight(1f), if (connection.health.equals("OK", true)) BrightGreen else WarningAmber)
                         }
                     }
                 }
-                items(response.events, key = { it.id }) { event -> EventCard(event) }
-                if (response.events.isEmpty()) {
+                item {
+                    AppCard(Modifier.fillMaxWidth()) {
+                        SectionTitle("Log filters", "${filteredEvents.size}/${response.events.size}")
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                            Column {
+                                Text("Buy/sell events only", style = MaterialTheme.typography.titleMedium)
+                                Text("BUY, SELL, position open and close", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                            }
+                            Switch(checked = buySellOnly, onCheckedChange = { buySellOnly = it })
+                        }
+                        EventNameSelector(names, selectedEvent) { selectedEvent = it }
+                    }
+                }
+                items(filteredEvents, key = { it.id }) { event -> EventCard(event) }
+                if (filteredEvents.isEmpty()) {
                     item {
                         AppCard(Modifier.fillMaxWidth()) {
-                            Text("No events yet", style = MaterialTheme.typography.titleMedium)
-                            Text("Events will appear after the publisher sends them to the API.", color = TextSecondary)
+                            Text("No matching events", style = MaterialTheme.typography.titleMedium)
+                            Text("Change the selected event or disable the buy/sell-only filter.", color = TextSecondary)
                         }
                     }
                 }
                 state.error?.let { error -> item { ErrorPanel("Showing cached data. $error", onRetry) } }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EventNameSelector(names: List<String>, selected: String, onSelected: (String) -> Unit) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    Box(Modifier.fillMaxWidth()) {
+        OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
+            Text(if (selected == ALL_EVENTS) "All event types" else selected)
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(text = { Text("All event types") }, onClick = { expanded = false; onSelected(ALL_EVENTS) })
+            names.forEach { name ->
+                DropdownMenuItem(text = { Text(name) }, onClick = { expanded = false; onSelected(name) })
             }
         }
     }
@@ -88,6 +136,11 @@ private fun EventCard(event: MonitorEvent) {
     }
 }
 
+private fun MonitorEvent.isBuySellEvent(): Boolean {
+    val normalized = name.uppercase()
+    return normalized.startsWith("BUY") || normalized.startsWith("SELL") || normalized in setOf("POSITION_OPEN", "POSITION_CLOSED", "POSITION_DISAPPEARED")
+}
+
 private fun eventColor(event: MonitorEvent): Color = when {
     event.level.equals("ERROR", true) -> DangerRed
     event.level.equals("WARNING", true) -> WarningAmber
@@ -96,9 +149,11 @@ private fun eventColor(event: MonitorEvent): Color = when {
     else -> PrimaryBlue
 }
 
-private fun freshnessColor(age: Double?): Color = when {
-    age == null -> Muted
-    age <= 2.0 -> BrightGreen
-    age <= 10.0 -> WarningAmber
+private fun freshnessColor(value: Double?): Color = when {
+    value == null -> Muted
+    value <= 2.0 -> BrightGreen
+    value <= 10.0 -> WarningAmber
     else -> DangerRed
 }
+
+private const val ALL_EVENTS = "__ALL__"

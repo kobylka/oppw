@@ -1,15 +1,17 @@
 {
-  "capturedAt": "2026-07-16T21:15:00+02:00",
+  "accountKey": "DEMO",
+  "capturedAt": "2026-07-17T19:15:00Z",
   "snapshot": {
     "connection": {
       "connected": true,
-      "lastSync": "2026-07-16T21:15:00+02:00",
+      "lastSync": "2026-07-17T21:15:00+02:00",
       "accountId": "DEMO",
       "week": "2026-W29",
       "health": "OK",
-      "phase": "Thursday Regular Session",
+      "phase": "Friday Regular",
+      "regime": "TSL_0.4000%",
       "nextAction": "CH / TO",
-      "nextActionAt": "2026-07-16T21:59:57+02:00",
+      "nextActionAt": "2026-07-17T21:59:57+02:00",
       "us100AgeSeconds": 0.3,
       "qqqAgeSeconds": 0.5
     },
@@ -19,6 +21,31 @@
       "deposit": 111.12,
       "balance": 30000.0,
       "equity": 29632.5
+    },
+    "market": {
+      "symbol": "US100",
+      "currentPrice": 29240.0,
+      "bid": 29240.0,
+      "ask": 29241.5,
+      "priceTime": "2026-07-17T21:15:00+02:00",
+      "currentM1": {
+        "time": "2026-07-17T21:15:00+02:00",
+        "open": 29238.0,
+        "high": 29245.0,
+        "low": 29234.0,
+        "close": 29240.0
+      }
+    },
+    "metrics": {
+      "currentPrice": 29240.0,
+      "currentProfit": -367.5,
+      "currentProfitPercent": -0.2451,
+      "currentLeveragedProfitPercent": -1.9608,
+      "equity": 29632.5,
+      "balance": 30000.0,
+      "deposit": 111.12,
+      "strategyLeverage": 8.0,
+      "currency": "PLN"
     },
     "position": {
       "open": true,
@@ -30,6 +57,10 @@
       "openPrice": 29311.85,
       "bid": 29240.0,
       "ask": 29241.5,
+      "priceTime": "2026-07-17T21:15:00+02:00",
+      "bidAt": "2026-07-17T21:15:00+02:00",
+      "askAt": "2026-07-17T21:15:00+02:00",
+      "tickAgeSeconds": 0.3,
       "profit": -367.5,
       "profitPercent": -0.2451,
       "strategyLeverage": 8.0,
@@ -39,40 +70,65 @@
       "stopLoss": 29194.6,
       "takeProfit": 0.0,
       "breakEvenArmed": false,
-      "protectionRegime": "THURSDAY_TIGHT_SL",
-      "activeSlReason": "TSL1",
+      "protectionRegime": "TSL_0.4000%",
+      "activeSlReason": "TSL",
       "activeTpReason": ""
     },
+    "conditions": [
+      {
+        "name": "TSL",
+        "targetPrice": 29194.6,
+        "currentPrice": 29240.0,
+        "distancePoints": 45.4,
+        "distancePercent": 0.1553,
+        "direction": "below",
+        "active": true,
+        "source": "US100"
+      },
+      {
+        "name": "OH",
+        "targetPrice": 30777.44,
+        "currentPrice": 29240.0,
+        "distancePoints": 1537.44,
+        "distancePercent": 5.258,
+        "direction": "above",
+        "active": true,
+        "source": "US100"
+      },
+      {
+        "name": "CH",
+        "targetPrice": 30777.44,
+        "currentPrice": 29240.0,
+        "distancePoints": 1537.44,
+        "distancePercent": 5.258,
+        "direction": "above",
+        "active": true,
+        "source": "US100"
+      }
+    ],
     "closestCondition": {
-      "name": "TSL1",
+      "name": "TSL",
       "targetPrice": 29194.6,
+      "currentPrice": 29240.0,
       "distancePoints": 45.4,
       "distancePercent": 0.1553,
-      "direction": "below"
+      "direction": "below",
+      "active": true,
+      "source": "US100"
     },
-    "equityHistory": [
-      {
-        "time": "2026-07-10T22:00:00+02:00",
-        "value": 30000.0
-      },
-      {
-        "time": "2026-07-14T22:00:00+02:00",
-        "value": 29940.0
-      },
-      {
-        "time": "2026-07-16T21:15:00+02:00",
-        "value": 29632.5
-      }
-    ]
+    "equityHistory": []
   },
   "events": [
     {
-      "time": "2026-07-16T21:15:00+02:00",
+      "time": "2026-07-17T19:15:00Z",
       "level": "INFO",
-      "name": "TSL2",
+      "name": "TSL",
       "result": true,
-      "message": "Thursday stop is installed correctly."
+      "message": "TSL is installed correctly.",
+      "details": {
+        "current_sl": 29194.6,
+        "required_sl": 29194.6
+      }
     }
-  ],
-  "accountKey": "DEMO"
+  ]
 }

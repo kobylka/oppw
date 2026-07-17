@@ -4,16 +4,17 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ListAlt
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.Assessment
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.ExpandMore
-import androidx.compose.material.icons.outlined.Logout
 import androidx.compose.material.icons.outlined.PieChartOutline
 import androidx.compose.material.icons.outlined.Refresh
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -24,12 +25,10 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -45,9 +44,11 @@ import com.oppw.monitor.ui.screens.LogsScreen
 import com.oppw.monitor.ui.screens.OverviewScreen
 import com.oppw.monitor.ui.screens.PairDeviceScreen
 import com.oppw.monitor.ui.screens.PositionScreen
+import com.oppw.monitor.ui.screens.SettingsScreen
 import com.oppw.monitor.ui.theme.AppBackground
 import com.oppw.monitor.ui.theme.PrimaryBlue
 import com.oppw.monitor.ui.theme.TextSecondary
+import kotlinx.coroutines.launch
 
 private data class Tab(val label: String, val icon: ImageVector)
 
@@ -65,14 +66,15 @@ fun OppwMonitorApp(viewModel: MainViewModel) {
 @Composable
 private fun MonitorScaffold(viewModel: MainViewModel) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    var selectedTab by remember { mutableIntStateOf(0) }
-    var confirmUnpair by remember { mutableStateOf(false) }
     val selectedAccount = state.accounts.firstOrNull { it.key == state.selectedAccountKey }
     val tabs = listOf(
         Tab("Overview", Icons.Outlined.PieChartOutline),
         Tab("Position", Icons.Outlined.Assessment),
-        Tab("Checks & Logs", Icons.AutoMirrored.Outlined.ListAlt),
+        Tab("Logs", Icons.AutoMirrored.Outlined.ListAlt),
+        Tab("Settings", Icons.Outlined.Settings),
     )
+    val pagerState = rememberPagerState(pageCount = { tabs.size })
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
 
     Scaffold(
         containerColor = AppBackground,
@@ -92,7 +94,6 @@ private fun MonitorScaffold(viewModel: MainViewModel) {
                 actions = {
                     AccountSwitcher(state.accounts, state.selectedAccountKey, viewModel::selectAccount)
                     IconButton(onClick = viewModel::refresh) { Icon(Icons.Outlined.Refresh, contentDescription = "Refresh") }
-                    IconButton(onClick = { confirmUnpair = true }) { Icon(Icons.Outlined.Logout, contentDescription = "Unpair device") }
                 },
             )
         },
@@ -100,8 +101,8 @@ private fun MonitorScaffold(viewModel: MainViewModel) {
             NavigationBar(containerColor = AppBackground) {
                 tabs.forEachIndexed { index, tab ->
                     NavigationBarItem(
-                        selected = selectedTab == index,
-                        onClick = { selectedTab = index },
+                        selected = pagerState.currentPage == index,
+                        onClick = { scope.launch { pagerState.animateScrollToPage(index) } },
                         icon = { Icon(tab.icon, contentDescription = null) },
                         label = { Text(tab.label) },
                     )
@@ -109,25 +110,18 @@ private fun MonitorScaffold(viewModel: MainViewModel) {
             }
         },
     ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) {
-            when (selectedTab) {
+        HorizontalPager(
+            state = pagerState,
+            modifier = Modifier.fillMaxSize().padding(padding),
+            beyondViewportPageCount = 1,
+        ) { page ->
+            when (page) {
                 0 -> OverviewScreen(state, viewModel::refresh)
                 1 -> PositionScreen(state, viewModel::refresh)
-                else -> LogsScreen(state, viewModel::refresh)
+                2 -> LogsScreen(state, viewModel::refresh)
+                else -> SettingsScreen(state, viewModel::refresh, viewModel::unpairDevice)
             }
         }
-    }
-
-    if (confirmUnpair) {
-        AlertDialog(
-            onDismissRequest = { confirmUnpair = false },
-            title = { Text("Unpair this device?") },
-            text = { Text("The server will revoke this device and the local encrypted session will be deleted.") },
-            confirmButton = {
-                TextButton(onClick = { confirmUnpair = false; viewModel.unpairDevice() }) { Text("Unpair") }
-            },
-            dismissButton = { TextButton(onClick = { confirmUnpair = false }) { Text("Cancel") } },
-        )
     }
 }
 

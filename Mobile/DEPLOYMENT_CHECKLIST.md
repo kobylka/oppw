@@ -1,23 +1,18 @@
-# Deployment checklist
+# OPPW Monitor v6 deployment checklist
 
-## Backend
-
-- [ ] Import `backend/sql/schema.sql` or `migrate_auth.sql`.
-- [ ] Create `backend/config.php` from the example.
-- [ ] Generate independent database, writer and HMAC secrets.
-- [ ] Deploy only behind HTTPS with a valid certificate.
-- [ ] Confirm `config.php`, `lib.php`, `admin/`, `sql/` and `publisher/` are inaccessible over HTTP.
-- [ ] Test `health.php`.
-- [ ] Configure the MT5 publisher with the write token.
-- [ ] Schedule `admin/cleanup.php` daily.
-
-## Android
-
-- [ ] Set only `OPPW_API_BASE_URL` in `local.properties`.
-- [ ] Run Gradle sync with JDK 17.
-- [ ] Build and install the APK.
-- [ ] Generate a one-time pairing code.
-- [ ] Pair the phone and verify only assigned accounts appear.
-- [ ] Wait at least 15 minutes and verify transparent access-token refresh.
-- [ ] Revoke the device on the server and verify the app returns to pairing after the current access token is rejected.
-- [ ] Generate and protect the release signing key outside Git.
+- [ ] Back up the MySQL database.
+- [ ] Import `backend/sql/migrate_v6.sql` through phpMyAdmin.
+- [ ] Confirm the four new tables exist.
+- [ ] Upload the complete v6 backend, retaining the private `config.php`.
+- [ ] Confirm `health.php` returns `{"ok":true,...}`.
+- [ ] Replace the strategy file with `mt5/oppw_mt5_continuous_v33.py`.
+- [ ] Keep the existing private MT5 config and credentials outside Git.
+- [ ] Confirm the strategy logs `MONITOR_MINUTE_STATUS_QUEUED` every minute.
+- [ ] Set an unquoted HTTPS URL in `local.properties`.
+- [ ] Build and install the v6 APK.
+- [ ] Swipe through all four pages.
+- [ ] Confirm freshness values increase every second.
+- [ ] Confirm Settings is the only location containing Unpair.
+- [ ] Confirm market statistics populate after minute snapshots arrive.
+- [ ] Confirm daily/weekly/all-time charts load.
+- [ ] Confirm Logs filters work independently.

@@ -5,9 +5,6 @@ return [
     'dsn' => 'mysql:host=127.0.0.1;dbname=oppw_monitor;charset=utf8mb4',
     'db_user' => 'oppw_monitor',
     'db_password' => 'replace-with-database-password',
-	
-	'pairing_admin_enabled' => false,
-	'pairing_admin_token' => 'PUT_A_LONG_RANDOM_TOKEN_HERE',
 
     // Used only by the MT5 publisher. Never put this token in the Android app.
     'write_token' => 'replace-with-a-long-random-write-token',
@@ -16,6 +13,10 @@ return [
     'token_hmac_secret' => 'replace-with-random-token-hmac-secret',
     'pairing_hmac_secret' => 'replace-with-random-pairing-hmac-secret',
     'rate_limit_hmac_secret' => 'replace-with-random-rate-limit-hmac-secret',
+
+    // Optional browser-only pairing-code administration. Keep disabled except while pairing.
+    'pairing_admin_enabled' => false,
+    'pairing_admin_token' => 'replace-with-a-separate-browser-admin-token',
 
     'access_token_ttl_seconds' => 900,
     'refresh_token_ttl_days' => 90,
