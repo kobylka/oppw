@@ -33,7 +33,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-BUILD_ID = "2026-07-17-recovery-leverage-previous-m1-v24"
+BUILD_ID = "2026-07-17-rearranged-status-v26"
 SCHEDULED_ACTION_LEAD_SECONDS = 3.0
 
 try:
@@ -822,38 +822,32 @@ class OPPWContinuousStrategy:
     def format_status(self, reason: str, position, now: datetime, current_bar: Optional[M1Bar] = None) -> str:
         due, due_reason, final_day = self.weekly_exit_status(position, now)
         account = mt5.account_info()
-        balance = float(getattr(account, "balance", 0.0)) if account is not None else 0.0
         equity = float(getattr(account, "equity", 0.0)) if account is not None else 0.0
         deposit = float(getattr(account, "margin", 0.0)) if account is not None else 0.0
         currency = str(getattr(account, "currency", "")).strip() if account is not None else ""
         currency_suffix = f" {currency}" if currency else ""
-
-        lines = [
-            "==================== TRADE STATUS ====================",
-            f"reason: {reason}",
-            f"time: {now:%Y-%m-%d %H:%M:%S %Z}",
-            f"week: {iso_week_key(now.date())}",
-            f"phase: {self.phase(now)}",
-        ]
+        phase = self.phase(now)
+        regime = self.protection_regime(now)
 
         if position is None:
             leverage = self.choose_leverage()
-            lines.extend([
+            lines = [
+                f"==================== TRADE STATUS - {reason} ====================",
+                f"phase: {phase} protection regime: {regime}",
+                f"time: {now:%Y-%m-%d %H:%M:%S %Z} week: {iso_week_key(now.date())}",
+                "closest condition: none — no open position",
                 "position: FLAT",
-                f"deposit: {deposit:.2f}{currency_suffix}",
-                f"equity: {equity:.2f}{currency_suffix}",
+                f"leverage: {leverage}x",
                 f"current P/L: 0.00{currency_suffix}",
                 "current P/L %: 0.0000%",
-                f"leverage: {leverage}x",
                 "current P/L % leveraged: 0.0000%",
-                "closest condition: none — no open position",
-                f"balance: {balance:.2f}{currency_suffix}",
+                f"equity: {equity:.2f}{currency_suffix} deposit: {deposit:.2f}{currency_suffix}",
                 f"final trading day: {final_day or '-'}",
-                f"weekly exit: {due_reason}",
+                f"weekly exit: {due_reason} (due={due})",
                 f"last exit: {self.state.last_exit_reason or '-'}",
                 f"build: {BUILD_ID}",
                 "======================================================",
-            ])
+            ]
             return "\n" + "\n".join(lines) + "\n"
 
         try:
@@ -870,36 +864,45 @@ class OPPWContinuousStrategy:
         leveraged_pnl_pct = raw_pnl_pct * leverage
         current_pnl = float(getattr(position, "profit", 0.0)) + float(getattr(position, "swap", 0.0))
         opened = datetime.fromtimestamp(int(position.time), UTC).astimezone(self.tz)
-        side = "BUY" if int(getattr(position, "type", mt5.POSITION_TYPE_BUY)) == int(mt5.POSITION_TYPE_BUY) else "SELL"
         closest = self.closest_price_condition(position, now, bid)
         previous_bar = self.previous_m1_bar(position.symbol, now)
-        previous_bar_text = "None" if previous_bar is None else f"{previous_bar.local_datetime:%Y-%m-%d %H:%M} O={previous_bar.open:.5f} H={previous_bar.high:.5f} L={previous_bar.low:.5f} C={previous_bar.close:.5f}"
+        if previous_bar is None:
+            previous_bar_text = "None"
+        else:
+            bar_utc = datetime.fromtimestamp(previous_bar.utc_timestamp, UTC)
+            bar_local = previous_bar.local_datetime
+            previous_bar_text = (
+                f"epoch={previous_bar.utc_timestamp} "
+                f"UTC={bar_utc.isoformat(timespec='milliseconds')} "
+                f"Warsaw={bar_local.isoformat(timespec='milliseconds')} "
+                f"O={previous_bar.open:.5f} H={previous_bar.high:.5f} "
+                f"L={previous_bar.low:.5f} C={previous_bar.close:.5f}"
+            )
 
-        lines.extend([
-            f"position: {side} {position.symbol} {float(position.volume):.4f} lot",
-            f"ticket: {position.ticket}",
+        lines = [
+            f"==================== TRADE STATUS - {reason} ====================",
+            f"phase: {phase} protection regime: {regime}",
+            f"time: {now:%Y-%m-%d %H:%M:%S %Z} week: {iso_week_key(now.date())}",
+            f"closest condition: {closest}",
+            f"position: {float(position.volume):.2f} lot {position.symbol}",
+            f"leverage: {leverage}x",
             f"opened: {opened:%Y-%m-%d %H:%M:%S %Z}",
             f"open price: {entry:.5f}",
-            f"current bid / ask: {bid:.5f} / {ask:.5f}",
-            f"deposit: {deposit:.2f}{currency_suffix}",
-            f"equity: {equity:.2f}{currency_suffix}",
+            f"current ask: {ask:.5f}",
             f"current P/L: {current_pnl:.2f}{currency_suffix}",
             f"current P/L %: {raw_pnl_pct:.4%}",
-            f"leverage: {leverage}x",
             f"current P/L % leveraged: {leveraged_pnl_pct:.4%}",
+            f"equity: {equity:.2f}{currency_suffix} deposit: {deposit:.2f}{currency_suffix}",
             f"SL: {float(position.sl):.5f} ({self.state.active_sl_reason or '-'})",
             f"TP: {float(position.tp):.5f} ({self.state.active_tp_reason or '-'})",
-            f"closest condition: {closest}",
-            f"balance: {balance:.2f}{currency_suffix}",
             f"break-even armed: {self.state.break_even}",
-            f"protection regime: {self.protection_regime(now)}",
             f"exit latch: {self.state.exit_latched_reason or '-'}",
             f"final trading day: {final_day or '-'}",
             f"weekly exit: {due_reason} (due={due})",
             f"previous M1: {previous_bar_text}",
             f"build: {BUILD_ID}",
             "======================================================",
-        ])
+        ]
         return "\n" + "\n".join(lines) + "\n"
 
     def emit_status(self, reason: str, position=None, now: Optional[datetime] = None, current_bar: Optional[M1Bar] = None) -> None:

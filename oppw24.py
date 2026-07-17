@@ -439,8 +439,6 @@ class Sim:
             qqq_open = quotes[0]
             qqq_close = quotes[3]
             
-            print(date)
-            
             openest = quotes[4][0]
             opon = quotes[934][0]
             close = quotes[1324][3]
