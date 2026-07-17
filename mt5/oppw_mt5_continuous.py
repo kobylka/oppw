@@ -7,7 +7,7 @@ Key execution rules
 * OH is evaluated at cash open minus three seconds.
 * CH and final-week TO are evaluated at XNYS session close minus three seconds.
 * Hard SL and weekday SL levels are maintained with TRADE_ACTION_SLTP.
-* One TSL at 0.4% below entry is active continuously from Thursday date change through Friday and the weekend if needed.
+* One configurable TSL is active continuously from Thursday date change through Friday and the weekend if needed.
 * TSL is a broker-side SL label; candle lows do not latch it.
 * Closing reasons are resolved from the MT5 closing deal and active protection state.
 * Status deposit is read directly from MT5 as float(account.margin).
@@ -32,7 +32,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-BUILD_ID = "2026-07-17-single-tsl-v28"
+BUILD_ID = "2026-07-17-unified-tsl-config-v29"
 SCHEDULED_ACTION_LEAD_SECONDS = 3.0
 
 try:
@@ -492,12 +492,12 @@ class OPPWContinuousStrategy:
         # One 0.4% TSL is active continuously from the Thursday date change
         # through Friday. Keep it over the weekend if TO did not close the trade.
         if now.weekday() in (3, 4, 5, 6):
-            return max(hard_sl, entry * self.cfg.thursday_sl_ratio), "TSL"
+            return max(hard_sl, entry * self.cfg.tsl_ratio), "TSL"
 
         # Never weaken a surviving prior-week TSL before the position is closed.
         opened = parse_date(self.state.open_date)
         if opened is not None and iso_week_key(opened) != iso_week_key(now.date()) and self.state.active_sl_reason == "TSL":
-            return max(hard_sl, entry * self.cfg.thursday_sl_ratio), "TSL"
+            return max(hard_sl, entry * self.cfg.tsl_ratio), "TSL"
 
         return hard_sl, "SL"
 
@@ -516,7 +516,7 @@ class OPPWContinuousStrategy:
         self.state.active_tp_reason = ""
 
         if sl > 0 and entry > 0:
-            tsl = entry * self.cfg.thursday_sl_ratio
+            tsl = entry * self.cfg.tsl_ratio
             hard_sl = entry * self.hard_sl_ratio(self.state.entry_leverage or self.choose_leverage())
             if abs(sl - tsl) <= tolerance:
                 self.state.active_sl_reason = "TSL"
@@ -1256,7 +1256,7 @@ class OPPWContinuousStrategy:
         leverage = self.state.entry_leverage or self.choose_leverage()
         reason_parts = [f"HARD_SL_L{leverage}_RATIO_{self.hard_sl_ratio(leverage):.6f}"]
         if sl_reason == "TSL":
-            reason_parts.append(f"TSL_STOP_{self.cfg.thursday_stop:.4%}_RATIO_{self.cfg.thursday_sl_ratio:.6f}")
+            reason_parts.append(f"TSL_STOP_{self.cfg.tsl_stop:.4%}_RATIO_{self.cfg.tsl_ratio:.6f}")
         if desired_tp > 0:
             reason_parts.append(f"BE_{self.cfg.break_even_ratio:.6f}")
         self.modify_sltp(position, desired_sl, desired_tp, "+".join(reason_parts), sl_reason, tp_reason)
