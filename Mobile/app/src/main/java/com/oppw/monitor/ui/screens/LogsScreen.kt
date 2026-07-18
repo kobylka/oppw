@@ -46,6 +46,7 @@ import com.oppw.monitor.ui.theme.PrimaryBlue
 import com.oppw.monitor.ui.theme.TextSecondary
 import com.oppw.monitor.ui.theme.WarningAmber
 import com.oppw.monitor.util.age
+import com.oppw.monitor.util.isRoutineEvent
 import com.oppw.monitor.util.liveSourceAge
 import com.oppw.monitor.util.priceHealth
 import com.oppw.monitor.util.shortDateTime
@@ -62,12 +63,12 @@ fun LogsScreen(state: UiState, viewModel: MainViewModel, onRetry: () -> Unit) {
             val us100Age = liveSourceAge(connection.us100AgeSeconds, response.generatedAt, state.nowEpochMs)
             val qqqAge = liveSourceAge(connection.qqqAgeSeconds, response.generatedAt, state.nowEpochMs)
             val health = priceHealth(us100Age)
-            var buySellOnly by rememberSaveable { mutableStateOf(false) }
-            var showRoutineChecks by rememberSaveable { mutableStateOf(false) }
-            var selectedEvent by rememberSaveable { mutableStateOf(ALL_EVENTS) }
             val accountKey = state.selectedAccountKey!!
+            var buySellOnly by rememberSaveable(accountKey) { mutableStateOf(false) }
+            var showRoutineChecks by rememberSaveable(accountKey) { mutableStateOf(false) }
+            var selectedEvent by rememberSaveable(accountKey) { mutableStateOf(ALL_EVENTS) }
             val eventName = selectedEvent.takeUnless { it == ALL_EVENTS }
-            val hideRoutine = !showRoutineChecks && eventName == null && !buySellOnly
+            val hideRoutine = !showRoutineChecks && !buySellOnly
             val flow = remember(accountKey, buySellOnly, hideRoutine, eventName) { viewModel.eventPager(accountKey, buySellOnly, hideRoutine, eventName) }
             val events = flow.collectAsLazyPagingItems()
             val totalMatching by viewModel.logTotalMatching.collectAsStateWithLifecycle()
@@ -110,7 +111,9 @@ fun LogsScreen(state: UiState, viewModel: MainViewModel, onRetry: () -> Unit) {
                 }
 
                 items(count = events.itemCount, key = { index -> events[index]?.id ?: "event-$index" }) { index ->
-                    events[index]?.let { event -> EventCard(event) }
+                    events[index]?.let { event ->
+                        if (showRoutineChecks || !isRoutineEvent(event)) EventCard(event)
+                    }
                 }
 
                 when (val append = events.loadState.append) {

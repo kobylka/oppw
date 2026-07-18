@@ -213,6 +213,8 @@ data class TradeAnalytics(
     val closePrice: Double,
     val profit: Double,
     val profitPercent: Double,
+    val balanceBefore: Double = 0.0,
+    val tradeReturn: Double? = null,
     val exitReason: String,
     val durationSeconds: Long,
     val mfePoints: Double,

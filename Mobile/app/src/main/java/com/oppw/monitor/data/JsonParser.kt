@@ -108,7 +108,9 @@ object JsonParser {
                 for (i in 0 until values.length()) values.getJSONObject(i).let { item -> add(TradeAnalytics(
                     ticket = item.optLong("ticket"), symbol = item.optString("symbol"), side = item.optString("side"), volume = item.optDouble("volume"),
                     openedAt = item.optString("openedAt"), closedAt = item.optString("closedAt"), openPrice = item.optDouble("openPrice"), closePrice = item.optDouble("closePrice"),
-                    profit = item.optDouble("profit"), profitPercent = item.optDouble("profitPercent"), exitReason = item.optString("exitReason"),
+                    profit = item.optDouble("profit"), profitPercent = item.optDouble("profitPercent", item.optDouble("profit_percent")),
+                    balanceBefore = item.optDouble("balanceBefore", item.optDouble("balance_before")), tradeReturn = parseExplicitTradeReturn(item),
+                    exitReason = item.optString("exitReason", item.optString("exit_reason")),
                     durationSeconds = item.optLong("durationSeconds"), mfePoints = item.optDouble("mfePoints"), maePoints = item.optDouble("maePoints"),
                     entrySlippagePoints = item.optDouble("entrySlippagePoints"), exitSlippagePoints = item.optDouble("exitSlippagePoints"),
                     maxProfit = item.optDouble("maxProfit"), maxDrawdown = item.optDouble("maxDrawdown"), closed = item.optBoolean("closed"),
@@ -181,6 +183,18 @@ object JsonParser {
             id = item.optLong("id"), time = item.optString("time"), level = item.optString("level", "INFO"), name = item.optString("name"),
             result = if (item.has("result") && !item.isNull("result")) item.optBoolean("result") else null, message = item.optString("message"),
         )) }
+    }
+
+    private fun parseExplicitTradeReturn(item: JSONObject): Double? {
+        val fractionNames = listOf("tradeReturn", "trade_return", "returnFraction", "return_fraction")
+        fractionNames.forEach { name ->
+            if (item.has(name) && !item.isNull(name)) return item.optDouble(name).takeIf { it.isFinite() }
+        }
+        val percentNames = listOf("returnPercent", "return_percent")
+        percentNames.forEach { name ->
+            if (item.has(name) && !item.isNull(name)) return item.optDouble(name).takeIf { it.isFinite() }?.div(100.0)
+        }
+        return null
     }
 
     private fun requireOk(root: JSONObject) { if (!root.optBoolean("ok", false)) throw IllegalStateException(root.optString("error", "API returned an error")) }

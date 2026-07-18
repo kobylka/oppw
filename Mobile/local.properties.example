@@ -1,8 +1,6 @@
-sdk.dir=C\:\\Users\\YOUR_NAME\\AppData\\Local\\Android\\Sdk
+# Android Studio writes sdk.dir automatically.
+# sdk.dir=C\:\\Users\\YOUR_NAME\\AppData\\Local\\Android\\Sdk
 OPPW_API_BASE_URL=https://your-domain.example/oppw-backend/
-
-# Firebase Android app values. These identifiers are not server secrets.
-# Create a Firebase Android app with package com.oppw.monitor.
 OPPW_FIREBASE_APPLICATION_ID=
 OPPW_FIREBASE_PROJECT_ID=
 OPPW_FIREBASE_API_KEY=

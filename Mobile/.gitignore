@@ -1,23 +1,6 @@
 .gradle/
 .idea/
 local.properties
+**/build/
 *.iml
-/build/
-app/build/
-.externalNativeBuild/
-.cxx/
-*.jks
-*.keystore
-backend/config.php
-keystore.properties
-*.p12
-*.pem
-backend/*.log
-
-# MT5 private configuration and runtime files
-mt5/oppw_mt5_config.py
-mt5/*.state.json
-mt5/*.lock
-mt5/log/
-mt5/*.json
-!mt5/oppw_mt5_config.example.py
+.DS_Store

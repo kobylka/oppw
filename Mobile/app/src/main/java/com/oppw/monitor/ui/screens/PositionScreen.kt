@@ -36,6 +36,10 @@ import com.oppw.monitor.util.price
 import com.oppw.monitor.util.shortDateTime
 import com.oppw.monitor.util.timeOnly
 import com.oppw.monitor.util.volume
+import java.time.DayOfWeek
+import java.time.Instant
+import java.time.ZoneId
+import kotlin.math.abs
 
 @Composable
 fun PositionScreen(state: UiState, onRetry: () -> Unit) {
@@ -55,9 +59,11 @@ fun PositionScreen(state: UiState, onRetry: () -> Unit) {
                 return
             }
             val account = snapshot.account
-            val ohPending = snapshot.connection.nextAction.equals("OH", true)
-            val conditions = snapshot.conditions.filterNot { it.name.equals("OH", true) && !ohPending }.sortedBy { it.distancePoints }
-            val closest = snapshot.closestCondition?.takeUnless { it.name.equals("OH", true) && !ohPending } ?: conditions.firstOrNull()
+            val weekend = isWeekend(state.nowEpochMs)
+            val ohPending = !weekend && snapshot.connection.nextAction.equals("OH", true)
+            val suppliedConditions = snapshot.conditions.filterNot { it.name.equals("OH", true) && !ohPending }.sortedBy { it.distancePoints }
+            val closest = snapshot.closestCondition?.takeUnless { it.name.equals("OH", true) && !ohPending } ?: suppliedConditions.firstOrNull()
+            val conditions = suppliedConditions.filterNot { condition -> sameCondition(condition, closest) }
             val minimumBalance = account.deposit * 1.765
             val exposure = account.deposit * 20.0
             val effectiveLeverage = if (account.equity > 0.0) exposure / account.equity else 0.0
@@ -100,9 +106,18 @@ fun PositionScreen(state: UiState, onRetry: () -> Unit) {
                     }
                 }
 
+                if (weekend) {
+                    item {
+                        AppCard(Modifier.fillMaxWidth()) {
+                            SectionTitle("Market closed", "Weekend")
+                            Text("The position remains open because the Friday close did not complete. No OH, CH or TO countdown is active while the market is closed.", color = DangerRed)
+                        }
+                    }
+                }
+
                 item { ConditionCard("Closest condition", closest, true) }
 
-                item { SectionTitle("All conditions", conditions.size.toString()) }
+                item { SectionTitle("All other conditions", conditions.size.toString()) }
                 if (conditions.isEmpty()) {
                     item {
                         AppCard(Modifier.fillMaxWidth()) {
@@ -112,7 +127,7 @@ fun PositionScreen(state: UiState, onRetry: () -> Unit) {
                 } else {
                     items(conditions.size, key = { index -> "condition-${conditions[index].name}-$index" }) { index ->
                         val condition = conditions[index]
-                        ConditionCard(condition.name, condition, closest?.name == condition.name)
+                        ConditionCard(condition.name, condition, false)
                     }
                 }
 
@@ -171,4 +186,17 @@ private fun ConditionCard(title: String, condition: PriceCondition?, nearest: Bo
             Metric("Direction", condition.direction.replaceFirstChar { it.uppercase() }, Modifier.weight(1f))
         }
     }
+}
+
+
+private fun sameCondition(first: PriceCondition, second: PriceCondition?): Boolean {
+    if (second == null) return false
+    return first.name.trim().equals(second.name.trim(), ignoreCase = true) &&
+        first.source.trim().equals(second.source.trim(), ignoreCase = true) &&
+        abs(first.targetPrice - second.targetPrice) <= 0.01
+}
+
+private fun isWeekend(nowEpochMs: Long): Boolean {
+    val day = Instant.ofEpochMilli(nowEpochMs).atZone(ZoneId.of("Europe/Warsaw")).dayOfWeek
+    return day == DayOfWeek.SATURDAY || day == DayOfWeek.SUNDAY
 }

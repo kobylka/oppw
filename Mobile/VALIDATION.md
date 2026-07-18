@@ -1,14 +1,15 @@
-# OPPW Monitor v9.1 validation
+# v10.1 validation
 
-Validation performed in the packaging environment:
+Completed in the packaging environment:
 
-- All PHP files pass `php -l`.
-- MT5 v38 and the generic current MT5 script pass Python bytecode compilation; neither file changed in v9.1.
-- Android XML files parse successfully.
-- JSON example payload parses successfully.
-- Pure Kotlin models, sample data, and formatters compile with Kotlin/JVM.
-- The official Gradle Wrapper JAR remains included.
-- No database schema change is required after v7.
-- No private credentials are included in the package.
+- The four requested authentication/data files are byte-for-byte identical to the supplied v9.1 source files.
+- `JsonParser.parseAuthSession()` retains the v9.1 nested-session format.
+- No reconstructed `ApiClient.kt`, `SessionStore.kt`, static bearer-token client or biometric code exists.
+- Android manifest and every XML resource parse successfully.
+- Pure Kotlin models and closed-trade calculations compile and execute successfully.
+- Closed-trade Sharpe/Sortino behavior was exercised with five returns.
+- The project contains no import of Compose's internal `RowColumnParentData.weight` property.
+- Kotlin delimiter/string checks pass.
+- ZIP integrity and source checksums are generated during packaging.
 
-A complete Android Gradle build must still be run in Android Studio because the packaging environment does not include an Android SDK.
+A full Android Gradle build was not possible in this container because Gradle/Maven network access and an Android SDK are unavailable. The project uses the same Gradle, AGP, Kotlin, Compose and SDK versions as the working v9.1 source.

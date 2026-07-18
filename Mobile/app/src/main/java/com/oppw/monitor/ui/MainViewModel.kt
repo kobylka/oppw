@@ -153,7 +153,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun checkForegroundStaleness(now: Long) {
         val state = _uiState.value
         if (state.authStatus != AuthStatus.PAIRED) return
-        if (state.response?.snapshot?.position == null && isWeekend(now)) {
+        if (isWeekend(now)) {
             staleNotificationShown = false
             NotificationHelper.cancelApiStale(getApplication<Application>())
             return
@@ -264,7 +264,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
 
     private fun isWeekend(nowEpochMs: Long): Boolean {
-        val day = Instant.ofEpochMilli(nowEpochMs).atZone(ZoneId.systemDefault()).dayOfWeek
+        val day = Instant.ofEpochMilli(nowEpochMs).atZone(ZoneId.of("Europe/Warsaw")).dayOfWeek
         return day == DayOfWeek.SATURDAY || day == DayOfWeek.SUNDAY
     }
 

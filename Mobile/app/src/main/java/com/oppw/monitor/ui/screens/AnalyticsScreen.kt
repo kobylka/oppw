@@ -20,6 +20,7 @@ import com.oppw.monitor.ui.components.SectionTitle
 import com.oppw.monitor.ui.theme.BrightGreen
 import com.oppw.monitor.ui.theme.DangerRed
 import com.oppw.monitor.ui.theme.TextSecondary
+import com.oppw.monitor.util.closedTradeRatios
 import com.oppw.monitor.util.duration
 import com.oppw.monitor.util.money
 import com.oppw.monitor.util.percent
@@ -35,6 +36,7 @@ fun AnalyticsScreen(state: UiState, onRetry: () -> Unit) {
         else -> {
             val currency = state.response?.snapshot?.account?.currency ?: ""
             val s = analytics.summary
+            val closedTradeRisk = closedTradeRatios(analytics.recentTrades)
             LazyColumn(Modifier.fillMaxSize().padding(horizontal = 14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 item {
                     AppCard(Modifier.fillMaxWidth()) {
@@ -65,11 +67,12 @@ fun AnalyticsScreen(state: UiState, onRetry: () -> Unit) {
                 }
                 item {
                     AppCard(Modifier.fillMaxWidth()) {
-                        SectionTitle("Risk-adjusted performance", "${s.riskSampleDays} daily returns")
-                        MetricRow("Sharpe ratio", String.format("%.2f", s.sharpeRatio), "Sortino ratio", String.format("%.2f", s.sortinoRatio))
-                        MetricRow("Calmar ratio", String.format("%.2f", s.calmarRatio), "Omega ratio", String.format("%.2f", s.omegaRatio))
-                        MetricRow("Ulcer index", percent(s.ulcerIndexPercent), "Daily VaR 95%", percent(-s.valueAtRisk95Percent))
-                        MetricRow("Expected shortfall 95%", percent(-s.expectedShortfall95Percent), "Sample", "${s.riskSampleDays} days")
+                        SectionTitle("Risk-adjusted performance", "${closedTradeRisk.sampleSize} closed-trade returns")
+                        MetricRow("Trade Sharpe ratio", ratioText(closedTradeRisk.sharpe), "Trade Sortino ratio", ratioText(closedTradeRisk.sortino))
+                        Text("Sharpe and Sortino use closed trades only and are not annualized.", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                        MetricRow("Calmar ratio", ratioText(s.calmarRatio), "Omega ratio", ratioText(s.omegaRatio))
+                        MetricRow("Ulcer index", percentText(s.ulcerIndexPercent), "Daily VaR 95%", percentText(-s.valueAtRisk95Percent))
+                        MetricRow("Expected shortfall 95%", percentText(-s.expectedShortfall95Percent), "Daily-risk sample", "${s.riskSampleDays} days")
                     }
                 }
                 item {
@@ -131,3 +134,7 @@ private fun MetricRow(firstLabel: String, firstValue: String, secondLabel: Strin
         Metric(secondLabel, secondValue, Modifier.weight(1f))
     }
 }
+
+
+private fun ratioText(value: Double?): String = value?.takeIf { it.isFinite() }?.let { String.format("%.2f", it) } ?: "N/A"
+private fun percentText(value: Double?): String = value?.takeIf { it.isFinite() }?.let(::percent) ?: "N/A"

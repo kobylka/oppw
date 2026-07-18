@@ -21,8 +21,8 @@ android {
         applicationId = "com.oppw.monitor"
         minSdk = 26
         targetSdk = 37
-        versionCode = 11
-        versionName = "9.1.0"
+        versionCode = 13
+        versionName = "10.1.0"
 
         buildConfigField("String", "API_BASE_URL", quoted(local("OPPW_API_BASE_URL", "https://example.com/oppw-api/")))
         buildConfigField("long", "POLL_INTERVAL_MS", "5000L")

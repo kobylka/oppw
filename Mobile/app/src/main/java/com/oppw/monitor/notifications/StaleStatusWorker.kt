@@ -11,6 +11,7 @@ import androidx.work.WorkerParameters
 import com.oppw.monitor.BuildConfig
 import com.oppw.monitor.data.StatusRepository
 import java.time.DayOfWeek
+import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.util.concurrent.TimeUnit
 
@@ -18,7 +19,7 @@ class StaleStatusWorker(context: Context, params: WorkerParameters) : CoroutineW
     override suspend fun doWork(): Result {
         val repository = StatusRepository(applicationContext)
         if (!repository.hasSession()) return Result.success()
-        val day = ZonedDateTime.now().dayOfWeek
+        val day = ZonedDateTime.now(ZoneId.of("Europe/Warsaw")).dayOfWeek
         if (day == DayOfWeek.SATURDAY || day == DayOfWeek.SUNDAY) {
             NotificationHelper.cancelApiStale(applicationContext)
             return Result.success()

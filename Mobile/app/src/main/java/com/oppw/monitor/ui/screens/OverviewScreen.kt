@@ -58,7 +58,7 @@ fun OverviewScreen(state: UiState, onRetry: () -> Unit) {
             val connection = snapshot.connection
             val account = snapshot.account
             val position = snapshot.position
-            val weekendIdle = position == null && isWeekend(state.nowEpochMs)
+            val weekend = isWeekend(state.nowEpochMs)
             val heartbeatAge = liveSourceAge(connection.lastUpdateAgeSeconds, response.generatedAt, state.nowEpochMs)
             val lastTickAge = liveSourceAge(connection.us100AgeSeconds, response.generatedAt, state.nowEpochMs)
             val health = priceHealth(lastTickAge)
@@ -66,10 +66,10 @@ fun OverviewScreen(state: UiState, onRetry: () -> Unit) {
             val effectivePnlPercent = if (account.balance != 0.0) (position?.profit ?: 0.0) / account.balance * 100.0 else 0.0
             val exposure = if (position != null) account.deposit * 20.0 else 0.0
             val effectiveLeverage = if (account.equity > 0.0) exposure / account.equity else 0.0
-            val phase = if (weekendIdle) "Weekend" else connection.phase
-            val regime = if (weekendIdle) "None" else humanProtection(position?.protectionRegime?.ifBlank { null } ?: connection.regime.ifBlank { "None" })
-            val nextAction = if (weekendIdle) "None" else connection.nextAction
-            val nextActionAt = if (weekendIdle) "" else connection.nextActionAt
+            val phase = if (weekend) "Weekend" else connection.phase
+            val regime = if (weekend) "None" else humanProtection(position?.protectionRegime?.ifBlank { null } ?: connection.regime.ifBlank { "None" })
+            val nextAction = if (weekend) "None" else connection.nextAction
+            val nextActionAt = if (weekend) "" else connection.nextActionAt
             val nextActionLabel = displayNextAction(nextAction, nextActionAt)
             val initialBalance = snapshot.equityCurves.allTime.firstOrNull()?.value ?: account.balance
 
@@ -111,10 +111,23 @@ fun OverviewScreen(state: UiState, onRetry: () -> Unit) {
                     AppCard(Modifier.fillMaxWidth()) {
                         SectionTitle("Next action", nextActionLabel.ifBlank { "None" })
                         if (nextAction.equals("None", true) || nextActionAt.isBlank()) {
-                            Text(if (weekendIdle) "No weekend checks scheduled" else "No scheduled checks", color = TextSecondary, style = MaterialTheme.typography.titleMedium)
+                            Text(if (weekend) "Market is closed. No weekend checks are scheduled." else "No scheduled checks", color = TextSecondary, style = MaterialTheme.typography.titleMedium)
                         } else {
                             Text(countdown(nextActionAt, state.nowEpochMs), color = BrightGreen, style = MaterialTheme.typography.headlineMedium)
                             Text(shortDateTime(nextActionAt), color = TextSecondary)
+                        }
+                    }
+                }
+
+                if (weekend && position != null) {
+                    item {
+                        AppCard(Modifier.fillMaxWidth()) {
+                            SectionTitle("Position carried over weekend", "Friday close incomplete")
+                            Text(
+                                "The position remains open, but the market is closed. OH, CH and TO countdowns are suppressed until trading resumes.",
+                                color = DangerRed,
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
                         }
                     }
                 }
@@ -221,7 +234,7 @@ private fun healthTone(value: String): String = when (value.uppercase()) {
 }
 
 private fun isWeekend(nowEpochMs: Long): Boolean {
-    val day = Instant.ofEpochMilli(nowEpochMs).atZone(ZoneId.systemDefault()).dayOfWeek
+    val day = Instant.ofEpochMilli(nowEpochMs).atZone(ZoneId.of("Europe/Warsaw")).dayOfWeek
     return day == DayOfWeek.SATURDAY || day == DayOfWeek.SUNDAY
 }
 

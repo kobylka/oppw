@@ -1,23 +1,19 @@
-# OPPW Monitor v9.1 deployment checklist
+# OPPW Monitor Android v10 deployment checklist
 
-1. Upload the complete `backend/` directory while preserving your private `config.php`.
-2. No SQL migration is required.
-3. The optional health threshold may be added to `config.php`; the default is 60 seconds:
-
-```php
-'monitor_price_warning_seconds' => 60,
-```
-
-4. Replace the Android project while preserving `local.properties`.
-5. Open the project in Android Studio, synchronize Gradle, and install over the current app to preserve pairing.
-6. MT5 v38 is unchanged; do not replace the running MT5 script for this correction.
-7. Verify on Saturday/Sunday with no open position:
-   - Phase: `Weekend`
-   - Regime: `None`
-   - Next action: `None`
+1. Keep your existing `local.properties`, especially `sdk.dir` and `OPPW_API_BASE_URL`.
+2. Replace the Android project with the v10 source or copy your `local.properties` into the v10 root.
+3. Open the project in Android Studio with JDK 17.
+4. Sync Gradle and build `app`.
+5. Install over the existing `com.oppw.monitor` application where signing permits it.
+6. Open Overview on Saturday with the carried Friday position and confirm:
+   - `Market CLOSED`
+   - phase `Weekend`
+   - Next action `None`
    - no OH countdown
-8. Verify Overview shows:
-   - `Health: OK/UNKNOWN/WARNING`
-   - `Heartbeat: …`
-   - `Last tick: …`
-9. Verify the all-time chart shows both Equity and the dashed Deposits-to-date line.
+   - the position is still visible on Position.
+7. Confirm the equity chart uses elapsed calendar time for horizontal spacing.
+8. Confirm `Closest condition` is not repeated under `All other conditions`.
+9. Open Analytics and confirm Sharpe/Sortino state that they use closed trades.
+10. Open Logs and confirm routine checks are hidden before touching the switch; enable it and confirm they appear.
+
+No SQL migration, backend upload, or MT5 replacement is part of this Android-only package.
