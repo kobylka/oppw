@@ -46,7 +46,6 @@ import com.oppw.monitor.ui.theme.PrimaryBlue
 import com.oppw.monitor.ui.theme.TextSecondary
 import com.oppw.monitor.ui.theme.WarningAmber
 import com.oppw.monitor.util.age
-import com.oppw.monitor.util.isRoutineEvent
 import com.oppw.monitor.util.liveSourceAge
 import com.oppw.monitor.util.priceHealth
 import com.oppw.monitor.util.shortDateTime
@@ -111,9 +110,8 @@ fun LogsScreen(state: UiState, viewModel: MainViewModel, onRetry: () -> Unit) {
                 }
 
                 items(count = events.itemCount, key = { index -> events[index]?.id ?: "event-$index" }) { index ->
-                    events[index]?.let { event ->
-                        if (showRoutineChecks || !isRoutineEvent(event)) EventCard(event)
-                    }
+                    val event = events[index]
+                    if (event != null) EventCard(event)
                 }
 
                 when (val append = events.loadState.append) {

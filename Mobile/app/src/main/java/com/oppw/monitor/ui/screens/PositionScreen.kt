@@ -32,6 +32,7 @@ import com.oppw.monitor.util.leverage
 import com.oppw.monitor.util.liveSourceAge
 import com.oppw.monitor.util.money
 import com.oppw.monitor.util.percent
+import com.oppw.monitor.util.potentialEffectiveLeverage
 import com.oppw.monitor.util.price
 import com.oppw.monitor.util.shortDateTime
 import com.oppw.monitor.util.timeOnly
@@ -50,11 +51,79 @@ fun PositionScreen(state: UiState, onRetry: () -> Unit) {
             val snapshot = state.response!!.snapshot
             val position = snapshot.position
             if (position == null) {
-                Column(Modifier.fillMaxSize().padding(14.dp)) {
-                    AppCard(Modifier.fillMaxWidth()) {
-                        Text("No open position", style = MaterialTheme.typography.titleLarge)
-                        Text("The app is connected and waiting for the next strategy position.", color = TextSecondary)
+                val account = snapshot.account
+                val potential = snapshot.potentialPosition
+                val previewBalance = potential?.balance?.takeIf { it > 0.0 } ?: snapshot.account.balance
+                val calculatedEffectiveLeverage = potential?.let { potentialEffectiveLeverage(it.requiredDeposit, previewBalance, it.effectiveLeverage) } ?: 0.0
+                LazyColumn(
+                    Modifier.fillMaxSize().padding(horizontal = 14.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    item {
+                        AppCard(Modifier.fillMaxWidth()) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Column {
+                                    Text("No open position", style = MaterialTheme.typography.titleLarge)
+                                    Text("Waiting for the next strategy entry.", color = TextSecondary)
+                                }
+                                StatusChip("FLAT")
+                            }
+                        }
                     }
+
+                    item {
+                        AppCard(Modifier.fillMaxWidth()) {
+                            SectionTitle("Next potential trade", if (potential?.available == true) "LIVE PREVIEW" else "UNAVAILABLE")
+                            when {
+                                potential == null -> {
+                                    Text("The publisher has not supplied potentialPosition data. Run MT5 loop v41 or newer and confirm the backend forwards snapshot.potentialPosition.", color = TextSecondary)
+                                }
+                                !potential.available -> {
+                                    Text("The next trade could not be calculated from the current MT5 account and price.", color = TextSecondary)
+                                    if (potential.error.isNotBlank()) Text(potential.error, color = DangerRed)
+                                    if (potential.strategyLeverage > 0.0) Metric("Chosen leverage", leverage(potential.strategyLeverage))
+                                    if (potential.leverageReason.isNotBlank()) {
+                                        Text("Why ${potential.strategyLeverage.toInt()}x", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                                        Text(potential.leverageReason)
+                                    }
+                                }
+                                else -> {
+                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                        Column {
+                                            Text("${potential.side} ${potential.symbol}", style = MaterialTheme.typography.headlineMedium)
+                                            Text("Calculated at the current MT5 price", color = TextSecondary)
+                                        }
+                                        StatusChip("${potential.strategyLeverage.toInt()}x", "green")
+                                    }
+                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                                        Metric("Potential volume", volume(potential.volume), Modifier.weight(1f), BrightGreen)
+                                        Metric("Current price", price(potential.price), Modifier.weight(1f))
+                                    }
+                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                                        Metric("Required deposit", money(potential.requiredDeposit, account.currency), Modifier.weight(1f))
+                                        Metric("Account balance", money(previewBalance, account.currency), Modifier.weight(1f))
+                                    }
+                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                                        Metric("Chosen leverage", leverage(potential.strategyLeverage), Modifier.weight(1f))
+                                        Metric("Effective leverage", leverage(calculatedEffectiveLeverage), Modifier.weight(1f))
+                                    }
+                                    Text("Effective leverage = required deposit ÷ balance", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                                    if (potential.positionNotional > 0.0) {
+                                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                                            Metric("Potential notional", money(potential.positionNotional, account.currency), Modifier.weight(1f))
+                                            Metric("Sizing units", potential.sizingUnits.toString(), Modifier.weight(1f))
+                                        }
+                                    }
+                                    if (potential.leverageReason.isNotBlank()) {
+                                        Text("Why ${potential.strategyLeverage.toInt()}x", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                                        Text(potential.leverageReason)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    state.error?.let { error -> item { ErrorPanel("Showing cached data. $error", onRetry) } }
                 }
                 return
             }

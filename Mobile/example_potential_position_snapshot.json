@@ -1,0 +1,49 @@
+{
+  "ok": true,
+  "generatedAt": "2026-07-18T16:30:00+02:00",
+  "snapshot": {
+    "connection": {
+      "connected": true,
+      "lastSync": "2026-07-18T16:30:00+02:00",
+      "accountId": "REMOVED_DEMO_ACCOUNT_ID",
+      "week": "2026-W29",
+      "health": "WARNING",
+      "phase": "Weekend",
+      "regime": "None",
+      "nextAction": "None",
+      "nextActionAt": "",
+      "heartbeatStatus": "RUNNING",
+      "lastUpdate": "2026-07-18T16:30:00+02:00",
+      "lastTick": "2026-07-17T21:59:55+02:00"
+    },
+    "account": {
+      "currency": "PLN",
+      "strategyCapital": 28200.0,
+      "deposit": 0.0,
+      "balance": 28200.0,
+      "equity": 28200.0
+    },
+    "position": null,
+    "potentialPosition": {
+      "available": true,
+      "symbol": "US100",
+      "side": "BUY",
+      "price": 28750.0,
+      "volume": 0.01,
+      "requiredDeposit": 2180.0,
+      "balance": 28200.0,
+      "effectiveLeverage": 0.0773049645,
+      "strategyLeverage": 8.0,
+      "leverageReason": "8x because previous full-week change -1.2000% >= -2.5000% and previous trade change -0.3000% >= -0.7000%",
+      "positionNotional": 28750.0,
+      "sizingUnits": 1,
+      "error": ""
+    },
+    "closestCondition": null,
+    "conditions": [],
+    "marketStats": {},
+    "equityCurves": {"daily": [], "weekly": [], "allTime": []},
+    "equityHistory": []
+  },
+  "eventTypes": []
+}

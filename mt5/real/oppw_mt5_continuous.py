@@ -15,6 +15,7 @@ Key execution rules
 * EXECUTOR mode is the only role permitted to submit or modify trades.
 * PUBLISHER mode is read-only and owns backend publishing while active.
 * EXECUTOR automatically publishes when no PUBLISHER heartbeat is active.
+* Flat status reports the next potential volume, required margin deposit and leverage decision.
 
 Run with `--mode executor|publisher` and `--account demo|real`. DEMO loads
 oppw-mt5-config.py and REAL loads real-mt5-config.py. Live trading is disabled
@@ -46,7 +47,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-BUILD_ID = "2026-07-18-dual-role-multi-account-v40"
+BUILD_ID = "2026-07-18-flat-position-preview-v41"
 SCHEDULED_ACTION_LEAD_SECONDS = 3.0
 AUTOTRADING_REMINDER_SECONDS = 60.0
 STALE_TICK_REMINDER_SECONDS = 60.0
@@ -680,7 +681,7 @@ class MobileMonitorPublisher:
         public_events = [{key: value for key, value in event.items() if not key.startswith("_spool") and key != "_sourcePid"} for event in events]
         payload = {"accountKey": self.cfg.monitor_account_key, "capturedAt": captured_at, "snapshot": snapshot_copy, "events": public_events}
         body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-        request = urllib.request.Request(self.cfg.monitor_ingest_url, data=body, method="POST", headers={"Authorization": f"Bearer {self.cfg.monitor_write_token}", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "OPPW-MT5-Publisher/40"})
+        request = urllib.request.Request(self.cfg.monitor_ingest_url, data=body, method="POST", headers={"Authorization": f"Bearer {self.cfg.monitor_write_token}", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "OPPW-MT5-Publisher/41"})
         try:
             with urllib.request.urlopen(request, timeout=self.cfg.monitor_timeout_seconds) as response:
                 if int(response.status) not in (200, 201):
@@ -1502,6 +1503,82 @@ class OPPWContinuousStrategy:
         direction = "at current price" if abs(difference) <= tolerance else "above" if difference > 0 else "below"
         return f"{name} @ {price:.5f} — {distance:.5f} points {direction} ({distance_pct:.4f}%)"
 
+
+    def leverage_decision(self) -> tuple[int, str]:
+        previous_full_week = float(self.state.prev_full_week_change)
+        previous_trade = float(self.state.prev_change)
+        if self.cfg.base_leverage == 8:
+            triggers: list[str] = []
+            if previous_full_week < -0.025:
+                triggers.append(f"previous full-week change {previous_full_week:.4%} < -2.5000%")
+            if previous_trade < -0.007:
+                triggers.append(f"previous trade change {previous_trade:.4%} < -0.7000%")
+            if triggers:
+                return self.cfg.loss_leverage, f"{self.cfg.loss_leverage}x because " + " and ".join(triggers)
+            return self.cfg.base_leverage, (
+                f"{self.cfg.base_leverage}x because previous full-week change {previous_full_week:.4%} >= -2.5000% "
+                f"and previous trade change {previous_trade:.4%} >= -0.7000%"
+            )
+        return self.cfg.base_leverage, f"{self.cfg.base_leverage}x because base leverage is configured as {self.cfg.base_leverage}x"
+
+    def potential_position_preview(self) -> dict[str, Any]:
+        leverage, leverage_reason = self.leverage_decision()
+        result: dict[str, Any] = {
+            "available": False,
+            "symbol": self.cfg.trade_symbol,
+            "side": "BUY",
+            "price": 0.0,
+            "volume": 0.0,
+            "requiredDeposit": 0.0,
+            "balance": 0.0,
+            "effectiveLeverage": 0.0,
+            "strategyLeverage": float(leverage),
+            "leverageReason": leverage_reason,
+            "positionNotional": 0.0,
+            "sizingUnits": 0,
+            "error": "",
+        }
+        try:
+            account = mt5.account_info()
+            info = mt5.symbol_info(self.cfg.trade_symbol)
+            tick = self.latest_tick(self.cfg.trade_symbol)
+            if account is None or info is None:
+                raise RuntimeError(f"Cannot obtain account/symbol data: {mt5.last_error()}")
+
+            balance = float(getattr(account, "balance", 0.0) or 0.0)
+            ask = float(getattr(tick, "ask", 0.0) or 0.0)
+            bid = float(getattr(tick, "bid", 0.0) or 0.0)
+            last = float(getattr(tick, "last", 0.0) or 0.0)
+            price = ask if ask > 0 else last if last > 0 else bid
+            if price <= 0:
+                raise RuntimeError(f"No usable current price for {self.cfg.trade_symbol}")
+
+            minimum_volume_notional = self.minimum_volume_notional(info, price)
+            _, _, sizing_units = self.target_notional(balance, leverage, minimum_volume_notional)
+            volume = self.normalized_volume(sizing_units, info)
+            if volume <= 0:
+                raise RuntimeError("Calculated potential volume is below the broker minimum")
+
+            required_deposit_raw = mt5.order_calc_margin(mt5.ORDER_TYPE_BUY, self.cfg.trade_symbol, volume, price)
+            if required_deposit_raw is None:
+                raise RuntimeError(f"order_calc_margin failed: {mt5.last_error()}")
+            required_deposit = float(required_deposit_raw)
+            effective_leverage = required_deposit / balance if balance > 0 else 0.0
+
+            result.update({
+                "available": True,
+                "price": price,
+                "volume": volume,
+                "requiredDeposit": required_deposit,
+                "balance": balance,
+                "effectiveLeverage": effective_leverage,
+                "positionNotional": sizing_units * minimum_volume_notional,
+                "sizingUnits": sizing_units,
+            })
+        except Exception as exc:
+            result["error"] = str(exc)
+        return result
+
     def format_status(self, reason: str, position, now: datetime, current_bar: Optional[M1Bar] = None) -> str:
         due, due_reason, final_day = self.weekly_exit_status(position, now)
         account = mt5.account_info()
@@ -1513,14 +1590,30 @@ class OPPWContinuousStrategy:
         regime = self.protection_regime(now) if position is not None else "None"
 
         if position is None:
-            leverage = self.choose_leverage()
+            preview = self.potential_position_preview()
+            leverage = int(preview["strategyLeverage"])
+            leverage_reason = str(preview["leverageReason"])
+            if bool(preview["available"]):
+                potential_lines = [
+                    f"next potential position: BUY {float(preview['volume']):.2f} lot {preview['symbol']} @ {float(preview['price']):.5f}",
+                    f"required deposit: {float(preview['requiredDeposit']):.2f}{currency_suffix}",
+                    f"effective leverage: {float(preview['effectiveLeverage']):.4f}x (required deposit / balance)",
+                    f"potential notional: {float(preview['positionNotional']):.2f}{currency_suffix}",
+                ]
+            else:
+                potential_lines = [
+                    "next potential position: unavailable",
+                    f"potential position error: {preview['error'] or 'unknown'}",
+                ]
             lines = [
                 f"==================== TRADE STATUS - {reason} ====================",
                 f"phase: {phase} protection regime: {regime}",
                 f"time: {now:%Y-%m-%d %H:%M:%S %Z} week: {iso_week_key(now.date())}",
                 "closest condition: none — no open position",
                 "position: FLAT",
-                f"leverage: {leverage}x",
+                *potential_lines,
+                f"chosen leverage: {leverage}x",
+                f"leverage reason: {leverage_reason}",
                 f"current P/L: 0.00{currency_suffix}",
                 "current P/L %: 0.0000%",
                 "current P/L % leveraged: 0.0000%",
@@ -1842,6 +1935,7 @@ class OPPWContinuousStrategy:
                 "currency": currency,
             },
             "position": position_payload,
+            "potentialPosition": self.potential_position_preview() if position is None else None,
             "conditions": conditions,
             "closestCondition": closest,
             "equityHistory": [],
@@ -1903,9 +1997,7 @@ class OPPWContinuousStrategy:
     # ----- Calculations and order sizing -------------------------------------
 
     def choose_leverage(self) -> int:
-        if self.cfg.base_leverage == 8 and (self.state.prev_full_week_change < -0.025 or self.state.prev_change < -0.007):
-            return self.cfg.loss_leverage
-        return self.cfg.base_leverage
+        return self.leverage_decision()[0]
 
     def hard_sl_ratio(self, leverage: int) -> float:
         return (100.0 - self.cfg.leverage_stop_points / leverage) / 100.0

@@ -125,6 +125,7 @@ object JsonParser {
         return MonitorSnapshot(
             connection = parseConnection(json.getJSONObject("connection")), account = parseAccount(json.getJSONObject("account")),
             position = json.optJSONObject("position")?.takeUnless { it.has("open") && !it.optBoolean("open") }?.let(::parsePosition),
+            potentialPosition = (json.optJSONObject("potentialPosition") ?: json.optJSONObject("potential_position"))?.let(::parsePotentialPosition),
             closestCondition = closest, conditions = conditions, marketStats = parseMarketStats(json.optJSONObject("marketStats")),
             equityCurves = parseEquityCurves(json.optJSONObject("equityCurves")), equityHistory = parseEquity(json.optJSONArray("equityHistory") ?: JSONArray()),
         )
@@ -142,6 +143,17 @@ object JsonParser {
     private fun parseAccount(json: JSONObject) = AccountStatus(
         currency = json.optString("currency", "PLN"), strategyCapital = json.optDouble("strategyCapital"), deposit = json.optDouble("deposit"),
         balance = json.optDouble("balance"), equity = json.optDouble("equity"),
+    )
+
+    private fun parsePotentialPosition(json: JSONObject) = PotentialPosition(
+        available = json.optBooleanAny("available"), symbol = json.optStringAny("symbol"), side = json.optStringAny("side").ifBlank { "BUY" },
+        price = json.optDoubleAny("price", "currentPrice", "current_price"), volume = json.optDoubleAny("volume"),
+        requiredDeposit = json.optDoubleAny("requiredDeposit", "required_deposit"), balance = json.optDoubleAny("balance"),
+        effectiveLeverage = json.optDoubleAny("effectiveLeverage", "effective_leverage"),
+        strategyLeverage = json.optDoubleAny("strategyLeverage", "strategy_leverage", "chosenLeverage", "chosen_leverage"),
+        leverageReason = json.optStringAny("leverageReason", "leverage_reason"),
+        positionNotional = json.optDoubleAny("positionNotional", "position_notional"), sizingUnits = json.optIntAny("sizingUnits", "sizing_units"),
+        error = json.optStringAny("error"),
     )
 
     private fun parsePosition(json: JSONObject) = PositionStatus(
@@ -199,5 +211,9 @@ object JsonParser {
 
     private fun requireOk(root: JSONObject) { if (!root.optBoolean("ok", false)) throw IllegalStateException(root.optString("error", "API returned an error")) }
     private fun JSONObject.optNullableDouble(name: String): Double? = if (!has(name) || isNull(name)) null else optDouble(name)
+    private fun JSONObject.optBooleanAny(vararg names: String): Boolean = names.firstNotNullOfOrNull { name -> if (has(name) && !isNull(name)) optBoolean(name) else null } ?: false
+    private fun JSONObject.optDoubleAny(vararg names: String): Double = names.firstNotNullOfOrNull { name -> if (has(name) && !isNull(name)) optDouble(name).takeIf { it.isFinite() } else null } ?: 0.0
+    private fun JSONObject.optIntAny(vararg names: String): Int = names.firstNotNullOfOrNull { name -> if (has(name) && !isNull(name)) optInt(name) else null } ?: 0
+    private fun JSONObject.optStringAny(vararg names: String): String = names.firstNotNullOfOrNull { name -> if (has(name) && !isNull(name)) optString(name).takeIf { it.isNotBlank() } else null } ?: ""
     private fun JSONArray?.toStrings(): List<String> = if (this == null) emptyList() else buildList { for (i in 0 until length()) add(optString(i)) }
 }

@@ -25,6 +25,7 @@ data class MonitorSnapshot(
     val connection: ConnectionStatus,
     val account: AccountStatus,
     val position: PositionStatus?,
+    val potentialPosition: PotentialPosition?,
     val closestCondition: PriceCondition?,
     val conditions: List<PriceCondition>,
     val marketStats: MarketStats,
@@ -56,6 +57,23 @@ data class AccountStatus(
     val deposit: Double,
     val balance: Double,
     val equity: Double,
+)
+
+
+data class PotentialPosition(
+    val available: Boolean,
+    val symbol: String,
+    val side: String,
+    val price: Double,
+    val volume: Double,
+    val requiredDeposit: Double,
+    val balance: Double,
+    val effectiveLeverage: Double,
+    val strategyLeverage: Double,
+    val leverageReason: String,
+    val positionNotional: Double,
+    val sizingUnits: Int,
+    val error: String,
 )
 
 data class PositionStatus(
