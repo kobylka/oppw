@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.dp
 import com.oppw.monitor.data.MarketWeekStats
 import com.oppw.monitor.data.UiState
 import com.oppw.monitor.ui.components.AppCard
+import com.oppw.monitor.ui.components.AllTimeEquityChart
 import com.oppw.monitor.ui.components.EquityChart
 import com.oppw.monitor.ui.components.ErrorPanel
 import com.oppw.monitor.ui.components.LoadingPanel
@@ -33,6 +34,7 @@ import com.oppw.monitor.ui.theme.PrimaryBlue
 import com.oppw.monitor.ui.theme.TextSecondary
 import com.oppw.monitor.util.age
 import com.oppw.monitor.util.countdown
+import com.oppw.monitor.util.humanProtection
 import com.oppw.monitor.util.leverage
 import com.oppw.monitor.util.money
 import com.oppw.monitor.util.optionalPercent
@@ -54,7 +56,9 @@ fun OverviewScreen(state: UiState, onRetry: () -> Unit) {
             val position = snapshot.position
             val retrievalAge = secondsSinceEpoch(state.lastSuccessfulFetchEpochMs, state.nowEpochMs)
             val effectivePnlPercent = if (account.balance != 0.0) (position?.profit ?: 0.0) / account.balance * 100.0 else 0.0
-            val regime = position?.protectionRegime?.ifBlank { null } ?: connection.regime.ifBlank { "None" }
+            val exposure = if (position != null) account.deposit * 20.0 else 0.0
+            val effectiveLeverage = if (account.equity > 0.0) exposure / account.equity else 0.0
+            val regime = humanProtection(position?.protectionRegime?.ifBlank { null } ?: connection.regime.ifBlank { "None" })
             val nextActionLabel = displayNextAction(connection.nextAction, connection.nextActionAt)
 
             LazyColumn(
@@ -82,7 +86,7 @@ fun OverviewScreen(state: UiState, onRetry: () -> Unit) {
                         AppCard(Modifier.weight(1f)) {
                             Text("Health", color = TextSecondary)
                             StatusChip(connection.health, connection.health)
-                            Text("HTTPS retrieved ${age(retrievalAge)} ago", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                            Text("Heartbeat: ${age(retrievalAge)}", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
                         }
                         AppCard(Modifier.weight(1f)) {
                             Text("Phase", color = TextSecondary)
@@ -120,8 +124,8 @@ fun OverviewScreen(state: UiState, onRetry: () -> Unit) {
                             Metric("P/L % leveraged", percent(position?.leveragedProfitPercent ?: 0.0), Modifier.weight(1f), pnlColor(position?.leveragedProfitPercent ?: 0.0))
                         }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-                            Metric("Effective leverage", leverage(position?.effectiveLeverage ?: 0.0), Modifier.weight(1f))
-                            Metric("Exposure", money(position?.exposure ?: 0.0, account.currency), Modifier.weight(1f))
+                            Metric("Effective leverage", leverage(effectiveLeverage), Modifier.weight(1f))
+                            Metric("Exposure", money(exposure, account.currency), Modifier.weight(1f))
                         }
                     }
                 }
@@ -144,7 +148,7 @@ fun OverviewScreen(state: UiState, onRetry: () -> Unit) {
                 item {
                     AppCard(Modifier.fillMaxWidth()) {
                         SectionTitle("Equity curve", "all time")
-                        EquityChart(snapshot.equityCurves.allTime, account.currency)
+                        AllTimeEquityChart(snapshot.equityCurves.allTime, account.currency)
                     }
                 }
 

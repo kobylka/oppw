@@ -26,6 +26,7 @@ import com.oppw.monitor.ui.theme.DangerRed
 import com.oppw.monitor.ui.theme.PrimaryBlue
 import com.oppw.monitor.ui.theme.TextSecondary
 import com.oppw.monitor.util.age
+import com.oppw.monitor.util.humanProtection
 import com.oppw.monitor.util.leverage
 import com.oppw.monitor.util.liveSourceAge
 import com.oppw.monitor.util.money
@@ -53,9 +54,15 @@ fun PositionScreen(state: UiState, onRetry: () -> Unit) {
                 return
             }
             val account = snapshot.account
-            val closest = snapshot.closestCondition
-            val conditions = snapshot.conditions.sortedBy { it.distancePoints }
+            val ohPending = snapshot.connection.nextAction.equals("OH", true)
+            val conditions = snapshot.conditions.filterNot { it.name.equals("OH", true) && !ohPending }.sortedBy { it.distancePoints }
+            val closest = snapshot.closestCondition?.takeUnless { it.name.equals("OH", true) && !ohPending } ?: conditions.firstOrNull()
             val minimumBalance = account.deposit * 1.765
+            val exposure = account.deposit * 20.0
+            val effectiveLeverage = if (account.equity > 0.0) exposure / account.equity else 0.0
+            val potentialTakeProfit = position.potentialTakeProfit.takeIf { it > 0.0 }
+                ?: conditions.firstOrNull { it.name.equals("OH", true) || it.name.equals("CH", true) }?.targetPrice
+                ?: 0.0
             val liveTickAge = liveSourceAge(position.tickAgeSeconds, position.priceTime.ifBlank { snapshot.connection.lastSync }, state.nowEpochMs)
 
             LazyColumn(
@@ -87,7 +94,7 @@ fun PositionScreen(state: UiState, onRetry: () -> Unit) {
                         Text("Price age: ${age(liveTickAge)}", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                             Metric("Stop loss", price(position.stopLoss), Modifier.weight(1f), DangerRed)
-                            Metric("Take profit", price(position.takeProfit), Modifier.weight(1f), BrightGreen)
+                            Metric("Potential OH/CH target", price(potentialTakeProfit), Modifier.weight(1f), BrightGreen)
                         }
                     }
                 }
@@ -129,15 +136,15 @@ fun PositionScreen(state: UiState, onRetry: () -> Unit) {
                             Metric("P/L % leveraged", percent(position.leveragedProfitPercent), Modifier.weight(1f), if (position.leveragedProfitPercent >= 0) BrightGreen else DangerRed)
                         }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                            Metric("Exposure", money(position.exposure, account.currency), Modifier.weight(1f))
-                            Metric("Effective leverage", leverage(position.effectiveLeverage), Modifier.weight(1f))
+                            Metric("Exposure", money(exposure, account.currency), Modifier.weight(1f))
+                            Metric("Effective leverage", leverage(effectiveLeverage), Modifier.weight(1f))
                         }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                             Metric("Deposit", money(account.deposit, account.currency), Modifier.weight(1f))
                             Metric("Minimum balance at 50% margin", money(minimumBalance, account.currency), Modifier.weight(1f))
                         }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                            Metric("Protection", position.protectionRegime.ifBlank { "—" }, Modifier.weight(1f))
+                            Metric("Protection", humanProtection(position.protectionRegime), Modifier.weight(1f))
                             Metric("Break-even", if (position.breakEvenArmed) "ARMED" else "OFF", Modifier.weight(1f), if (position.breakEvenArmed) BrightGreen else TextSecondary)
                         }
                     }

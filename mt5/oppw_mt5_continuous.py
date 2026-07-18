@@ -4,13 +4,14 @@ Continuous MetaTrader 5 implementation of the OPPW strategy.
 Key execution rules
 -------------------
 * BUY is sent at XNYS cash open minus three seconds for a valid new-week entry.
-* OH is evaluated at cash open minus three seconds.
+* OH is evaluated exactly once at cash open minus three seconds and is no longer reported after that check.
 * CH and final-week TO are evaluated at XNYS session close minus three seconds.
 * Hard SL and weekday SL levels are maintained with TRADE_ACTION_SLTP.
 * One configurable TSL is active continuously from Thursday date change through Friday and the weekend if needed.
 * TSL is a broker-side SL label; candle lows do not latch it.
 * Closing reasons are resolved from the MT5 closing deal and active protection state.
 * Status deposit is read directly from MT5 as float(account.margin).
+* Terminal/account AutoTrading permissions are verified continuously before every live trade request.
 
 Live trading is disabled unless LIVE_ENABLED=True in oppw_mt5_config.py or
 OPPW_LIVE=1 is set.
@@ -37,8 +38,10 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-BUILD_ID = "2026-07-17-mobile-dashboard-v34"
+BUILD_ID = "2026-07-18-weekend-stale-tick-v37"
 SCHEDULED_ACTION_LEAD_SECONDS = 3.0
+AUTOTRADING_REMINDER_SECONDS = 60.0
+STALE_TICK_REMINDER_SECONDS = 60.0
 
 try:
     import exchange_calendars as xcals
@@ -129,6 +132,13 @@ class SessionTimes:
     weekly_close: datetime
     close_bar_open: datetime
     close_processing: datetime
+
+
+class StaleTickError(RuntimeError):
+    def __init__(self, symbol: str, age_seconds: float):
+        self.symbol = symbol
+        self.age_seconds = age_seconds
+        super().__init__(f"Stale tick for {symbol}: age={age_seconds:.1f}s")
 
 
 # -----------------------------------------------------------------------------
@@ -369,7 +379,7 @@ class MobileMonitorPublisher:
                 "Authorization": f"Bearer {self.cfg.monitor_write_token}",
                 "Content-Type": "application/json",
                 "Accept": "application/json",
-                "User-Agent": "OPPW-MT5-Publisher/34",
+                "User-Agent": "OPPW-MT5-Publisher/36",
             },
         )
         try:
@@ -566,6 +576,9 @@ class OPPWContinuousStrategy:
         self.last_meaningful_signature: Optional[tuple[Any, ...]] = None
         self.last_week_plan_key = ""
         self.last_trade_request_monotonic = 0.0
+        self.last_autotrading_signature: Optional[tuple[Any, ...]] = None
+        self.last_autotrading_log_monotonic = 0.0
+        self.last_stale_tick_log_monotonic: dict[str, float] = {}
         self._session_times_cache: dict[date, SessionTimes] = {}
         self.last_monitor_publish_monotonic = 0.0
         self.last_monitor_minute_key = ""
@@ -607,6 +620,8 @@ class OPPWContinuousStrategy:
         )
         if not self.cfg.live_enabled:
             self.log.warning("EVENT DRY_RUN live_enabled=false")
+        else:
+            self.ensure_autotrading_enabled("CONNECT", force_log=True)
 
     def disconnect(self) -> None:
         if self.connected:
@@ -617,6 +632,55 @@ class OPPWContinuousStrategy:
         terminal = mt5.terminal_info()
         account = mt5.account_info()
         return terminal is not None and account is not None and bool(getattr(terminal, "connected", True))
+
+    def autotrading_status(self) -> tuple[bool, dict[str, bool]]:
+        terminal = mt5.terminal_info()
+        account = mt5.account_info()
+        values = {
+            "connected": terminal is not None and bool(getattr(terminal, "connected", True)),
+            "terminal_trade_allowed": terminal is not None and bool(getattr(terminal, "trade_allowed", False)),
+            "tradeapi_disabled": terminal is None or bool(getattr(terminal, "tradeapi_disabled", False)),
+            "account_trade_allowed": account is not None and bool(getattr(account, "trade_allowed", True)),
+            "account_trade_expert": account is not None and bool(getattr(account, "trade_expert", True)),
+        }
+        enabled = all((
+            values["connected"], values["terminal_trade_allowed"], not values["tradeapi_disabled"],
+            values["account_trade_allowed"], values["account_trade_expert"],
+        ))
+        return enabled, values
+
+    def ensure_autotrading_enabled(self, context: str, force_log: bool = False) -> bool:
+        if not self.cfg.live_enabled:
+            return True
+
+        enabled, values = self.autotrading_status()
+        signature = (
+            enabled, values["connected"], values["terminal_trade_allowed"], values["tradeapi_disabled"],
+            values["account_trade_allowed"], values["account_trade_expert"],
+        )
+        now = time_module.monotonic()
+
+        if enabled:
+            if force_log or (self.last_autotrading_signature is not None and not bool(self.last_autotrading_signature[0])):
+                self.log.info(
+                    "EVENT AUTOTRADING_ENABLED context=%s terminal_trade_allowed=%s tradeapi_disabled=%s account_trade_allowed=%s account_trade_expert=%s",
+                    context, values["terminal_trade_allowed"], values["tradeapi_disabled"],
+                    values["account_trade_allowed"], values["account_trade_expert"],
+                )
+            self.last_autotrading_signature = signature
+            return True
+
+        changed = signature != self.last_autotrading_signature
+        reminder_due = now - self.last_autotrading_log_monotonic >= AUTOTRADING_REMINDER_SECONDS
+        if force_log or changed or reminder_due:
+            self.last_autotrading_log_monotonic = now
+            self.log.error(
+                "EVENT AUTOTRADING_DISABLED context=%s connected=%s terminal_trade_allowed=%s tradeapi_disabled=%s account_trade_allowed=%s account_trade_expert=%s action=enable_AutoTrading_in_MT5",
+                context, values["connected"], values["terminal_trade_allowed"], values["tradeapi_disabled"],
+                values["account_trade_allowed"], values["account_trade_expert"],
+            )
+        self.last_autotrading_signature = signature
+        return False
 
     # ----- Sessions -----------------------------------------------------------
 
@@ -690,8 +754,25 @@ class OPPWContinuousStrategy:
         tick_local = self.mt5_timestamp_to_local(timestamp)
         age = (datetime.now(self.tz) - tick_local).total_seconds()
         if age > self.cfg.maximum_tick_age_seconds:
-            raise RuntimeError(f"Stale tick for {symbol}: age={age:.1f}s")
+            raise StaleTickError(symbol, age)
         return tick
+
+    def fresh_tick_for_protection(self, position, context: str) -> Optional[Any]:
+        try:
+            return self.require_fresh_tick(position.symbol)
+        except StaleTickError as exc:
+            key = f"{position.symbol}:{context}"
+            now = time_module.monotonic()
+            previous = self.last_stale_tick_log_monotonic.get(key, 0.0)
+            if now - previous >= STALE_TICK_REMINDER_SECONDS:
+                self.last_stale_tick_log_monotonic[key] = now
+                log = self.log.error if float(position.sl) <= 0 else self.log.warning
+                log(
+                    "EVENT PROTECTION_DEFERRED context=%s symbol=%s reason=stale_tick tick_age_seconds=%.1f limit_seconds=%.1f existing_sl=%.5f existing_tp=%.5f exit_latched=%s",
+                    context, position.symbol, exc.age_seconds, self.cfg.maximum_tick_age_seconds,
+                    float(position.sl), float(position.tp), self.state.exit_latched_reason or "none",
+                )
+            return None
 
     def current_m1_bar(self, symbol: str) -> Optional[M1Bar]:
         rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, 3)
@@ -1052,10 +1133,14 @@ class OPPWContinuousStrategy:
 
     def protection_regime(self, now: datetime) -> str:
         if self.state.exit_latched_reason:
-            return f"EXIT_BRACKET:{self.state.exit_latched_reason}"
+            return f"Closing position: {self.state.exit_latched_reason}"
         if now.weekday() in (3, 4, 5, 6) or self.state.active_sl_reason == "TSL":
-            return "TSL_0.4000%" + ("+BE_TP" if self.state.break_even else "")
-        return "HARD_SL+BE_TP" if self.state.break_even else "HARD_SL"
+            return "Tight stop loss (0.4%)" + (" + break-even exit" if self.state.break_even else "")
+        return "Hard stop loss + break-even exit" if self.state.break_even else "Hard stop loss"
+
+    def oh_check_pending(self, now: datetime) -> bool:
+        session = self.session_times(now.date())
+        return self.state.last_open_action_date != now.date().isoformat() and now < session.cash_open
 
     def weekly_exit_status(self, position, now: datetime) -> tuple[bool, str, Optional[date]]:
         final_day = self.final_trading_day(now.date())
@@ -1097,7 +1182,8 @@ class OPPWContinuousStrategy:
             add(self.state.active_tp_reason or "BH", ceil_step(entry * self.cfg.break_even_ratio, tick_size))
         if float(position.tp) > 0:
             add(self.state.active_tp_reason or "BROKER_TP", float(position.tp))
-        add("OH", ceil_step(entry * (1.0 + self.cfg.tpps[now.weekday() if now.weekday() < 5 else 4]), tick_size))
+        if self.oh_check_pending(now):
+            add("OH", ceil_step(entry * (1.0 + self.cfg.tpps[now.weekday() if now.weekday() < 5 else 4]), tick_size))
 
         if not candidates:
             return "none"
@@ -1296,7 +1382,8 @@ class OPPWContinuousStrategy:
 
         weekday_index = now.weekday() if now.weekday() < 5 else 4
         tpp = self.cfg.tpps[weekday_index]
-        add("OH", ceil_step(entry * (1.0 + tpp), tick_size), trade_bid, self.cfg.trade_symbol)
+        if self.oh_check_pending(now):
+            add("OH", ceil_step(entry * (1.0 + tpp), tick_size), trade_bid, self.cfg.trade_symbol)
 
         # The mobile dashboard displays OH and CH against the same trade-entry
         # target. On Friday both are exactly entry * 1.05. This is presentation
@@ -1313,11 +1400,9 @@ class OPPWContinuousStrategy:
     def monitor_closest_condition(conditions: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
         return conditions[0] if conditions else None
 
-    def monitor_position_exposure(self, position, bid: float) -> float:
-        if position is None or bid <= 0:
-            return 0.0
-        one_percent_profit = mt5.order_calc_profit(mt5.ORDER_TYPE_BUY, position.symbol, float(position.volume), bid, bid * 1.01)
-        return abs(float(one_percent_profit)) / 0.01 if one_percent_profit is not None else 0.0
+    @staticmethod
+    def monitor_position_exposure(position, deposit: float) -> float:
+        return deposit * 20.0 if position is not None and deposit > 0 else 0.0
 
     def build_mobile_snapshot(self, position, now: datetime, current_bar: Optional[M1Bar]) -> dict[str, Any]:
         account = mt5.account_info()
@@ -1353,7 +1438,11 @@ class OPPWContinuousStrategy:
             profit = float(getattr(position, "profit", 0.0)) + float(getattr(position, "swap", 0.0))
             timestamp = getattr(position, "time_msc", 0) / 1000.0 if getattr(position, "time_msc", 0) else float(position.time)
             opened = self.mt5_timestamp_to_local(timestamp)
-            exposure = self.monitor_position_exposure(position, bid)
+            exposure = self.monitor_position_exposure(position, deposit)
+            info = mt5.symbol_info(position.symbol)
+            tick_size = float(getattr(info, "trade_tick_size", 0.0) or getattr(info, "point", 0.0) or 0.01) if info is not None else 0.01
+            weekday_index = now.weekday() if now.weekday() < 5 else 4
+            potential_take_profit = ceil_step(entry * (1.0 + self.cfg.tpps[weekday_index]), tick_size)
             position_payload = {
                 "open": True,
                 "symbol": str(position.symbol),
@@ -1376,6 +1465,7 @@ class OPPWContinuousStrategy:
                 "effectiveLeverage": exposure / equity if equity > 0 else 0.0,
                 "stopLoss": float(position.sl),
                 "takeProfit": float(position.tp),
+                "potentialTakeProfit": potential_take_profit,
                 "breakEvenArmed": bool(self.state.break_even),
                 "protectionRegime": regime,
                 "activeSlReason": self.state.active_sl_reason,
@@ -1665,6 +1755,8 @@ class OPPWContinuousStrategy:
                 self.filling_mode_name(request["type_filling"]),
             )
             return False
+        if not self.ensure_autotrading_enabled("BUY"):
+            return False
         if not self.request_allowed_now():
             return False
 
@@ -1676,12 +1768,16 @@ class OPPWContinuousStrategy:
             self.filling_mode_name(request.get("type_filling", -1)),
         )
         if check is None or int(check.retcode) not in (0, getattr(mt5, "TRADE_RETCODE_DONE", 10009)):
+            if int(getattr(check, "retcode", -1)) == int(getattr(mt5, "TRADE_RETCODE_CLIENT_DISABLES_AT", 10027)):
+                self.ensure_autotrading_enabled("BUY_CHECK_RETCODE_10027", force_log=True)
             self.log.error("EVENT BUY_CHECK_REJECTED retcode=%s comment=%s", getattr(check, "retcode", None), getattr(check, "comment", mt5.last_error()))
             return False
 
         result = mt5.order_send(request)
         accepted = {getattr(mt5, "TRADE_RETCODE_DONE", 10009), getattr(mt5, "TRADE_RETCODE_PLACED", 10008), getattr(mt5, "TRADE_RETCODE_DONE_PARTIAL", 10010)}
         if result is None or int(result.retcode) not in accepted:
+            if int(getattr(result, "retcode", -1)) == int(getattr(mt5, "TRADE_RETCODE_CLIENT_DISABLES_AT", 10027)):
+                self.ensure_autotrading_enabled("BUY_RETCODE_10027", force_log=True)
             self.log.error("EVENT BUY_REJECTED retcode=%s comment=%s", getattr(result, "retcode", None), getattr(result, "comment", mt5.last_error()))
             return False
 
@@ -1722,6 +1818,8 @@ class OPPWContinuousStrategy:
                 reason, position.ticket, float(position.sl), desired_sl, float(position.tp), desired_tp,
             )
             return False
+        if not self.ensure_autotrading_enabled("SLTP"):
+            return False
         if not self.request_allowed_now():
             return False
 
@@ -1736,6 +1834,8 @@ class OPPWContinuousStrategy:
         result = mt5.order_send(request)
         accepted = {getattr(mt5, "TRADE_RETCODE_DONE", 10009), getattr(mt5, "TRADE_RETCODE_NO_CHANGES", 10025)}
         if result is None or int(result.retcode) not in accepted:
+            if int(getattr(result, "retcode", -1)) == int(getattr(mt5, "TRADE_RETCODE_CLIENT_DISABLES_AT", 10027)):
+                self.ensure_autotrading_enabled("SLTP_RETCODE_10027", force_log=True)
             self.log.error("EVENT SLTP_REJECTED reason=%s retcode=%s comment=%s", reason, getattr(result, "retcode", None), getattr(result, "comment", mt5.last_error()))
             return False
 
@@ -1759,11 +1859,15 @@ class OPPWContinuousStrategy:
         if not self.cfg.live_enabled:
             self.log.info("EVENT SELL_DRY_RUN reason=%s ticket=%s volume=%s bid=%.5f", reason, position.ticket, position.volume, bid)
             return False
+        if not self.ensure_autotrading_enabled(f"SELL_{reason}"):
+            return False
         if not self.request_allowed_now():
             return False
 
         request, check = self.checked_deal_request(request_base, info, f"SELL_{reason}")
         if check is None or int(check.retcode) not in (0, getattr(mt5, "TRADE_RETCODE_DONE", 10009)):
+            if int(getattr(check, "retcode", -1)) == int(getattr(mt5, "TRADE_RETCODE_CLIENT_DISABLES_AT", 10027)):
+                self.ensure_autotrading_enabled(f"SELL_{reason}_CHECK_RETCODE_10027", force_log=True)
             self.log.error("EVENT SELL_CHECK_REJECTED reason=%s retcode=%s comment=%s", reason, getattr(check, "retcode", None), getattr(check, "comment", mt5.last_error()))
             return False
 
@@ -1774,6 +1878,8 @@ class OPPWContinuousStrategy:
         result = mt5.order_send(request)
         accepted = {getattr(mt5, "TRADE_RETCODE_DONE", 10009), getattr(mt5, "TRADE_RETCODE_PLACED", 10008), getattr(mt5, "TRADE_RETCODE_DONE_PARTIAL", 10010)}
         if result is None or int(result.retcode) not in accepted:
+            if int(getattr(result, "retcode", -1)) == int(getattr(mt5, "TRADE_RETCODE_CLIENT_DISABLES_AT", 10027)):
+                self.ensure_autotrading_enabled(f"SELL_{reason}_RETCODE_10027", force_log=True)
             self.log.error("EVENT SELL_REJECTED reason=%s retcode=%s comment=%s", reason, getattr(result, "retcode", None), getattr(result, "comment", mt5.last_error()))
             return False
         self.log.info("EVENT SELL_ACCEPTED reason=%s retcode=%s", reason, result.retcode)
@@ -1797,11 +1903,13 @@ class OPPWContinuousStrategy:
             self.log.warning("EVENT EXIT_LATCHED reason=%s", reason)
         self.apply_exit_bracket(position, self.state.exit_latched_reason)
 
-    def apply_exit_bracket(self, position, reason: str) -> None:
+    def apply_exit_bracket(self, position, reason: str) -> bool:
         info = mt5.symbol_info(position.symbol)
-        tick = self.require_fresh_tick(position.symbol)
         if info is None:
             raise RuntimeError(f"symbol_info({position.symbol}) failed: {mt5.last_error()}")
+        tick = self.fresh_tick_for_protection(position, f"EXIT_{reason}")
+        if tick is None:
+            return False
 
         tick_size = float(getattr(info, "trade_tick_size", 0.0) or info.point)
         distance = self.broker_minimum_distance(info)
@@ -1813,17 +1921,18 @@ class OPPWContinuousStrategy:
             sl = float(position.sl)
         if float(position.tp) > ask and float(position.tp) < tp:
             tp = float(position.tp)
-        self.modify_sltp(position, sl, tp, f"EXIT_{reason}", reason, reason)
+        return self.modify_sltp(position, sl, tp, f"EXIT_{reason}", reason, reason)
 
-    def apply_standard_protection(self, position, now: datetime) -> None:
+    def apply_standard_protection(self, position, now: datetime) -> bool:
         if self.state.exit_latched_reason:
-            self.apply_exit_bracket(position, self.state.exit_latched_reason)
-            return
+            return self.apply_exit_bracket(position, self.state.exit_latched_reason)
 
         info = mt5.symbol_info(position.symbol)
-        tick = self.require_fresh_tick(position.symbol)
         if info is None:
             raise RuntimeError(f"symbol_info({position.symbol}) failed: {mt5.last_error()}")
+        tick = self.fresh_tick_for_protection(position, "STANDARD")
+        if tick is None:
+            return False
 
         tick_size = float(getattr(info, "trade_tick_size", 0.0) or info.point)
         distance = self.broker_minimum_distance(info)
@@ -1838,10 +1947,10 @@ class OPPWContinuousStrategy:
         min_valid_tp = ask + distance
         if desired_sl >= max_valid_sl:
             self.arm_exit(position, "PROTECTION_SL_ALREADY_CROSSED", now)
-            return
+            return False
         if desired_tp > 0 and desired_tp <= min_valid_tp:
             self.arm_exit(position, "PROTECTION_TP_ALREADY_CROSSED", now)
-            return
+            return False
 
         desired_sl = floor_step(desired_sl, tick_size)
         desired_tp = ceil_step(desired_tp, tick_size) if desired_tp > 0 else 0.0
@@ -1851,7 +1960,7 @@ class OPPWContinuousStrategy:
             reason_parts.append(f"TSL_STOP_{self.cfg.tsl_stop:.4%}_RATIO_{self.cfg.tsl_ratio:.6f}")
         if desired_tp > 0:
             reason_parts.append(f"BE_{self.cfg.break_even_ratio:.6f}")
-        self.modify_sltp(position, desired_sl, desired_tp, "+".join(reason_parts), sl_reason, tp_reason)
+        return self.modify_sltp(position, desired_sl, desired_tp, "+".join(reason_parts), sl_reason, tp_reason)
 
     # ----- Strategy conditions ------------------------------------------------
 
@@ -2025,13 +2134,16 @@ class OPPWContinuousStrategy:
         self.log_check(now, "ENTRY_SIGNAL_OPEN_AVAILABLE", self.state.entry_signal_daily_open > 0 and not self.state.entry_signal_open_pending, signal_open=self.state.entry_signal_daily_open, pending=self.state.entry_signal_open_pending)
         self.log_check(now, "EXIT_LATCH_CLEAR", not bool(self.state.exit_latched_reason), exit_latch=self.state.exit_latched_reason or "none")
 
-        try:
-            tick = self.require_fresh_tick(position.symbol)
-            bid = float(tick.bid)
-            tpp = self.cfg.tpps[now.weekday() if now.weekday() < 5 else 4]
-            self.log_check(now, "OH", bid > entry * (1.0 + tpp), bid=bid, threshold=entry * (1.0 + tpp))
-        except RuntimeError as exc:
-            self.log_check(now, "OH", False, error=str(exc))
+        check_count = 3
+        if self.oh_check_pending(now):
+            try:
+                tick = self.require_fresh_tick(position.symbol)
+                bid = float(tick.bid)
+                tpp = self.cfg.tpps[now.weekday() if now.weekday() < 5 else 4]
+                self.log_check(now, "OH", bid > entry * (1.0 + tpp), bid=bid, threshold=entry * (1.0 + tpp))
+            except RuntimeError as exc:
+                self.log_check(now, "OH", False, error=str(exc))
+            check_count += 1
 
         desired_sl, sl_reason = self.weekday_sl_target(position, now)
         info = mt5.symbol_info(position.symbol)
@@ -2039,12 +2151,14 @@ class OPPWContinuousStrategy:
         desired_sl = floor_step(desired_sl, tick_size)
         sl_set = float(position.sl) > 0 and abs(float(position.sl) - desired_sl) <= tick_size * 1.5
         self.log_check(now, sl_reason, sl_set, current_sl=f"{float(position.sl):.5f}", required_sl=f"{desired_sl:.5f}")
+        check_count += 1
 
         if self.state.break_even:
             be_price = entry * self.cfg.break_even_ratio
             bar_high = current_bar.high if current_bar is not None else None
             self.log_check(now, "BH", bool(bar_high is not None and bar_high > be_price), bar_high=bar_high, threshold=be_price)
-        self.log.info("CONDITION_REPORT_END minute=%s checks=%s", now.strftime("%Y-%m-%d %H:%M"), 6 if self.state.break_even else 5)
+            check_count += 1
+        self.log.info("CONDITION_REPORT_END minute=%s checks=%s", now.strftime("%Y-%m-%d %H:%M"), check_count)
 
     def log_status_if_needed(self, position, now: datetime, current_bar: Optional[M1Bar]) -> None:
         minute_key = now.strftime("%Y-%m-%d %H:%M")
@@ -2076,6 +2190,7 @@ class OPPWContinuousStrategy:
 
     def cycle(self) -> None:
         now = datetime.now(self.tz)
+        self.ensure_autotrading_enabled("CYCLE")
         self.log_week_plan(now.date())
         position = self.managed_position()
 

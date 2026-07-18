@@ -18,6 +18,10 @@ return [
     'pairing_admin_enabled' => false,
     'pairing_admin_token' => 'replace-with-a-separate-browser-admin-token',
 
+    // Optional browser forms for manually adding weekly US100 O/H/L/C and historical trades.
+    'manual_admin_enabled' => false,
+    'manual_admin_token' => 'replace-with-a-separate-manual-admin-token',
+
     'access_token_ttl_seconds' => 900,
     'refresh_token_ttl_days' => 90,
     'pairing_code_ttl_minutes' => 10,

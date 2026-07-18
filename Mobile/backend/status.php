@@ -43,6 +43,33 @@ try {
     json_response(['ok' => false, 'error' => 'Stored snapshot is invalid'], 500);
 }
 
+// Normalize v7/v34 snapshots so exposure and OH lifecycle are correct immediately,
+// even before the upgraded publisher sends its first v35 snapshot.
+if (is_array($snapshot['position'] ?? null) && (!array_key_exists('open', $snapshot['position']) || (bool)$snapshot['position']['open'])) {
+    $depositValue = is_numeric($snapshot['account']['deposit'] ?? null) ? (float)$snapshot['account']['deposit'] : 0.0;
+    $equityValue = is_numeric($snapshot['account']['equity'] ?? null) ? (float)$snapshot['account']['equity'] : 0.0;
+    $snapshot['position']['exposure'] = $depositValue * 20.0;
+    $snapshot['position']['effectiveLeverage'] = $equityValue > 0 ? $snapshot['position']['exposure'] / $equityValue : 0.0;
+
+    $nextAction = strtoupper(trim((string)($snapshot['connection']['nextAction'] ?? '')));
+    if ($nextAction !== 'OH' && is_array($snapshot['conditions'] ?? null)) {
+        $snapshot['conditions'] = array_values(array_filter($snapshot['conditions'], static fn(mixed $condition): bool => is_array($condition) && strtoupper((string)($condition['name'] ?? '')) !== 'OH'));
+        if (strtoupper((string)($snapshot['closestCondition']['name'] ?? '')) === 'OH') {
+            usort($snapshot['conditions'], static fn(array $a, array $b): int => ((float)($a['distancePoints'] ?? INF)) <=> ((float)($b['distancePoints'] ?? INF)));
+            $snapshot['closestCondition'] = $snapshot['conditions'][0] ?? null;
+        }
+    }
+    if (!is_numeric($snapshot['position']['potentialTakeProfit'] ?? null) || (float)$snapshot['position']['potentialTakeProfit'] <= 0) {
+        foreach (($snapshot['conditions'] ?? []) as $condition) {
+            if (!is_array($condition) || !in_array(strtoupper((string)($condition['name'] ?? '')), ['OH', 'CH'], true)) continue;
+            if (is_numeric($condition['targetPrice'] ?? null) && (float)$condition['targetPrice'] > 0) {
+                $snapshot['position']['potentialTakeProfit'] = (float)$condition['targetPrice'];
+                break;
+            }
+        }
+    }
+}
+
 function downsample_points(array $rows, int $maximum): array
 {
     $count = count($rows);
@@ -81,10 +108,32 @@ function all_time_equity_points(PDO $db, string $accountKey): array
           ORDER BY p.captured_minute';
     $statement = $db->prepare($sql);
     $statement->execute([$accountKey, $accountKey]);
-    $rows = array_map(static fn(array $value): array => [
-        'time' => atom_datetime(new DateTimeImmutable((string)$value['captured_minute'], new DateTimeZone('UTC'))),
-        'value' => (float)$value['equity'],
-    ], $statement->fetchAll());
+    $dailyRows = $statement->fetchAll();
+
+    $flowStatement = $db->prepare('SELECT occurred_at, flow_type, amount FROM account_cash_flows WHERE strategy_key = ? ORDER BY occurred_at, id');
+    $flowStatement->execute([$accountKey]);
+    $flows = $flowStatement->fetchAll();
+    $flowIndex = 0;
+    $cumulativeDeposits = 0.0;
+    $rows = [];
+
+    foreach ($dailyRows as $value) {
+        $pointTime = new DateTimeImmutable((string)$value['captured_minute'], new DateTimeZone('UTC'));
+        while ($flowIndex < count($flows)) {
+            $flowTime = new DateTimeImmutable((string)$flows[$flowIndex]['occurred_at'], new DateTimeZone('UTC'));
+            if ($flowTime > $pointTime) break;
+            $amount = (float)$flows[$flowIndex]['amount'];
+            $type = strtoupper((string)$flows[$flowIndex]['flow_type']);
+            if (in_array($type, ['INITIAL', 'TOP_UP'], true)) $cumulativeDeposits += abs($amount);
+            elseif ($type === 'ADJUSTMENT' && $amount > 0) $cumulativeDeposits += $amount;
+            $flowIndex++;
+        }
+        $rows[] = [
+            'time' => atom_datetime($pointTime),
+            'value' => (float)$value['equity'],
+            'deposits' => $cumulativeDeposits,
+        ];
+    }
     return downsample_points($rows, 730);
 }
 

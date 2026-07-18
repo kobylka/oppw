@@ -83,9 +83,10 @@ fun LogsScreen(state: UiState, viewModel: MainViewModel, onRetry: () -> Unit) {
                     AppCard(Modifier.fillMaxWidth()) {
                         SectionTitle("Log filters", "${events.itemCount} loaded of $totalMatching · max 500 retained")
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                            Column {
+                            Column(Modifier.weight(1f).padding(end = 12.dp)) {
                                 Text("Buy/sell events only", style = MaterialTheme.typography.titleMedium)
-                                Text("Order-related BUY/SELL events and POSITION_CLOSED", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                                Text("Order-related BUY/SELL events", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                                Text("and POSITION_CLOSED", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
                             }
                             Switch(checked = buySellOnly, onCheckedChange = { buySellOnly = it })
                         }

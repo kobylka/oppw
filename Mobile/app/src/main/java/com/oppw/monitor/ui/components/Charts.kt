@@ -6,19 +6,24 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
 import com.oppw.monitor.data.EquityPoint
+import com.oppw.monitor.ui.theme.BrightGreen
 import com.oppw.monitor.ui.theme.CardBorder
 import com.oppw.monitor.ui.theme.PrimaryBlue
 import com.oppw.monitor.ui.theme.TextSecondary
+import com.oppw.monitor.util.dateOnly
 import com.oppw.monitor.util.money
 
 @Composable
@@ -65,5 +70,69 @@ fun EquityChart(points: List<EquityPoint>, currency: String, modifier: Modifier 
             Text("Low ${money(min, currency)}", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
             Text("High ${money(max, currency)}", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
         }
+    }
+}
+
+@Composable
+fun AllTimeEquityChart(points: List<EquityPoint>, currency: String, modifier: Modifier = Modifier) {
+    if (points.size < 2) {
+        Text("Not enough all-time history yet", color = TextSecondary)
+        return
+    }
+    val depositValues = points.mapNotNull { it.deposits }
+    val allValues = points.map { it.value } + depositValues
+    val min = allValues.minOrNull() ?: 0.0
+    val max = allValues.maxOrNull() ?: 1.0
+    val range = (max - min).takeIf { it > 0 } ?: 1.0
+    val middle = points[points.lastIndex / 2]
+
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(7.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+            ChartLegend("Equity", PrimaryBlue)
+            ChartLegend("Deposits to date", BrightGreen)
+        }
+        Canvas(Modifier.fillMaxWidth().height(170.dp)) {
+            repeat(4) { index ->
+                val y = size.height * index / 3f
+                drawLine(CardBorder, Offset(0f, y), Offset(size.width, y), strokeWidth = 1f)
+            }
+
+            fun pathFor(values: List<Double?>): Path {
+                val path = Path()
+                var started = false
+                values.forEachIndexed { index, value ->
+                    if (value == null) return@forEachIndexed
+                    val x = size.width * index / points.lastIndex.coerceAtLeast(1).toFloat()
+                    val y = size.height - ((value - min) / range * size.height).toFloat()
+                    if (!started) {
+                        path.moveTo(x, y)
+                        started = true
+                    } else {
+                        path.lineTo(x, y)
+                    }
+                }
+                return path
+            }
+
+            drawPath(pathFor(points.map { it.value }), PrimaryBlue, style = Stroke(width = 5f, cap = StrokeCap.Round))
+            if (depositValues.isNotEmpty()) drawPath(pathFor(points.map { it.deposits }), BrightGreen, style = Stroke(width = 4f, cap = StrokeCap.Round))
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(dateOnly(points.first().time), color = TextSecondary, style = MaterialTheme.typography.labelSmall)
+            Text(dateOnly(middle.time), color = TextSecondary, style = MaterialTheme.typography.labelSmall)
+            Text(dateOnly(points.last().time), color = TextSecondary, style = MaterialTheme.typography.labelSmall)
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Equity ${money(points.last().value, currency)}", style = MaterialTheme.typography.labelMedium)
+            points.last().deposits?.let { Text("Deposits ${money(it, currency)}", color = BrightGreen, style = MaterialTheme.typography.labelMedium) }
+        }
+    }
+}
+
+@Composable
+private fun ChartLegend(label: String, color: Color) {
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Canvas(Modifier.size(9.dp)) { drawCircle(color) }
+        Text(label, color = TextSecondary, style = MaterialTheme.typography.labelMedium)
     }
 }

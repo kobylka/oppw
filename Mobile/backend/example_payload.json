@@ -9,7 +9,7 @@
       "week": "2026-W29",
       "health": "OK",
       "phase": "Friday Regular",
-      "regime": "TSL_0.4000%",
+      "regime": "Tight stop loss (0.4%)",
       "nextAction": "CH / TO",
       "nextActionAt": "2026-07-17T21:59:57+02:00",
       "us100AgeSeconds": 0.3,
@@ -65,14 +65,15 @@
       "profitPercent": -0.2451,
       "strategyLeverage": 8.0,
       "leveragedProfitPercent": -1.9609,
-      "exposure": 222125.0,
-      "effectiveLeverage": 7.4,
+      "exposure": 2222.4,
+      "effectiveLeverage": 0.075,
       "stopLoss": 29194.6,
       "takeProfit": 0.0,
       "breakEvenArmed": false,
-      "protectionRegime": "TSL_0.4000%",
+      "protectionRegime": "Tight stop loss (0.4%)",
       "activeSlReason": "TSL",
-      "activeTpReason": ""
+      "activeTpReason": "",
+      "potentialTakeProfit": 30777.44
     },
     "conditions": [
       {
@@ -82,16 +83,6 @@
         "distancePoints": 45.4,
         "distancePercent": 0.1553,
         "direction": "below",
-        "active": true,
-        "source": "US100"
-      },
-      {
-        "name": "OH",
-        "targetPrice": 30777.44,
-        "currentPrice": 29240.0,
-        "distancePoints": 1537.44,
-        "distancePercent": 5.258,
-        "direction": "above",
         "active": true,
         "source": "US100"
       },

@@ -75,6 +75,7 @@ data class PositionStatus(
     val effectiveLeverage: Double,
     val stopLoss: Double,
     val takeProfit: Double,
+    val potentialTakeProfit: Double,
     val breakEvenArmed: Boolean,
     val protectionRegime: String,
     val activeSlReason: String,
@@ -115,7 +116,7 @@ data class MarketWeekStats(
 
 data class MarketStats(val currentWeek: MarketWeekStats?, val previousWeek: MarketWeekStats?)
 data class EquityCurves(val daily: List<EquityPoint>, val weekly: List<EquityPoint>, val allTime: List<EquityPoint>)
-data class EquityPoint(val time: String, val value: Double)
+data class EquityPoint(val time: String, val value: Double, val deposits: Double? = null)
 
 data class MonitorEvent(
     val id: Long,

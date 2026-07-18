@@ -23718,3 +23718,180 @@ Traceback (most recent call last):
     raise RuntimeError(f"Stale tick for {symbol}: age={age:.1f}s")
 RuntimeError: Stale tick for US100: age=11.9s
 2026-07-17 22:00:12 INFO EVENT STRATEGY_STOPPED
+2026-07-18 08:50:22 INFO EVENT MONITOR_PUBLISHER_STARTED account_key=DEMO interval=5.0s endpoint=https://eloski.eu/oppw-backend/ingest.php
+2026-07-18 08:50:26 INFO EVENT CONNECTED account=REMOVED_DEMO_ACCOUNT_ID server=BOSSAFX-Demo trade=US100 signal=US100 live=True build=2026-07-17-autotrading-guard-v36 script=D:\oppw\mt5\oppw_mt5_continuous.py
+2026-07-18 08:50:26 INFO EVENT AUTOTRADING_ENABLED context=CONNECT terminal_trade_allowed=True tradeapi_disabled=False account_trade_allowed=True account_trade_expert=True
+2026-07-18 08:50:26 INFO EVENT POSITION_RECOVERED ticket=2131668 identifier=2131668 magic=0 open_time=2026-07-17T17:45:13.656000+02:00 entry=28800.10000 volume=0.01 leverage=8 leverage_source=default_L8 signal_open=28605.25000 signal_open_pending=False break_even=False
+2026-07-18 08:50:26 ERROR EVENT FATAL_STARTUP_FAILURE
+Traceback (most recent call last):
+  File "D:\oppw\mt5\oppw_mt5_continuous.py", line 2242, in main
+    strategy.run()
+    ~~~~~~~~~~~~^^
+  File "D:\oppw\mt5\oppw_mt5_continuous.py", line 2207, in run
+    self.startup_reconcile()
+    ~~~~~~~~~~~~~~~~~~~~~~^^
+  File "D:\oppw\mt5\oppw_mt5_continuous.py", line 2155, in startup_reconcile
+    self.apply_standard_protection(position, now)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^
+  File "D:\oppw\mt5\oppw_mt5_continuous.py", line 1900, in apply_standard_protection
+    self.apply_exit_bracket(position, self.state.exit_latched_reason)
+    ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\oppw\mt5\oppw_mt5_continuous.py", line 1882, in apply_exit_bracket
+    tick = self.require_fresh_tick(position.symbol)
+  File "D:\oppw\mt5\oppw_mt5_continuous.py", line 748, in require_fresh_tick
+    raise RuntimeError(f"Stale tick for {symbol}: age={age:.1f}s")
+RuntimeError: Stale tick for US100: age=39026.9s
+2026-07-18 08:59:28 INFO EVENT MONITOR_PUBLISHER_STARTED account_key=DEMO interval=5.0s endpoint=https://eloski.eu/oppw-backend/ingest.php
+2026-07-18 08:59:28 INFO EVENT CONNECTED account=REMOVED_DEMO_ACCOUNT_ID server=BOSSAFX-Demo trade=US100 signal=US100 live=True build=2026-07-17-autotrading-guard-v36 script=D:\oppw\mt5\oppw_mt5_continuous.py
+2026-07-18 08:59:28 INFO EVENT AUTOTRADING_ENABLED context=CONNECT terminal_trade_allowed=True tradeapi_disabled=False account_trade_allowed=True account_trade_expert=True
+2026-07-18 08:59:28 INFO EVENT POSITION_RECOVERED ticket=2131668 identifier=2131668 magic=0 open_time=2026-07-17T17:45:13.656000+02:00 entry=28800.10000 volume=0.01 leverage=8 leverage_source=default_L8 signal_open=28605.25000 signal_open_pending=False break_even=False
+2026-07-18 08:59:28 ERROR EVENT FATAL_STARTUP_FAILURE
+Traceback (most recent call last):
+  File "D:\oppw\mt5\oppw_mt5_continuous.py", line 2242, in main
+    strategy.run()
+    ~~~~~~~~~~~~^^
+  File "D:\oppw\mt5\oppw_mt5_continuous.py", line 2207, in run
+    self.startup_reconcile()
+    ~~~~~~~~~~~~~~~~~~~~~~^^
+  File "D:\oppw\mt5\oppw_mt5_continuous.py", line 2155, in startup_reconcile
+    self.apply_standard_protection(position, now)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^
+  File "D:\oppw\mt5\oppw_mt5_continuous.py", line 1900, in apply_standard_protection
+    self.apply_exit_bracket(position, self.state.exit_latched_reason)
+    ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\oppw\mt5\oppw_mt5_continuous.py", line 1882, in apply_exit_bracket
+    tick = self.require_fresh_tick(position.symbol)
+  File "D:\oppw\mt5\oppw_mt5_continuous.py", line 748, in require_fresh_tick
+    raise RuntimeError(f"Stale tick for {symbol}: age={age:.1f}s")
+RuntimeError: Stale tick for US100: age=39568.2s
+2026-07-18 09:15:34 INFO EVENT MONITOR_PUBLISHER_STARTED account_key=DEMO interval=5.0s endpoint=https://eloski.eu/oppw-backend/ingest.php
+2026-07-18 09:15:34 INFO EVENT CONNECTED account=REMOVED_DEMO_ACCOUNT_ID server=BOSSAFX-Demo trade=US100 signal=US100 live=True build=2026-07-18-weekend-stale-tick-v37 script=D:\oppw\mt5\oppw_mt5_continuous.py
+2026-07-18 09:15:34 INFO EVENT AUTOTRADING_ENABLED context=CONNECT terminal_trade_allowed=True tradeapi_disabled=False account_trade_allowed=True account_trade_expert=True
+2026-07-18 09:15:34 INFO EVENT POSITION_RECOVERED ticket=2131668 identifier=2131668 magic=0 open_time=2026-07-17T17:45:13.656000+02:00 entry=28800.10000 volume=0.01 leverage=8 leverage_source=default_L8 signal_open=28605.25000 signal_open_pending=False break_even=False
+2026-07-18 09:15:34 WARNING EVENT PROTECTION_DEFERRED context=EXIT_TO symbol=US100 reason=stale_tick tick_age_seconds=40534.5 limit_seconds=10.0 existing_sl=28684.89000 existing_tp=0.00000 exit_latched=TO
+2026-07-18 09:15:34 INFO STATUS
+==================== TRADE STATUS - STARTUP ====================
+phase: PREMARKET protection regime: Closing position: TO
+time: 2026-07-18 09:15:34 CEST week: 2026-W29
+closest condition: TSL @ 28684.89000 — 77.51000 points below (0.2695%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 17:45:13 CEST
+open price: 28800.10000
+current ask: 28763.35000
+current P/L: -57.20 PLN
+current P/L %: -0.1309%
+current P/L % leveraged: -1.0472%
+equity: 27605.70 PLN deposit: 2185.64 PLN
+SL: 28684.89000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: TO
+final trading day: 2026-07-17
+weekly exit: OVERDUE_TO (due=True)
+previous M1: None
+build: 2026-07-18-weekend-stale-tick-v37
+======================================================
+
+2026-07-18 09:15:34 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-18 09:15 current_price=28762.40000 profit=-57.20 profit_percent=-0.130902 leveraged_profit_percent=-1.047219 equity=27605.70 balance=27662.90 deposit=2185.64
+2026-07-18 09:15:34 INFO EVENT WEEK_PLAN week=2026-W29 sessions=2026-07-13,2026-07-14,2026-07-15,2026-07-16,2026-07-17 final_day=2026-07-17 open_action=2026-07-18 15:29:57 CEST weekly_TO=2026-07-17 21:59:57 CEST
+2026-07-18 09:16:00 INFO STATUS
+==================== TRADE STATUS - MINUTE ====================
+phase: PREMARKET protection regime: Closing position: TO
+time: 2026-07-18 09:16:00 CEST week: 2026-W29
+closest condition: TSL @ 28684.89000 — 77.51000 points below (0.2695%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 17:45:13 CEST
+open price: 28800.10000
+current ask: 28763.35000
+current P/L: -57.20 PLN
+current P/L %: -0.1309%
+current P/L % leveraged: -1.0472%
+equity: 27605.70 PLN deposit: 2185.64 PLN
+SL: 28684.89000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: TO
+final trading day: 2026-07-17
+weekly exit: OVERDUE_TO (due=True)
+previous M1: None
+build: 2026-07-18-weekend-stale-tick-v37
+======================================================
+
+2026-07-18 09:16:00 INFO CONDITION_REPORT_BEGIN minute=2026-07-18 09:16
+2026-07-18 09:16:00 INFO CHECK minute=2026-07-18_09:16 weekday=Saturday phase=PREMARKET name=POSITION_OPEN result=TRUE ticket=2131668 entry=28800.1 volume=0.01
+2026-07-18 09:16:00 INFO CHECK minute=2026-07-18_09:16 weekday=Saturday phase=PREMARKET name=ENTRY_SIGNAL_OPEN_AVAILABLE result=TRUE signal_open=28605.25 pending=False
+2026-07-18 09:16:00 INFO CHECK minute=2026-07-18_09:16 weekday=Saturday phase=PREMARKET name=EXIT_LATCH_CLEAR result=FALSE exit_latch=TO
+2026-07-18 09:16:00 INFO CHECK minute=2026-07-18_09:16 weekday=Saturday phase=PREMARKET name=OH result=FALSE error=Stale tick for US100: age=40560.2s
+2026-07-18 09:16:00 INFO CHECK minute=2026-07-18_09:16 weekday=Saturday phase=PREMARKET name=TSL result=TRUE current_sl=28684.89000 required_sl=28684.89000
+2026-07-18 09:16:00 INFO CONDITION_REPORT_END minute=2026-07-18 09:16 checks=5
+2026-07-18 09:16:00 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-18 09:16 current_price=28762.40000 profit=-57.20 profit_percent=-0.130902 leveraged_profit_percent=-1.047219 equity=27605.70 balance=27662.90 deposit=2185.64
+2026-07-18 09:16:34 WARNING EVENT PROTECTION_DEFERRED context=EXIT_TO symbol=US100 reason=stale_tick tick_age_seconds=40594.6 limit_seconds=10.0 existing_sl=28684.89000 existing_tp=0.00000 exit_latched=TO
+2026-07-18 09:17:00 INFO STATUS
+==================== TRADE STATUS - MINUTE ====================
+phase: PREMARKET protection regime: Closing position: TO
+time: 2026-07-18 09:17:00 CEST week: 2026-W29
+closest condition: TSL @ 28684.89000 — 77.51000 points below (0.2695%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 17:45:13 CEST
+open price: 28800.10000
+current ask: 28763.35000
+current P/L: -57.20 PLN
+current P/L %: -0.1309%
+current P/L % leveraged: -1.0472%
+equity: 27605.70 PLN deposit: 2185.64 PLN
+SL: 28684.89000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: TO
+final trading day: 2026-07-17
+weekly exit: OVERDUE_TO (due=True)
+previous M1: None
+build: 2026-07-18-weekend-stale-tick-v37
+======================================================
+
+2026-07-18 09:17:00 INFO CONDITION_REPORT_BEGIN minute=2026-07-18 09:17
+2026-07-18 09:17:00 INFO CHECK minute=2026-07-18_09:17 weekday=Saturday phase=PREMARKET name=POSITION_OPEN result=TRUE ticket=2131668 entry=28800.1 volume=0.01
+2026-07-18 09:17:00 INFO CHECK minute=2026-07-18_09:17 weekday=Saturday phase=PREMARKET name=ENTRY_SIGNAL_OPEN_AVAILABLE result=TRUE signal_open=28605.25 pending=False
+2026-07-18 09:17:00 INFO CHECK minute=2026-07-18_09:17 weekday=Saturday phase=PREMARKET name=EXIT_LATCH_CLEAR result=FALSE exit_latch=TO
+2026-07-18 09:17:00 INFO CHECK minute=2026-07-18_09:17 weekday=Saturday phase=PREMARKET name=OH result=FALSE error=Stale tick for US100: age=40620.2s
+2026-07-18 09:17:00 INFO CHECK minute=2026-07-18_09:17 weekday=Saturday phase=PREMARKET name=TSL result=TRUE current_sl=28684.89000 required_sl=28684.89000
+2026-07-18 09:17:00 INFO CONDITION_REPORT_END minute=2026-07-18 09:17 checks=5
+2026-07-18 09:17:00 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-18 09:17 current_price=28762.40000 profit=-57.20 profit_percent=-0.130902 leveraged_profit_percent=-1.047219 equity=27605.70 balance=27662.90 deposit=2185.64
+2026-07-18 09:17:34 WARNING EVENT PROTECTION_DEFERRED context=EXIT_TO symbol=US100 reason=stale_tick tick_age_seconds=40654.6 limit_seconds=10.0 existing_sl=28684.89000 existing_tp=0.00000 exit_latched=TO
+2026-07-18 09:18:00 INFO STATUS
+==================== TRADE STATUS - MINUTE ====================
+phase: PREMARKET protection regime: Closing position: TO
+time: 2026-07-18 09:18:00 CEST week: 2026-W29
+closest condition: TSL @ 28684.89000 — 77.51000 points below (0.2695%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 17:45:13 CEST
+open price: 28800.10000
+current ask: 28763.35000
+current P/L: -57.20 PLN
+current P/L %: -0.1309%
+current P/L % leveraged: -1.0472%
+equity: 27605.70 PLN deposit: 2185.64 PLN
+SL: 28684.89000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: TO
+final trading day: 2026-07-17
+weekly exit: OVERDUE_TO (due=True)
+previous M1: None
+build: 2026-07-18-weekend-stale-tick-v37
+======================================================
+
+2026-07-18 09:18:00 INFO CONDITION_REPORT_BEGIN minute=2026-07-18 09:18
+2026-07-18 09:18:00 INFO CHECK minute=2026-07-18_09:18 weekday=Saturday phase=PREMARKET name=POSITION_OPEN result=TRUE ticket=2131668 entry=28800.1 volume=0.01
+2026-07-18 09:18:00 INFO CHECK minute=2026-07-18_09:18 weekday=Saturday phase=PREMARKET name=ENTRY_SIGNAL_OPEN_AVAILABLE result=TRUE signal_open=28605.25 pending=False
+2026-07-18 09:18:00 INFO CHECK minute=2026-07-18_09:18 weekday=Saturday phase=PREMARKET name=EXIT_LATCH_CLEAR result=FALSE exit_latch=TO
+2026-07-18 09:18:00 INFO CHECK minute=2026-07-18_09:18 weekday=Saturday phase=PREMARKET name=OH result=FALSE error=Stale tick for US100: age=40680.1s
+2026-07-18 09:18:00 INFO CHECK minute=2026-07-18_09:18 weekday=Saturday phase=PREMARKET name=TSL result=TRUE current_sl=28684.89000 required_sl=28684.89000
+2026-07-18 09:18:00 INFO CONDITION_REPORT_END minute=2026-07-18 09:18 checks=5
+2026-07-18 09:18:00 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-18 09:18 current_price=28762.40000 profit=-57.20 profit_percent=-0.130902 leveraged_profit_percent=-1.047219 equity=27605.70 balance=27662.90 deposit=2185.64
+2026-07-18 09:18:34 WARNING EVENT PROTECTION_DEFERRED context=EXIT_TO symbol=US100 reason=stale_tick tick_age_seconds=40714.8 limit_seconds=10.0 existing_sl=28684.89000 existing_tp=0.00000 exit_latched=TO
+2026-07-18 09:18:42 INFO EVENT STRATEGY_STOPPED

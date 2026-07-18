@@ -144,7 +144,7 @@ object JsonParser {
         askAt = json.optString("askAt", json.optString("priceTime")), tickAgeSeconds = json.optNullableDouble("tickAgeSeconds"), profit = json.optDouble("profit"),
         profitPercent = json.optDouble("profitPercent"), strategyLeverage = json.optDouble("strategyLeverage"),
         leveragedProfitPercent = json.optDouble("leveragedProfitPercent"), exposure = json.optDouble("exposure"), effectiveLeverage = json.optDouble("effectiveLeverage"),
-        stopLoss = json.optDouble("stopLoss"), takeProfit = json.optDouble("takeProfit"), breakEvenArmed = json.optBoolean("breakEvenArmed"),
+        stopLoss = json.optDouble("stopLoss"), takeProfit = json.optDouble("takeProfit"), potentialTakeProfit = json.optDouble("potentialTakeProfit"), breakEvenArmed = json.optBoolean("breakEvenArmed"),
         protectionRegime = json.optString("protectionRegime"), activeSlReason = json.optString("activeSlReason"), activeTpReason = json.optString("activeTpReason"),
     )
 
@@ -170,7 +170,7 @@ object JsonParser {
     private fun parseEquityCurves(json: JSONObject?): EquityCurves = EquityCurves(
         daily = parseEquity(json?.optJSONArray("daily") ?: JSONArray()), weekly = parseEquity(json?.optJSONArray("weekly") ?: JSONArray()), allTime = parseEquity(json?.optJSONArray("allTime") ?: JSONArray()),
     )
-    private fun parseEquity(array: JSONArray): List<EquityPoint> = buildList { for (i in 0 until array.length()) array.getJSONObject(i).let { add(EquityPoint(it.optString("time"), it.optDouble("value"))) } }
+    private fun parseEquity(array: JSONArray): List<EquityPoint> = buildList { for (i in 0 until array.length()) array.getJSONObject(i).let { add(EquityPoint(it.optString("time"), it.optDouble("value"), it.optNullableDouble("deposits"))) } }
     private fun parseEvents(array: JSONArray): List<MonitorEvent> = buildList {
         for (i in 0 until array.length()) array.getJSONObject(i).let { item -> add(MonitorEvent(
             id = item.optLong("id"), time = item.optString("time"), level = item.optString("level", "INFO"), name = item.optString("name"),

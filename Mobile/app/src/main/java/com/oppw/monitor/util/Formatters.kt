@@ -28,9 +28,39 @@ fun shortDateTime(value: String): String = runCatching {
     OffsetDateTime.parse(value).toInstant().atZone(deviceZone).format(DateTimeFormatter.ofPattern("dd MMM HH:mm:ss"))
 }.getOrDefault(value.ifBlank { "—" })
 
+fun dateOnly(value: String): String = runCatching {
+    OffsetDateTime.parse(value).toInstant().atZone(deviceZone).format(DateTimeFormatter.ofPattern("dd MMM yy"))
+}.getOrDefault(value.ifBlank { "—" })
+
 fun timeOnly(value: String): String = runCatching {
     OffsetDateTime.parse(value).toInstant().atZone(deviceZone).format(DateTimeFormatter.ofPattern("HH:mm:ss"))
 }.getOrDefault(value.ifBlank { "—" })
+
+fun humanProtection(value: String): String {
+    val normalized = value.trim()
+    if (normalized.isBlank() || normalized.equals("none", true)) return "None"
+    if (normalized.startsWith("EXIT_BRACKET:", true)) return "Closing position: ${humanCondition(normalized.substringAfter(':'))}"
+    if (normalized.contains(' ') && !normalized.contains('_')) return normalized
+    return when (normalized.uppercase(Locale.US)) {
+        "TSL_0.4000%", "FRIDAY_TIGHT_SL", "THURSDAY_TIGHT_SL" -> "Tight stop loss (0.4%)"
+        "TSL_0.4000%+BE_TP" -> "Tight stop loss (0.4%) + break-even exit"
+        "HARD_SL" -> "Hard stop loss"
+        "HARD_SL+BE_TP" -> "Hard stop loss + break-even exit"
+        else -> normalized.replace('_', ' ').lowercase(Locale.US).replaceFirstChar { it.uppercase() }
+    }
+}
+
+fun humanCondition(value: String): String = when (value.trim().uppercase(Locale.US)) {
+    "OH" -> "open-high target"
+    "CH" -> "close-high target"
+    "TO" -> "weekly timed close"
+    "SL" -> "hard stop loss"
+    "TSL" -> "tight stop loss"
+    "BE", "BH" -> "break-even exit"
+    "BROKER_SL" -> "broker stop loss"
+    "BROKER_TP" -> "broker take profit"
+    else -> value.replace('_', ' ').lowercase(Locale.US).replaceFirstChar { it.uppercase() }
+}
 
 fun countdown(target: String, nowEpochMs: Long = System.currentTimeMillis()): String = runCatching {
     val seconds = Duration.between(Instant.ofEpochMilli(nowEpochMs), OffsetDateTime.parse(target).toInstant()).seconds.coerceAtLeast(0)
