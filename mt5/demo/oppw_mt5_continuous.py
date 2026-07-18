@@ -16,14 +16,15 @@ Key execution rules
 * PUBLISHER mode is read-only and owns backend publishing while active.
 * EXECUTOR automatically publishes when no PUBLISHER heartbeat is active.
 
-Run the trading instance with `--mode executor` (the default) and the optional
-read-only backend instance with `--mode publisher`. Live trading is disabled
-unless LIVE_ENABLED=True in oppw_mt5_config.py or OPPW_LIVE=1 is set.
+Run with `--mode executor|publisher` and `--account demo|real`. DEMO loads
+oppw-mt5-config.py and REAL loads real-mt5-config.py. Live trading is disabled
+unless LIVE_ENABLED=True in the selected account configuration or OPPW_LIVE=1 is set.
 """
 
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import logging
 import math
@@ -38,14 +39,14 @@ import urllib.error
 import urllib.request
 import uuid
 from collections import deque
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, fields, is_dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-BUILD_ID = "2026-07-18-dual-role-coordination-v39"
+BUILD_ID = "2026-07-18-dual-role-multi-account-v40"
 SCHEDULED_ACTION_LEAD_SECONDS = 3.0
 AUTOTRADING_REMINDER_SECONDS = 60.0
 STALE_TICK_REMINDER_SECONDS = 60.0
@@ -53,6 +54,10 @@ PUBLISHER_HEARTBEAT_INTERVAL_SECONDS = 1.0
 PUBLISHER_HEARTBEAT_STALE_SECONDS = 8.0
 INSTANCE_MODE_EXECUTOR = "EXECUTOR"
 INSTANCE_MODE_PUBLISHER = "PUBLISHER"
+ACCOUNT_DEMO = "DEMO"
+ACCOUNT_REAL = "REAL"
+ACCOUNT_CONFIG_FILES = {ACCOUNT_DEMO: "oppw-mt5-config.py", ACCOUNT_REAL: "real-mt5-config.py"}
+ACCOUNT_CONFIG_FALLBACKS = {ACCOUNT_DEMO: ("oppw_mt5_config.py",), ACCOUNT_REAL: ("real_mt5_config.py",)}
 
 try:
     import exchange_calendars as xcals
@@ -64,7 +69,76 @@ try:
 except ImportError as exc:
     raise SystemExit("Install dependencies with: py -m pip install MetaTrader5 tzdata exchange-calendars") from exc
 
-from oppw_mt5_config import Config
+# -----------------------------------------------------------------------------
+# Account configuration loading
+# -----------------------------------------------------------------------------
+
+
+def load_account_config(account: str):
+    account = account.upper()
+    primary = BASE_DIR / ACCOUNT_CONFIG_FILES[account]
+    candidates = (primary, *(BASE_DIR / name for name in ACCOUNT_CONFIG_FALLBACKS[account]))
+    config_path = next((path for path in candidates if path.exists()), None)
+    if config_path is None:
+        names = ", ".join(path.name for path in candidates)
+        raise RuntimeError(f"Missing {account} configuration. Expected one of: {names}")
+
+    module_name = f"oppw_mt5_config_{account.lower()}_{uuid.uuid4().hex}"
+    spec = importlib.util.spec_from_file_location(module_name, config_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Cannot load configuration file: {config_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    config_class = getattr(module, "Config", None)
+    if config_class is None or not callable(config_class):
+        raise RuntimeError(f"Configuration file does not define Config: {config_path}")
+    return config_class(), config_path
+
+
+def account_scoped_file(path: Path, account: str) -> Path:
+    account_label = account.lower()
+    normalized_tokens = path.stem.lower().replace("_", "-").replace(".", "-").split("-")
+    if account_label in normalized_tokens:
+        return path
+    return path.with_name(f"{path.stem}.{account_label}{path.suffix}")
+
+
+def account_scoped_dir(path: Path, account: str) -> Path:
+    return path if path.name.lower() == account.lower() else path / account.lower()
+
+
+def scope_config_to_account(config, account: str):
+    changes: dict[str, Any] = {}
+    if hasattr(config, "state_file"):
+        changes["state_file"] = account_scoped_file(Path(config.state_file), account)
+    if hasattr(config, "lock_file"):
+        changes["lock_file"] = account_scoped_file(Path(config.lock_file), account)
+    if hasattr(config, "monitor_history_file"):
+        changes["monitor_history_file"] = account_scoped_file(Path(config.monitor_history_file), account)
+    if hasattr(config, "log_dir"):
+        changes["log_dir"] = account_scoped_dir(Path(config.log_dir), account)
+    if hasattr(config, "monitor_account_key"):
+        changes["monitor_account_key"] = account.upper()
+    if not changes:
+        return config
+    if not is_dataclass(config):
+        raise RuntimeError("Config must be a dataclass so account-specific runtime paths can be isolated safely")
+    return replace(config, **changes)
+
+
+def migrate_legacy_demo_runtime_files(original, scoped, account: str) -> None:
+    if account != ACCOUNT_DEMO:
+        return
+    for name in ("state_file", "monitor_history_file"):
+        if not hasattr(original, name) or not hasattr(scoped, name):
+            continue
+        source = Path(getattr(original, name))
+        target = Path(getattr(scoped, name))
+        if source == target or not source.exists() or target.exists():
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
 
 
 # -----------------------------------------------------------------------------
@@ -187,8 +261,8 @@ class WeeklyFileHandler(logging.Handler):
             self.handleError(record)
 
 
-def setup_logging(log_dir: Path, timezone: ZoneInfo, role: str) -> logging.Logger:
-    logger = logging.getLogger(f"oppw_mt5.{role.lower()}")
+def setup_logging(log_dir: Path, timezone: ZoneInfo, role: str, account: str) -> logging.Logger:
+    logger = logging.getLogger(f"oppw_mt5.{account.lower()}.{role.lower()}")
     logger.setLevel(logging.INFO)
     logger.propagate = False
     logger.handlers.clear()
@@ -606,7 +680,7 @@ class MobileMonitorPublisher:
         public_events = [{key: value for key, value in event.items() if not key.startswith("_spool") and key != "_sourcePid"} for event in events]
         payload = {"accountKey": self.cfg.monitor_account_key, "capturedAt": captured_at, "snapshot": snapshot_copy, "events": public_events}
         body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-        request = urllib.request.Request(self.cfg.monitor_ingest_url, data=body, method="POST", headers={"Authorization": f"Bearer {self.cfg.monitor_write_token}", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "OPPW-MT5-Publisher/39"})
+        request = urllib.request.Request(self.cfg.monitor_ingest_url, data=body, method="POST", headers={"Authorization": f"Bearer {self.cfg.monitor_write_token}", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "OPPW-MT5-Publisher/40"})
         try:
             with urllib.request.urlopen(request, timeout=self.cfg.monitor_timeout_seconds) as response:
                 if int(response.status) not in (200, 201):
@@ -766,14 +840,15 @@ class MobileEventHandler(logging.Handler):
 
 
 class OPPWContinuousStrategy:
-    def __init__(self, config: Config, role: str, publisher_presence: PublisherPresence, event_spool: SharedEventSpool, publish_lock_path: Path):
+    def __init__(self, config, role: str, account: str, publisher_presence: PublisherPresence, event_spool: SharedEventSpool, publish_lock_path: Path):
         self.cfg = config
         self.role = role
+        self.account = account.upper()
         self.is_executor = role == INSTANCE_MODE_EXECUTOR
         self.publisher_presence = publisher_presence
         self.tz = ZoneInfo(config.timezone_name)
         self.market_tz = ZoneInfo(config.market_timezone_name)
-        self.log = setup_logging(config.log_dir, self.tz, role)
+        self.log = setup_logging(config.log_dir, self.tz, role, self.account)
         try:
             self.state = StrategyState.load(config.state_file)
         except Exception as exc:
@@ -818,6 +893,11 @@ class OPPWContinuousStrategy:
         account = mt5.account_info()
         if terminal is None or account is None:
             raise RuntimeError(f"Cannot read terminal/account information: {mt5.last_error()}")
+        expected_login = int(getattr(self.cfg, "login", 0) or 0)
+        actual_login = int(getattr(account, "login", 0) or 0)
+        if expected_login > 0 and actual_login != expected_login:
+            mt5.shutdown()
+            raise RuntimeError(f"Selected {self.account} config expects MT5 login {expected_login}, but terminal returned {actual_login}")
         if not mt5.symbol_select(self.cfg.trade_symbol, True):
             raise RuntimeError(f"Cannot select trade symbol {self.cfg.trade_symbol}: {mt5.last_error()}")
         if not mt5.symbol_select(self.cfg.signal_symbol, True):
@@ -825,8 +905,8 @@ class OPPWContinuousStrategy:
 
         self.connected = True
         self.log.info(
-            "EVENT CONNECTED role=%s account=%s server=%s trade=%s signal=%s live=%s build=%s script=%s",
-            self.role, getattr(account, "login", "?"), getattr(account, "server", "?"), self.cfg.trade_symbol,
+            "EVENT CONNECTED role=%s selected_account=%s login=%s server=%s trade=%s signal=%s live=%s build=%s script=%s",
+            self.role, self.account, getattr(account, "login", "?"), getattr(account, "server", "?"), self.cfg.trade_symbol,
             self.cfg.signal_symbol, self.cfg.live_enabled, BUILD_ID, Path(__file__).resolve(),
         )
         if self.is_executor:
@@ -835,17 +915,24 @@ class OPPWContinuousStrategy:
             else:
                 self.ensure_autotrading_enabled("CONNECT", force_log=True)
         else:
-            self.log.info("EVENT INSTANCE_ROLE role=PUBLISHER trading_allowed=false backend_publishing=true")
+            self.log.info("EVENT INSTANCE_ROLE role=PUBLISHER account=%s trading_allowed=false backend_publishing=true", self.account)
 
     def disconnect(self) -> None:
         if self.connected:
             mt5.shutdown()
             self.connected = False
 
+    def selected_account_matches(self) -> bool:
+        expected_login = int(getattr(self.cfg, "login", 0) or 0)
+        if expected_login <= 0:
+            return True
+        account = mt5.account_info()
+        return account is not None and int(getattr(account, "login", 0) or 0) == expected_login
+
     def connection_healthy(self) -> bool:
         terminal = mt5.terminal_info()
         account = mt5.account_info()
-        return terminal is not None and account is not None and bool(getattr(terminal, "connected", True))
+        return terminal is not None and account is not None and bool(getattr(terminal, "connected", True)) and self.selected_account_matches()
 
     def autotrading_status(self) -> tuple[bool, dict[str, bool]]:
         terminal = mt5.terminal_info()
@@ -856,10 +943,11 @@ class OPPWContinuousStrategy:
             "tradeapi_disabled": terminal is None or bool(getattr(terminal, "tradeapi_disabled", False)),
             "account_trade_allowed": account is not None and bool(getattr(account, "trade_allowed", True)),
             "account_trade_expert": account is not None and bool(getattr(account, "trade_expert", True)),
+            "selected_account_matches": self.selected_account_matches(),
         }
         enabled = all((
             values["connected"], values["terminal_trade_allowed"], not values["tradeapi_disabled"],
-            values["account_trade_allowed"], values["account_trade_expert"],
+            values["account_trade_allowed"], values["account_trade_expert"], values["selected_account_matches"],
         ))
         return enabled, values
 
@@ -872,7 +960,7 @@ class OPPWContinuousStrategy:
         enabled, values = self.autotrading_status()
         signature = (
             enabled, values["connected"], values["terminal_trade_allowed"], values["tradeapi_disabled"],
-            values["account_trade_allowed"], values["account_trade_expert"],
+            values["account_trade_allowed"], values["account_trade_expert"], values["selected_account_matches"],
         )
         state_changed = self.last_autotrading_signature is None or bool(self.last_autotrading_signature[0]) != enabled
         if force_log or state_changed:
@@ -889,6 +977,14 @@ class OPPWContinuousStrategy:
         text = f"{now:%Y-%m-%d %H:%M:%S} {status}"
         width = max(len(text), shutil.get_terminal_size((120, 20)).columns)
         color = "\033[1;92m" if enabled else "\033[1;91m"
+        reset = "\033[0m"
+        print(f"\n{color}{text.center(width)}{reset}\n", flush=True)
+
+    def print_instance_banner(self, now: datetime) -> None:
+        status = f"INSTANCE_{self.role} [{self.account}]"
+        text = f"{now:%Y-%m-%d %H:%M:%S} {status}"
+        width = max(len(text), shutil.get_terminal_size((120, 20)).columns)
+        color = "\033[1;93m" if self.is_executor else "\033[1;96m"
         reset = "\033[0m"
         print(f"\n{color}{text.center(width)}{reset}\n", flush=True)
 
@@ -1926,10 +2022,13 @@ class OPPWContinuousStrategy:
         return True
 
     def trade_request_role_allowed(self, event: str) -> bool:
-        if self.is_executor:
-            return True
-        self.log.critical("EVENT TRADE_BLOCKED_BY_ROLE role=%s event=%s action=none", self.role, event)
-        return False
+        if not self.is_executor:
+            self.log.critical("EVENT TRADE_BLOCKED_BY_ROLE role=%s account=%s event=%s action=none", self.role, self.account, event)
+            return False
+        if not self.selected_account_matches():
+            self.log.critical("EVENT TRADE_BLOCKED_BY_ACCOUNT_MISMATCH selected_account=%s expected_login=%s event=%s action=none", self.account, getattr(self.cfg, "login", 0), event)
+            return False
+        return True
 
     def send_buy(self, current_day: date) -> bool:
         if not self.trade_request_role_allowed("BUY"):
@@ -2391,6 +2490,7 @@ class OPPWContinuousStrategy:
         if minute_key != self.last_minute_status:
             self.last_minute_status = minute_key
             self.emit_status("MINUTE", position, now, current_bar)
+            self.print_instance_banner(now)
             self.print_autotrading_banner(now)
             self.log_minute_condition_report(position, now, current_bar)
 
@@ -2413,6 +2513,7 @@ class OPPWContinuousStrategy:
             self.apply_standard_protection(position, now)
         current_bar = self.current_m1_bar(self.cfg.trade_symbol)
         self.emit_status("STARTUP", position, now, current_bar)
+        self.print_instance_banner(now)
         self.print_autotrading_banner(now)
         self.last_minute_status = now.strftime("%Y-%m-%d %H:%M")
         self.last_meaningful_signature = self.status_signature(position, now)
@@ -2478,6 +2579,7 @@ class OPPWContinuousStrategy:
         position = self.managed_position()
         current_bar = self.current_m1_bar(self.cfg.trade_symbol)
         self.emit_status("PUBLISHER_STARTUP", position, now, current_bar)
+        self.print_instance_banner(now)
         self.last_minute_status = now.strftime("%Y-%m-%d %H:%M")
         self.last_meaningful_signature = self.status_signature(position, now)
         self.publish_mobile_minute_status(position, now, current_bar, force=True)
@@ -2492,6 +2594,7 @@ class OPPWContinuousStrategy:
         if minute_key != self.last_minute_status:
             self.last_minute_status = minute_key
             self.emit_status("PUBLISHER_MINUTE", position, now, current_bar)
+            self.print_instance_banner(now)
         signature = self.status_signature(position, now)
         if signature != self.last_meaningful_signature:
             self.last_meaningful_signature = signature
@@ -2560,12 +2663,21 @@ def parse_arguments(argv: Optional[list[str]] = None) -> argparse.Namespace:
     default_mode = os.getenv("OPPW_INSTANCE_MODE", INSTANCE_MODE_EXECUTOR).strip().upper() or INSTANCE_MODE_EXECUTOR
     if default_mode not in {INSTANCE_MODE_EXECUTOR, INSTANCE_MODE_PUBLISHER}:
         default_mode = INSTANCE_MODE_EXECUTOR
+    default_account = os.getenv("OPPW_ACCOUNT", ACCOUNT_DEMO).strip().upper() or ACCOUNT_DEMO
+    if default_account not in {ACCOUNT_DEMO, ACCOUNT_REAL}:
+        default_account = ACCOUNT_DEMO
     parser = argparse.ArgumentParser(description="OPPW MT5 continuous strategy")
     parser.add_argument(
         "--mode",
         choices=(INSTANCE_MODE_EXECUTOR.lower(), INSTANCE_MODE_PUBLISHER.lower()),
         default=default_mode.lower(),
         help="executor may trade and publishes only when no publisher exists; publisher is read-only and handles backend publishing",
+    )
+    parser.add_argument(
+        "--account",
+        choices=(ACCOUNT_DEMO.lower(), ACCOUNT_REAL.lower()),
+        default=default_account.lower(),
+        help="demo loads oppw-mt5-config.py; real loads real-mt5-config.py",
     )
     return parser.parse_args(argv)
 
@@ -2581,15 +2693,45 @@ def legacy_live_pid(path: Path) -> int:
         return 0
 
 
+
+
+def ensure_unscoped_instances_stopped(original_config, scoped_config) -> None:
+    if not hasattr(original_config, "lock_file") or not hasattr(scoped_config, "lock_file"):
+        return
+    original_lock = Path(original_config.lock_file)
+    scoped_lock = Path(scoped_config.lock_file)
+    if original_lock == scoped_lock:
+        return
+
+    old_pid = legacy_live_pid(original_lock)
+    if old_pid:
+        raise RuntimeError(f"Legacy OPPW instance PID {old_pid} is still running with lock {original_lock}")
+
+    legacy_paths = (original_lock, derived_coordination_path(original_lock, "publisher"))
+    for path in legacy_paths:
+        probe = InterProcessFileLock(path, {"purpose": "v40-legacy-instance-probe"})
+        if not probe.try_acquire():
+            owner = "unknown"
+            try:
+                owner = path.read_text(encoding="utf-8", errors="replace")[:500]
+            except OSError:
+                pass
+            raise RuntimeError(f"A v39 or older instance is still running with lock {path}: {owner}")
+        probe.release()
+
 def main() -> int:
     args = parse_arguments()
     role = str(args.mode).upper()
-    cfg = Config()
+    account = str(args.account).upper()
+    original_cfg, config_path = load_account_config(account)
+    cfg = scope_config_to_account(original_cfg, account)
+    ensure_unscoped_instances_stopped(original_cfg, cfg)
+    migrate_legacy_demo_runtime_files(original_cfg, cfg, account)
 
     old_pid = legacy_live_pid(cfg.lock_file)
     if old_pid:
         print(
-            f"FATAL: legacy OPPW instance PID {old_pid} is still running. Stop all v38/older instances before starting v39 roles.",
+            f"FATAL: legacy OPPW instance PID {old_pid} is still running. Stop all v39/older instances before starting v40 roles.",
             file=sys.stderr,
         )
         return 1
@@ -2600,14 +2742,14 @@ def main() -> int:
     publish_lock_path = derived_coordination_path(cfg.lock_file, "backend-publish")
     event_spool_path = cfg.monitor_history_file.with_name(f"{cfg.monitor_history_file.stem}.events.jsonl")
 
-    role_lock = InterProcessFileLock(role_lock_path, {"role": role, "build": BUILD_ID})
+    role_lock = InterProcessFileLock(role_lock_path, {"role": role, "account": account, "config": str(config_path), "build": BUILD_ID})
     publisher_presence = PublisherPresence(heartbeat_path, role)
     event_spool = SharedEventSpool(event_spool_path, cfg.monitor_event_buffer_size)
     strategy: Optional[OPPWContinuousStrategy] = None
 
     try:
         role_lock.acquire()
-        strategy = OPPWContinuousStrategy(cfg, role, publisher_presence, event_spool, publish_lock_path)
+        strategy = OPPWContinuousStrategy(cfg, role, account, publisher_presence, event_spool, publish_lock_path)
         if role == INSTANCE_MODE_PUBLISHER and not strategy.monitor_publisher.ready:
             raise RuntimeError("Publisher mode cannot start because backend monitor publishing is not configured")
         signal.signal(signal.SIGINT, strategy.stop)
@@ -2617,10 +2759,10 @@ def main() -> int:
         return 0
     except Exception:
         if strategy is not None:
-            strategy.log.exception("EVENT FATAL_STARTUP_FAILURE role=%s", role)
+            strategy.log.exception("EVENT FATAL_STARTUP_FAILURE role=%s account=%s", role, account)
         else:
             logging.basicConfig(level=logging.ERROR)
-            logging.exception("FATAL_STARTUP_FAILURE role=%s", role)
+            logging.exception("FATAL_STARTUP_FAILURE role=%s account=%s", role, account)
         return 1
     finally:
         if strategy is not None:
