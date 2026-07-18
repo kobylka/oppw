@@ -1,4 +1,4 @@
-﻿package com.oppw.monitor.ui.screens
+package com.oppw.monitor.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -107,7 +107,7 @@ fun PositionScreen(state: UiState, onRetry: () -> Unit) {
                                         Metric("Chosen leverage", leverage(potential.strategyLeverage), Modifier.weight(1f))
                                         Metric("Effective leverage", leverage(calculatedEffectiveLeverage), Modifier.weight(1f))
                                     }
-                                    Text("Effective leverage = 20 Ă— required deposit Ă· balance", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                                    Text("Effective leverage = required deposit ÷ balance", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
                                     if (potential.positionNotional > 0.0) {
                                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                                             Metric("Potential notional", money(potential.positionNotional, account.currency), Modifier.weight(1f))
@@ -269,4 +269,3 @@ private fun isWeekend(nowEpochMs: Long): Boolean {
     val day = Instant.ofEpochMilli(nowEpochMs).atZone(ZoneId.of("Europe/Warsaw")).dayOfWeek
     return day == DayOfWeek.SATURDAY || day == DayOfWeek.SUNDAY
 }
-

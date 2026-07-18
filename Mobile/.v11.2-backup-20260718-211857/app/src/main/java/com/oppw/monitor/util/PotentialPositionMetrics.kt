@@ -1,6 +1,4 @@
-﻿package com.oppw.monitor.util
-
-private const val BROKER_MARGIN_LEVERAGE = 20.0
+package com.oppw.monitor.util
 
 fun potentialEffectiveLeverage(requiredDeposit: Double, balance: Double, fallback: Double = 0.0): Double {
     val validFallback = fallback.takeIf { it.isFinite() && it >= 0.0 } ?: 0.0
