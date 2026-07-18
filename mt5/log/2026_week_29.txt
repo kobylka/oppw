@@ -24090,3 +24090,826 @@ build: 2026-07-18-mobile-v9-autotrading-banner-v38
 2026-07-18 10:29:21 WARNING EVENT PROTECTION_DEFERRED context=EXIT_TO symbol=US100 reason=stale_tick tick_age_seconds=44961.4 limit_seconds=10.0 existing_sl=28684.89000 existing_tp=0.00000 exit_latched=TO
 2026-07-18 10:29:24 INFO EVENT STRATEGY_STOPPED
 2026-07-18 10:29:27 INFO EVENT STRATEGY_STOPPED
+2026-07-18 11:10:18 INFO EVENT MONITOR_PUBLISHER_STARTED account_key=DEMO interval=5.0s endpoint=https://eloski.eu/oppw-backend/ingest.php
+2026-07-18 11:10:18 INFO EVENT CONNECTED account=REMOVED_DEMO_ACCOUNT_ID server=BOSSAFX-Demo trade=US100 signal=US100 live=True build=2026-07-18-mobile-v9-autotrading-banner-v38 script=D:\oppw\mt5\oppw_mt5_continuous.py
+2026-07-18 11:10:18 INFO EVENT AUTOTRADING_ENABLED
+2026-07-18 11:10:18 INFO EVENT POSITION_RECOVERED ticket=2131668 identifier=2131668 magic=0 open_time=2026-07-17T17:45:13.656000+02:00 entry=28800.10000 volume=0.01 leverage=8 leverage_source=default_L8 signal_open=28605.25000 signal_open_pending=False break_even=False
+2026-07-18 11:10:18 WARNING EVENT PROTECTION_DEFERRED context=EXIT_TO symbol=US100 reason=stale_tick tick_age_seconds=47418.6 limit_seconds=10.0 existing_sl=28684.89000 existing_tp=0.00000 exit_latched=TO
+2026-07-18 11:10:18 INFO STATUS
+==================== TRADE STATUS - STARTUP ====================
+phase: WEEKEND protection regime: Closing position: TO
+time: 2026-07-18 11:10:18 CEST week: 2026-W29
+closest condition: TSL @ 28684.89000 — 77.51000 points below (0.2695%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 17:45:13 CEST
+open price: 28800.10000
+current ask: 28763.35000
+current P/L: -57.20 PLN
+current P/L %: -0.1309%
+current P/L % leveraged: -1.0472%
+equity: 27605.70 PLN deposit: 2185.64 PLN
+SL: 28684.89000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: TO
+final trading day: 2026-07-17
+weekly exit: OVERDUE_TO (due=True)
+previous M1: None
+build: 2026-07-18-mobile-v9-autotrading-banner-v38
+======================================================
+
+2026-07-18 11:10:18 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-18 11:10 current_price=28762.40000 profit=-57.20 profit_percent=-0.130902 leveraged_profit_percent=-1.047219 equity=27605.70 balance=27662.90 deposit=2185.64
+2026-07-18 11:10:18 INFO EVENT WEEK_PLAN week=2026-W29 sessions=2026-07-13,2026-07-14,2026-07-15,2026-07-16,2026-07-17 final_day=2026-07-17 open_action=2026-07-18 15:29:57 CEST weekly_TO=2026-07-17 21:59:57 CEST
+2026-07-18 11:10:36 INFO EVENT MONITOR_PUBLISHER_STARTED account_key=DEMO interval=5.0s endpoint=https://eloski.eu/oppw-backend/ingest.php
+2026-07-18 11:10:36 INFO EVENT CONNECTED account=REMOVED_DEMO_ACCOUNT_ID server=BOSSAFX-Demo trade=US100 signal=US100 live=True build=2026-07-18-mobile-v9-autotrading-banner-v38 script=D:\oppw\mt5\oppw_mt5_continuous.py
+2026-07-18 11:10:36 INFO EVENT AUTOTRADING_ENABLED
+2026-07-18 11:10:36 INFO EVENT POSITION_RECOVERED ticket=2131668 identifier=2131668 magic=0 open_time=2026-07-17T17:45:13.656000+02:00 entry=28800.10000 volume=0.01 leverage=8 leverage_source=default_L8 signal_open=28605.25000 signal_open_pending=False break_even=False
+2026-07-18 11:10:36 WARNING EVENT PROTECTION_DEFERRED context=EXIT_TO symbol=US100 reason=stale_tick tick_age_seconds=47436.8 limit_seconds=10.0 existing_sl=28684.89000 existing_tp=0.00000 exit_latched=TO
+2026-07-18 11:10:36 INFO STATUS
+==================== TRADE STATUS - STARTUP ====================
+phase: WEEKEND protection regime: Closing position: TO
+time: 2026-07-18 11:10:36 CEST week: 2026-W29
+closest condition: TSL @ 28684.89000 — 77.51000 points below (0.2695%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 17:45:13 CEST
+open price: 28800.10000
+current ask: 28763.35000
+current P/L: -57.20 PLN
+current P/L %: -0.1309%
+current P/L % leveraged: -1.0472%
+equity: 27605.70 PLN deposit: 2185.64 PLN
+SL: 28684.89000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: TO
+final trading day: 2026-07-17
+weekly exit: OVERDUE_TO (due=True)
+previous M1: None
+build: 2026-07-18-mobile-v9-autotrading-banner-v38
+======================================================
+
+2026-07-18 11:10:36 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-18 11:10 current_price=28762.40000 profit=-57.20 profit_percent=-0.130902 leveraged_profit_percent=-1.047219 equity=27605.70 balance=27662.90 deposit=2185.64
+2026-07-18 11:10:36 INFO EVENT WEEK_PLAN week=2026-W29 sessions=2026-07-13,2026-07-14,2026-07-15,2026-07-16,2026-07-17 final_day=2026-07-17 open_action=2026-07-18 15:29:57 CEST weekly_TO=2026-07-17 21:59:57 CEST
+2026-07-18 11:11:00 INFO STATUS
+==================== TRADE STATUS - MINUTE ====================
+phase: WEEKEND protection regime: Closing position: TO
+time: 2026-07-18 11:11:00 CEST week: 2026-W29
+closest condition: TSL @ 28684.89000 — 77.51000 points below (0.2695%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 17:45:13 CEST
+open price: 28800.10000
+current ask: 28763.35000
+current P/L: -57.20 PLN
+current P/L %: -0.1309%
+current P/L % leveraged: -1.0472%
+equity: 27605.70 PLN deposit: 2185.64 PLN
+SL: 28684.89000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: TO
+final trading day: 2026-07-17
+weekly exit: OVERDUE_TO (due=True)
+previous M1: None
+build: 2026-07-18-mobile-v9-autotrading-banner-v38
+======================================================
+
+2026-07-18 11:11:00 INFO CONDITION_REPORT_BEGIN minute=2026-07-18 11:11
+2026-07-18 11:11:00 INFO CHECK minute=2026-07-18_11:11 weekday=Saturday phase=WEEKEND name=POSITION_IS_OPEN result=TRUE ticket=2131668 entry=28800.1 volume=0.01
+2026-07-18 11:11:00 INFO CHECK minute=2026-07-18_11:11 weekday=Saturday phase=WEEKEND name=ENTRY_SIGNAL_OPEN_AVAILABLE result=TRUE signal_open=28605.25 pending=False
+2026-07-18 11:11:00 INFO CHECK minute=2026-07-18_11:11 weekday=Saturday phase=WEEKEND name=EXIT_LATCH_CLEAR result=FALSE exit_latch=TO
+2026-07-18 11:11:00 INFO CHECK minute=2026-07-18_11:11 weekday=Saturday phase=WEEKEND name=OH result=FALSE error=Stale tick for US100: age=47460.1s
+2026-07-18 11:11:00 INFO CHECK minute=2026-07-18_11:11 weekday=Saturday phase=WEEKEND name=TSL result=TRUE current_sl=28684.89000 required_sl=28684.89000
+2026-07-18 11:11:00 INFO CONDITION_REPORT_END minute=2026-07-18 11:11 checks=5
+2026-07-18 11:11:00 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-18 11:11 current_price=28762.40000 profit=-57.20 profit_percent=-0.130902 leveraged_profit_percent=-1.047219 equity=27605.70 balance=27662.90 deposit=2185.64
+2026-07-18 11:11:00 INFO STATUS
+==================== TRADE STATUS - MINUTE ====================
+phase: WEEKEND protection regime: Closing position: TO
+time: 2026-07-18 11:11:00 CEST week: 2026-W29
+closest condition: TSL @ 28684.89000 — 77.51000 points below (0.2695%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 17:45:13 CEST
+open price: 28800.10000
+current ask: 28763.35000
+current P/L: -57.20 PLN
+current P/L %: -0.1309%
+current P/L % leveraged: -1.0472%
+equity: 27605.70 PLN deposit: 2185.64 PLN
+SL: 28684.89000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: TO
+final trading day: 2026-07-17
+weekly exit: OVERDUE_TO (due=True)
+previous M1: None
+build: 2026-07-18-mobile-v9-autotrading-banner-v38
+======================================================
+
+2026-07-18 11:11:00 INFO CONDITION_REPORT_BEGIN minute=2026-07-18 11:11
+2026-07-18 11:11:00 INFO CHECK minute=2026-07-18_11:11 weekday=Saturday phase=WEEKEND name=POSITION_IS_OPEN result=TRUE ticket=2131668 entry=28800.1 volume=0.01
+2026-07-18 11:11:00 INFO CHECK minute=2026-07-18_11:11 weekday=Saturday phase=WEEKEND name=ENTRY_SIGNAL_OPEN_AVAILABLE result=TRUE signal_open=28605.25 pending=False
+2026-07-18 11:11:00 INFO CHECK minute=2026-07-18_11:11 weekday=Saturday phase=WEEKEND name=EXIT_LATCH_CLEAR result=FALSE exit_latch=TO
+2026-07-18 11:11:00 INFO CHECK minute=2026-07-18_11:11 weekday=Saturday phase=WEEKEND name=OH result=FALSE error=Stale tick for US100: age=47460.2s
+2026-07-18 11:11:00 INFO CHECK minute=2026-07-18_11:11 weekday=Saturday phase=WEEKEND name=TSL result=TRUE current_sl=28684.89000 required_sl=28684.89000
+2026-07-18 11:11:00 INFO CONDITION_REPORT_END minute=2026-07-18 11:11 checks=5
+2026-07-18 11:11:00 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-18 11:11 current_price=28762.40000 profit=-57.20 profit_percent=-0.130902 leveraged_profit_percent=-1.047219 equity=27605.70 balance=27662.90 deposit=2185.64
+2026-07-18 11:11:18 WARNING EVENT PROTECTION_DEFERRED context=EXIT_TO symbol=US100 reason=stale_tick tick_age_seconds=47478.7 limit_seconds=10.0 existing_sl=28684.89000 existing_tp=0.00000 exit_latched=TO
+2026-07-18 11:11:36 WARNING EVENT PROTECTION_DEFERRED context=EXIT_TO symbol=US100 reason=stale_tick tick_age_seconds=47496.9 limit_seconds=10.0 existing_sl=28684.89000 existing_tp=0.00000 exit_latched=TO
+2026-07-18 11:12:00 INFO STATUS
+==================== TRADE STATUS - MINUTE ====================
+phase: WEEKEND protection regime: Closing position: TO
+time: 2026-07-18 11:12:00 CEST week: 2026-W29
+closest condition: TSL @ 28684.89000 — 77.51000 points below (0.2695%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 17:45:13 CEST
+open price: 28800.10000
+current ask: 28763.35000
+current P/L: -57.20 PLN
+current P/L %: -0.1309%
+current P/L % leveraged: -1.0472%
+equity: 27605.70 PLN deposit: 2185.64 PLN
+SL: 28684.89000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: TO
+final trading day: 2026-07-17
+weekly exit: OVERDUE_TO (due=True)
+previous M1: None
+build: 2026-07-18-mobile-v9-autotrading-banner-v38
+======================================================
+
+2026-07-18 11:12:00 INFO CONDITION_REPORT_BEGIN minute=2026-07-18 11:12
+2026-07-18 11:12:00 INFO CHECK minute=2026-07-18_11:12 weekday=Saturday phase=WEEKEND name=POSITION_IS_OPEN result=TRUE ticket=2131668 entry=28800.1 volume=0.01
+2026-07-18 11:12:00 INFO CHECK minute=2026-07-18_11:12 weekday=Saturday phase=WEEKEND name=ENTRY_SIGNAL_OPEN_AVAILABLE result=TRUE signal_open=28605.25 pending=False
+2026-07-18 11:12:00 INFO CHECK minute=2026-07-18_11:12 weekday=Saturday phase=WEEKEND name=EXIT_LATCH_CLEAR result=FALSE exit_latch=TO
+2026-07-18 11:12:00 INFO CHECK minute=2026-07-18_11:12 weekday=Saturday phase=WEEKEND name=OH result=FALSE error=Stale tick for US100: age=47520.0s
+2026-07-18 11:12:00 INFO CHECK minute=2026-07-18_11:12 weekday=Saturday phase=WEEKEND name=TSL result=TRUE current_sl=28684.89000 required_sl=28684.89000
+2026-07-18 11:12:00 INFO CONDITION_REPORT_END minute=2026-07-18 11:12 checks=5
+2026-07-18 11:12:00 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-18 11:12 current_price=28762.40000 profit=-57.20 profit_percent=-0.130902 leveraged_profit_percent=-1.047219 equity=27605.70 balance=27662.90 deposit=2185.64
+2026-07-18 11:12:00 INFO STATUS
+==================== TRADE STATUS - MINUTE ====================
+phase: WEEKEND protection regime: Closing position: TO
+time: 2026-07-18 11:12:00 CEST week: 2026-W29
+closest condition: TSL @ 28684.89000 — 77.51000 points below (0.2695%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 17:45:13 CEST
+open price: 28800.10000
+current ask: 28763.35000
+current P/L: -57.20 PLN
+current P/L %: -0.1309%
+current P/L % leveraged: -1.0472%
+equity: 27605.70 PLN deposit: 2185.64 PLN
+SL: 28684.89000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: TO
+final trading day: 2026-07-17
+weekly exit: OVERDUE_TO (due=True)
+previous M1: None
+build: 2026-07-18-mobile-v9-autotrading-banner-v38
+======================================================
+
+2026-07-18 11:12:00 INFO CONDITION_REPORT_BEGIN minute=2026-07-18 11:12
+2026-07-18 11:12:00 INFO CHECK minute=2026-07-18_11:12 weekday=Saturday phase=WEEKEND name=POSITION_IS_OPEN result=TRUE ticket=2131668 entry=28800.1 volume=0.01
+2026-07-18 11:12:00 INFO CHECK minute=2026-07-18_11:12 weekday=Saturday phase=WEEKEND name=ENTRY_SIGNAL_OPEN_AVAILABLE result=TRUE signal_open=28605.25 pending=False
+2026-07-18 11:12:00 INFO CHECK minute=2026-07-18_11:12 weekday=Saturday phase=WEEKEND name=EXIT_LATCH_CLEAR result=FALSE exit_latch=TO
+2026-07-18 11:12:00 INFO CHECK minute=2026-07-18_11:12 weekday=Saturday phase=WEEKEND name=OH result=FALSE error=Stale tick for US100: age=47520.2s
+2026-07-18 11:12:00 INFO CHECK minute=2026-07-18_11:12 weekday=Saturday phase=WEEKEND name=TSL result=TRUE current_sl=28684.89000 required_sl=28684.89000
+2026-07-18 11:12:00 INFO CONDITION_REPORT_END minute=2026-07-18 11:12 checks=5
+2026-07-18 11:12:00 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-18 11:12 current_price=28762.40000 profit=-57.20 profit_percent=-0.130902 leveraged_profit_percent=-1.047219 equity=27605.70 balance=27662.90 deposit=2185.64
+2026-07-18 11:12:18 WARNING EVENT PROTECTION_DEFERRED context=EXIT_TO symbol=US100 reason=stale_tick tick_age_seconds=47538.7 limit_seconds=10.0 existing_sl=28684.89000 existing_tp=0.00000 exit_latched=TO
+2026-07-18 11:12:36 WARNING EVENT PROTECTION_DEFERRED context=EXIT_TO symbol=US100 reason=stale_tick tick_age_seconds=47557.0 limit_seconds=10.0 existing_sl=28684.89000 existing_tp=0.00000 exit_latched=TO
+2026-07-18 11:13:00 INFO STATUS
+==================== TRADE STATUS - MINUTE ====================
+phase: WEEKEND protection regime: Closing position: TO
+time: 2026-07-18 11:13:00 CEST week: 2026-W29
+closest condition: TSL @ 28684.89000 — 77.51000 points below (0.2695%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 17:45:13 CEST
+open price: 28800.10000
+current ask: 28763.35000
+current P/L: -57.20 PLN
+current P/L %: -0.1309%
+current P/L % leveraged: -1.0472%
+equity: 27605.70 PLN deposit: 2185.64 PLN
+SL: 28684.89000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: TO
+final trading day: 2026-07-17
+weekly exit: OVERDUE_TO (due=True)
+previous M1: None
+build: 2026-07-18-mobile-v9-autotrading-banner-v38
+======================================================
+
+2026-07-18 11:13:00 INFO CONDITION_REPORT_BEGIN minute=2026-07-18 11:13
+2026-07-18 11:13:00 INFO CHECK minute=2026-07-18_11:13 weekday=Saturday phase=WEEKEND name=POSITION_IS_OPEN result=TRUE ticket=2131668 entry=28800.1 volume=0.01
+2026-07-18 11:13:00 INFO CHECK minute=2026-07-18_11:13 weekday=Saturday phase=WEEKEND name=ENTRY_SIGNAL_OPEN_AVAILABLE result=TRUE signal_open=28605.25 pending=False
+2026-07-18 11:13:00 INFO CHECK minute=2026-07-18_11:13 weekday=Saturday phase=WEEKEND name=EXIT_LATCH_CLEAR result=FALSE exit_latch=TO
+2026-07-18 11:13:00 INFO CHECK minute=2026-07-18_11:13 weekday=Saturday phase=WEEKEND name=OH result=FALSE error=Stale tick for US100: age=47580.1s
+2026-07-18 11:13:00 INFO CHECK minute=2026-07-18_11:13 weekday=Saturday phase=WEEKEND name=TSL result=TRUE current_sl=28684.89000 required_sl=28684.89000
+2026-07-18 11:13:00 INFO CONDITION_REPORT_END minute=2026-07-18 11:13 checks=5
+2026-07-18 11:13:00 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-18 11:13 current_price=28762.40000 profit=-57.20 profit_percent=-0.130902 leveraged_profit_percent=-1.047219 equity=27605.70 balance=27662.90 deposit=2185.64
+2026-07-18 11:13:00 INFO STATUS
+==================== TRADE STATUS - MINUTE ====================
+phase: WEEKEND protection regime: Closing position: TO
+time: 2026-07-18 11:13:00 CEST week: 2026-W29
+closest condition: TSL @ 28684.89000 — 77.51000 points below (0.2695%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 17:45:13 CEST
+open price: 28800.10000
+current ask: 28763.35000
+current P/L: -57.20 PLN
+current P/L %: -0.1309%
+current P/L % leveraged: -1.0472%
+equity: 27605.70 PLN deposit: 2185.64 PLN
+SL: 28684.89000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: TO
+final trading day: 2026-07-17
+weekly exit: OVERDUE_TO (due=True)
+previous M1: None
+build: 2026-07-18-mobile-v9-autotrading-banner-v38
+======================================================
+
+2026-07-18 11:13:00 INFO CONDITION_REPORT_BEGIN minute=2026-07-18 11:13
+2026-07-18 11:13:00 INFO CHECK minute=2026-07-18_11:13 weekday=Saturday phase=WEEKEND name=POSITION_IS_OPEN result=TRUE ticket=2131668 entry=28800.1 volume=0.01
+2026-07-18 11:13:00 INFO CHECK minute=2026-07-18_11:13 weekday=Saturday phase=WEEKEND name=ENTRY_SIGNAL_OPEN_AVAILABLE result=TRUE signal_open=28605.25 pending=False
+2026-07-18 11:13:00 INFO CHECK minute=2026-07-18_11:13 weekday=Saturday phase=WEEKEND name=EXIT_LATCH_CLEAR result=FALSE exit_latch=TO
+2026-07-18 11:13:00 INFO CHECK minute=2026-07-18_11:13 weekday=Saturday phase=WEEKEND name=OH result=FALSE error=Stale tick for US100: age=47580.1s
+2026-07-18 11:13:00 INFO CHECK minute=2026-07-18_11:13 weekday=Saturday phase=WEEKEND name=TSL result=TRUE current_sl=28684.89000 required_sl=28684.89000
+2026-07-18 11:13:00 INFO CONDITION_REPORT_END minute=2026-07-18 11:13 checks=5
+2026-07-18 11:13:00 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-18 11:13 current_price=28762.40000 profit=-57.20 profit_percent=-0.130902 leveraged_profit_percent=-1.047219 equity=27605.70 balance=27662.90 deposit=2185.64
+2026-07-18 11:13:18 WARNING EVENT PROTECTION_DEFERRED context=EXIT_TO symbol=US100 reason=stale_tick tick_age_seconds=47598.7 limit_seconds=10.0 existing_sl=28684.89000 existing_tp=0.00000 exit_latched=TO
+2026-07-18 11:13:37 WARNING EVENT PROTECTION_DEFERRED context=EXIT_TO symbol=US100 reason=stale_tick tick_age_seconds=47617.1 limit_seconds=10.0 existing_sl=28684.89000 existing_tp=0.00000 exit_latched=TO
+2026-07-18 11:14:00 INFO STATUS
+==================== TRADE STATUS - MINUTE ====================
+phase: WEEKEND protection regime: Closing position: TO
+time: 2026-07-18 11:14:00 CEST week: 2026-W29
+closest condition: TSL @ 28684.89000 — 77.51000 points below (0.2695%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 17:45:13 CEST
+open price: 28800.10000
+current ask: 28763.35000
+current P/L: -57.20 PLN
+current P/L %: -0.1309%
+current P/L % leveraged: -1.0472%
+equity: 27605.70 PLN deposit: 2185.64 PLN
+SL: 28684.89000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: TO
+final trading day: 2026-07-17
+weekly exit: OVERDUE_TO (due=True)
+previous M1: None
+build: 2026-07-18-mobile-v9-autotrading-banner-v38
+======================================================
+
+2026-07-18 11:14:00 INFO STATUS
+==================== TRADE STATUS - MINUTE ====================
+phase: WEEKEND protection regime: Closing position: TO
+time: 2026-07-18 11:14:00 CEST week: 2026-W29
+closest condition: TSL @ 28684.89000 — 77.51000 points below (0.2695%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 17:45:13 CEST
+open price: 28800.10000
+current ask: 28763.35000
+current P/L: -57.20 PLN
+current P/L %: -0.1309%
+current P/L % leveraged: -1.0472%
+equity: 27605.70 PLN deposit: 2185.64 PLN
+SL: 28684.89000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: TO
+final trading day: 2026-07-17
+weekly exit: OVERDUE_TO (due=True)
+previous M1: None
+build: 2026-07-18-mobile-v9-autotrading-banner-v38
+======================================================
+
+2026-07-18 11:14:00 INFO CONDITION_REPORT_BEGIN minute=2026-07-18 11:14
+2026-07-18 11:14:00 INFO CONDITION_REPORT_BEGIN minute=2026-07-18 11:14
+2026-07-18 11:14:00 INFO CHECK minute=2026-07-18_11:14 weekday=Saturday phase=WEEKEND name=POSITION_IS_OPEN result=TRUE ticket=2131668 entry=28800.1 volume=0.01
+2026-07-18 11:14:00 INFO CHECK minute=2026-07-18_11:14 weekday=Saturday phase=WEEKEND name=POSITION_IS_OPEN result=TRUE ticket=2131668 entry=28800.1 volume=0.01
+2026-07-18 11:14:00 INFO CHECK minute=2026-07-18_11:14 weekday=Saturday phase=WEEKEND name=ENTRY_SIGNAL_OPEN_AVAILABLE result=TRUE signal_open=28605.25 pending=False
+2026-07-18 11:14:00 INFO CHECK minute=2026-07-18_11:14 weekday=Saturday phase=WEEKEND name=ENTRY_SIGNAL_OPEN_AVAILABLE result=TRUE signal_open=28605.25 pending=False
+2026-07-18 11:14:00 INFO CHECK minute=2026-07-18_11:14 weekday=Saturday phase=WEEKEND name=EXIT_LATCH_CLEAR result=FALSE exit_latch=TO
+2026-07-18 11:14:00 INFO CHECK minute=2026-07-18_11:14 weekday=Saturday phase=WEEKEND name=EXIT_LATCH_CLEAR result=FALSE exit_latch=TO
+2026-07-18 11:14:00 INFO CHECK minute=2026-07-18_11:14 weekday=Saturday phase=WEEKEND name=OH result=FALSE error=Stale tick for US100: age=47640.1s
+2026-07-18 11:14:00 INFO CHECK minute=2026-07-18_11:14 weekday=Saturday phase=WEEKEND name=OH result=FALSE error=Stale tick for US100: age=47640.1s
+2026-07-18 11:14:00 INFO CHECK minute=2026-07-18_11:14 weekday=Saturday phase=WEEKEND name=TSL result=TRUE current_sl=28684.89000 required_sl=28684.89000
+2026-07-18 11:14:00 INFO CHECK minute=2026-07-18_11:14 weekday=Saturday phase=WEEKEND name=TSL result=TRUE current_sl=28684.89000 required_sl=28684.89000
+2026-07-18 11:14:00 INFO CONDITION_REPORT_END minute=2026-07-18 11:14 checks=5
+2026-07-18 11:14:00 INFO CONDITION_REPORT_END minute=2026-07-18 11:14 checks=5
+2026-07-18 11:14:00 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-18 11:14 current_price=28762.40000 profit=-57.20 profit_percent=-0.130902 leveraged_profit_percent=-1.047219 equity=27605.70 balance=27662.90 deposit=2185.64
+2026-07-18 11:14:00 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-18 11:14 current_price=28762.40000 profit=-57.20 profit_percent=-0.130902 leveraged_profit_percent=-1.047219 equity=27605.70 balance=27662.90 deposit=2185.64
+2026-07-18 11:14:02 INFO EVENT STRATEGY_STOPPED
+2026-07-18 11:14:03 INFO EVENT STRATEGY_STOPPED
+2026-07-18 11:31:54 INFO EVENT MONITOR_PUBLISHER_STARTED role=EXECUTOR account_key=DEMO interval=5.0s endpoint=https://eloski.eu/oppw-backend/ingest.php
+2026-07-18 11:31:54 INFO EVENT CONNECTED role=EXECUTOR account=REMOVED_DEMO_ACCOUNT_ID server=BOSSAFX-Demo trade=US100 signal=US100 live=True build=2026-07-18-dual-role-coordination-v39 script=D:\oppw\mt5\oppw_mt5_continuous.py
+2026-07-18 11:31:54 INFO EVENT AUTOTRADING_ENABLED
+2026-07-18 11:31:54 INFO EVENT POSITION_RECOVERED ticket=2131668 identifier=2131668 magic=0 open_time=2026-07-17T17:45:13.656000+02:00 entry=28800.10000 volume=0.01 leverage=8 leverage_source=default_L8 signal_open=28605.25000 signal_open_pending=False break_even=False
+2026-07-18 11:31:54 WARNING EVENT PROTECTION_DEFERRED context=EXIT_TO symbol=US100 reason=stale_tick tick_age_seconds=48714.4 limit_seconds=10.0 existing_sl=28684.89000 existing_tp=0.00000 exit_latched=TO
+2026-07-18 11:31:54 INFO STATUS
+==================== TRADE STATUS - STARTUP ====================
+phase: WEEKEND protection regime: Closing position: TO
+time: 2026-07-18 11:31:54 CEST week: 2026-W29
+closest condition: TSL @ 28684.89000 — 77.51000 points below (0.2695%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 17:45:13 CEST
+open price: 28800.10000
+current ask: 28763.35000
+current P/L: -57.20 PLN
+current P/L %: -0.1309%
+current P/L % leveraged: -1.0472%
+equity: 27605.70 PLN deposit: 2185.64 PLN
+SL: 28684.89000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: TO
+final trading day: 2026-07-17
+weekly exit: OVERDUE_TO (due=True)
+previous M1: None
+build: 2026-07-18-dual-role-coordination-v39
+======================================================
+
+2026-07-18 11:31:54 INFO EVENT BACKEND_PUBLISHING_STATE role=EXECUTOR active=True reason=executor_fallback
+2026-07-18 11:31:54 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-18 11:31 current_price=28762.40000 profit=-57.20 profit_percent=-0.130902 leveraged_profit_percent=-1.047219 equity=27605.70 balance=27662.90 deposit=2185.64
+2026-07-18 11:31:54 INFO EVENT WEEK_PLAN week=2026-W29 sessions=2026-07-13,2026-07-14,2026-07-15,2026-07-16,2026-07-17 final_day=2026-07-17 open_action=2026-07-18 15:29:57 CEST weekly_TO=2026-07-17 21:59:57 CEST
+2026-07-18 11:31:54 ERROR EVENT MONITOR_PUBLISH_FAILED error=Instance lock is already held: D:\oppw\mt5\oppw_monitor_equity.events.jsonl.lock owner=unknown queued_events=0
+2026-07-18 11:32:00 INFO STATUS
+==================== TRADE STATUS - MINUTE ====================
+phase: WEEKEND protection regime: Closing position: TO
+time: 2026-07-18 11:32:00 CEST week: 2026-W29
+closest condition: TSL @ 28684.89000 — 77.51000 points below (0.2695%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 17:45:13 CEST
+open price: 28800.10000
+current ask: 28763.35000
+current P/L: -57.20 PLN
+current P/L %: -0.1309%
+current P/L % leveraged: -1.0472%
+equity: 27605.70 PLN deposit: 2185.64 PLN
+SL: 28684.89000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: TO
+final trading day: 2026-07-17
+weekly exit: OVERDUE_TO (due=True)
+previous M1: None
+build: 2026-07-18-dual-role-coordination-v39
+======================================================
+
+2026-07-18 11:32:00 INFO CONDITION_REPORT_BEGIN minute=2026-07-18 11:32
+2026-07-18 11:32:00 INFO CHECK minute=2026-07-18_11:32 weekday=Saturday phase=WEEKEND name=POSITION_IS_OPEN result=TRUE ticket=2131668 entry=28800.1 volume=0.01
+2026-07-18 11:32:00 INFO CHECK minute=2026-07-18_11:32 weekday=Saturday phase=WEEKEND name=ENTRY_SIGNAL_OPEN_AVAILABLE result=TRUE signal_open=28605.25 pending=False
+2026-07-18 11:32:00 INFO CHECK minute=2026-07-18_11:32 weekday=Saturday phase=WEEKEND name=EXIT_LATCH_CLEAR result=FALSE exit_latch=TO
+2026-07-18 11:32:00 INFO CHECK minute=2026-07-18_11:32 weekday=Saturday phase=WEEKEND name=OH result=FALSE error=Stale tick for US100: age=48720.2s
+2026-07-18 11:32:00 INFO CHECK minute=2026-07-18_11:32 weekday=Saturday phase=WEEKEND name=TSL result=TRUE current_sl=28684.89000 required_sl=28684.89000
+2026-07-18 11:32:00 INFO CONDITION_REPORT_END minute=2026-07-18 11:32 checks=5
+2026-07-18 11:32:00 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-18 11:32 current_price=28762.40000 profit=-57.20 profit_percent=-0.130902 leveraged_profit_percent=-1.047219 equity=27605.70 balance=27662.90 deposit=2185.64
+2026-07-18 11:32:09 INFO EVENT STRATEGY_STOPPED role=EXECUTOR
+2026-07-18 11:32:11 INFO EVENT MONITOR_PUBLISHER_STARTED role=EXECUTOR account_key=DEMO interval=5.0s endpoint=https://eloski.eu/oppw-backend/ingest.php
+2026-07-18 11:32:11 INFO EVENT CONNECTED role=EXECUTOR account=REMOVED_DEMO_ACCOUNT_ID server=BOSSAFX-Demo trade=US100 signal=US100 live=True build=2026-07-18-dual-role-coordination-v39 script=D:\oppw\mt5\oppw_mt5_continuous.py
+2026-07-18 11:32:11 INFO EVENT AUTOTRADING_ENABLED
+2026-07-18 11:32:11 INFO EVENT POSITION_RECOVERED ticket=2131668 identifier=2131668 magic=0 open_time=2026-07-17T17:45:13.656000+02:00 entry=28800.10000 volume=0.01 leverage=8 leverage_source=default_L8 signal_open=28605.25000 signal_open_pending=False break_even=False
+2026-07-18 11:32:11 WARNING EVENT PROTECTION_DEFERRED context=EXIT_TO symbol=US100 reason=stale_tick tick_age_seconds=48732.0 limit_seconds=10.0 existing_sl=28684.89000 existing_tp=0.00000 exit_latched=TO
+2026-07-18 11:32:11 INFO STATUS
+==================== TRADE STATUS - STARTUP ====================
+phase: WEEKEND protection regime: Closing position: TO
+time: 2026-07-18 11:32:11 CEST week: 2026-W29
+closest condition: TSL @ 28684.89000 — 77.51000 points below (0.2695%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 17:45:13 CEST
+open price: 28800.10000
+current ask: 28763.35000
+current P/L: -57.20 PLN
+current P/L %: -0.1309%
+current P/L % leveraged: -1.0472%
+equity: 27605.70 PLN deposit: 2185.64 PLN
+SL: 28684.89000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: TO
+final trading day: 2026-07-17
+weekly exit: OVERDUE_TO (due=True)
+previous M1: None
+build: 2026-07-18-dual-role-coordination-v39
+======================================================
+
+2026-07-18 11:32:11 INFO EVENT BACKEND_PUBLISHING_STATE role=EXECUTOR active=True reason=executor_fallback
+2026-07-18 11:32:11 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-18 11:32 current_price=28762.40000 profit=-57.20 profit_percent=-0.130902 leveraged_profit_percent=-1.047219 equity=27605.70 balance=27662.90 deposit=2185.64
+2026-07-18 11:32:11 INFO EVENT WEEK_PLAN week=2026-W29 sessions=2026-07-13,2026-07-14,2026-07-15,2026-07-16,2026-07-17 final_day=2026-07-17 open_action=2026-07-18 15:29:57 CEST weekly_TO=2026-07-17 21:59:57 CEST
+2026-07-18 11:32:11 ERROR EVENT MONITOR_PUBLISH_FAILED error=Instance lock is already held: D:\oppw\mt5\oppw_monitor_equity.events.jsonl.lock owner=unknown queued_events=0
+2026-07-18 11:33:00 INFO STATUS
+==================== TRADE STATUS - MINUTE ====================
+phase: WEEKEND protection regime: Closing position: TO
+time: 2026-07-18 11:33:00 CEST week: 2026-W29
+closest condition: TSL @ 28684.89000 — 77.51000 points below (0.2695%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 17:45:13 CEST
+open price: 28800.10000
+current ask: 28763.35000
+current P/L: -57.20 PLN
+current P/L %: -0.1309%
+current P/L % leveraged: -1.0472%
+equity: 27605.70 PLN deposit: 2185.64 PLN
+SL: 28684.89000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: TO
+final trading day: 2026-07-17
+weekly exit: OVERDUE_TO (due=True)
+previous M1: None
+build: 2026-07-18-dual-role-coordination-v39
+======================================================
+
+2026-07-18 11:33:00 INFO CONDITION_REPORT_BEGIN minute=2026-07-18 11:33
+2026-07-18 11:33:00 INFO CHECK minute=2026-07-18_11:33 weekday=Saturday phase=WEEKEND name=POSITION_IS_OPEN result=TRUE ticket=2131668 entry=28800.1 volume=0.01
+2026-07-18 11:33:00 INFO CHECK minute=2026-07-18_11:33 weekday=Saturday phase=WEEKEND name=ENTRY_SIGNAL_OPEN_AVAILABLE result=TRUE signal_open=28605.25 pending=False
+2026-07-18 11:33:00 INFO CHECK minute=2026-07-18_11:33 weekday=Saturday phase=WEEKEND name=EXIT_LATCH_CLEAR result=FALSE exit_latch=TO
+2026-07-18 11:33:00 INFO CHECK minute=2026-07-18_11:33 weekday=Saturday phase=WEEKEND name=OH result=FALSE error=Stale tick for US100: age=48780.1s
+2026-07-18 11:33:00 INFO CHECK minute=2026-07-18_11:33 weekday=Saturday phase=WEEKEND name=TSL result=TRUE current_sl=28684.89000 required_sl=28684.89000
+2026-07-18 11:33:00 INFO CONDITION_REPORT_END minute=2026-07-18 11:33 checks=5
+2026-07-18 11:33:00 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-18 11:33 current_price=28762.40000 profit=-57.20 profit_percent=-0.130902 leveraged_profit_percent=-1.047219 equity=27605.70 balance=27662.90 deposit=2185.64
+2026-07-18 11:33:12 WARNING EVENT PROTECTION_DEFERRED context=EXIT_TO symbol=US100 reason=stale_tick tick_age_seconds=48792.1 limit_seconds=10.0 existing_sl=28684.89000 existing_tp=0.00000 exit_latched=TO
+2026-07-18 11:34:00 INFO STATUS
+==================== TRADE STATUS - MINUTE ====================
+phase: WEEKEND protection regime: Closing position: TO
+time: 2026-07-18 11:34:00 CEST week: 2026-W29
+closest condition: TSL @ 28684.89000 — 77.51000 points below (0.2695%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 17:45:13 CEST
+open price: 28800.10000
+current ask: 28763.35000
+current P/L: -57.20 PLN
+current P/L %: -0.1309%
+current P/L % leveraged: -1.0472%
+equity: 27605.70 PLN deposit: 2185.64 PLN
+SL: 28684.89000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: TO
+final trading day: 2026-07-17
+weekly exit: OVERDUE_TO (due=True)
+previous M1: None
+build: 2026-07-18-dual-role-coordination-v39
+======================================================
+
+2026-07-18 11:34:00 INFO CONDITION_REPORT_BEGIN minute=2026-07-18 11:34
+2026-07-18 11:34:00 INFO CHECK minute=2026-07-18_11:34 weekday=Saturday phase=WEEKEND name=POSITION_IS_OPEN result=TRUE ticket=2131668 entry=28800.1 volume=0.01
+2026-07-18 11:34:00 INFO CHECK minute=2026-07-18_11:34 weekday=Saturday phase=WEEKEND name=ENTRY_SIGNAL_OPEN_AVAILABLE result=TRUE signal_open=28605.25 pending=False
+2026-07-18 11:34:00 INFO CHECK minute=2026-07-18_11:34 weekday=Saturday phase=WEEKEND name=EXIT_LATCH_CLEAR result=FALSE exit_latch=TO
+2026-07-18 11:34:00 INFO CHECK minute=2026-07-18_11:34 weekday=Saturday phase=WEEKEND name=OH result=FALSE error=Stale tick for US100: age=48840.1s
+2026-07-18 11:34:00 INFO CHECK minute=2026-07-18_11:34 weekday=Saturday phase=WEEKEND name=TSL result=TRUE current_sl=28684.89000 required_sl=28684.89000
+2026-07-18 11:34:00 INFO CONDITION_REPORT_END minute=2026-07-18 11:34 checks=5
+2026-07-18 11:34:00 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-18 11:34 current_price=28762.40000 profit=-57.20 profit_percent=-0.130902 leveraged_profit_percent=-1.047219 equity=27605.70 balance=27662.90 deposit=2185.64
+2026-07-18 11:34:12 WARNING EVENT PROTECTION_DEFERRED context=EXIT_TO symbol=US100 reason=stale_tick tick_age_seconds=48852.2 limit_seconds=10.0 existing_sl=28684.89000 existing_tp=0.00000 exit_latched=TO
+2026-07-18 11:35:00 INFO STATUS
+==================== TRADE STATUS - MINUTE ====================
+phase: WEEKEND protection regime: Closing position: TO
+time: 2026-07-18 11:35:00 CEST week: 2026-W29
+closest condition: TSL @ 28684.89000 — 77.51000 points below (0.2695%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 17:45:13 CEST
+open price: 28800.10000
+current ask: 28763.35000
+current P/L: -57.20 PLN
+current P/L %: -0.1309%
+current P/L % leveraged: -1.0472%
+equity: 27605.70 PLN deposit: 2185.64 PLN
+SL: 28684.89000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: TO
+final trading day: 2026-07-17
+weekly exit: OVERDUE_TO (due=True)
+previous M1: None
+build: 2026-07-18-dual-role-coordination-v39
+======================================================
+
+2026-07-18 11:35:00 INFO CONDITION_REPORT_BEGIN minute=2026-07-18 11:35
+2026-07-18 11:35:00 INFO CHECK minute=2026-07-18_11:35 weekday=Saturday phase=WEEKEND name=POSITION_IS_OPEN result=TRUE ticket=2131668 entry=28800.1 volume=0.01
+2026-07-18 11:35:00 INFO CHECK minute=2026-07-18_11:35 weekday=Saturday phase=WEEKEND name=ENTRY_SIGNAL_OPEN_AVAILABLE result=TRUE signal_open=28605.25 pending=False
+2026-07-18 11:35:00 INFO CHECK minute=2026-07-18_11:35 weekday=Saturday phase=WEEKEND name=EXIT_LATCH_CLEAR result=FALSE exit_latch=TO
+2026-07-18 11:35:00 INFO CHECK minute=2026-07-18_11:35 weekday=Saturday phase=WEEKEND name=OH result=FALSE error=Stale tick for US100: age=48900.2s
+2026-07-18 11:35:00 INFO CHECK minute=2026-07-18_11:35 weekday=Saturday phase=WEEKEND name=TSL result=TRUE current_sl=28684.89000 required_sl=28684.89000
+2026-07-18 11:35:00 INFO CONDITION_REPORT_END minute=2026-07-18 11:35 checks=5
+2026-07-18 11:35:00 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-18 11:35 current_price=28762.40000 profit=-57.20 profit_percent=-0.130902 leveraged_profit_percent=-1.047219 equity=27605.70 balance=27662.90 deposit=2185.64
+2026-07-18 11:35:12 WARNING EVENT PROTECTION_DEFERRED context=EXIT_TO symbol=US100 reason=stale_tick tick_age_seconds=48912.3 limit_seconds=10.0 existing_sl=28684.89000 existing_tp=0.00000 exit_latched=TO
+2026-07-18 11:36:00 INFO STATUS
+==================== TRADE STATUS - MINUTE ====================
+phase: WEEKEND protection regime: Closing position: TO
+time: 2026-07-18 11:36:00 CEST week: 2026-W29
+closest condition: TSL @ 28684.89000 — 77.51000 points below (0.2695%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 17:45:13 CEST
+open price: 28800.10000
+current ask: 28763.35000
+current P/L: -57.20 PLN
+current P/L %: -0.1309%
+current P/L % leveraged: -1.0472%
+equity: 27605.70 PLN deposit: 2185.64 PLN
+SL: 28684.89000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: TO
+final trading day: 2026-07-17
+weekly exit: OVERDUE_TO (due=True)
+previous M1: None
+build: 2026-07-18-dual-role-coordination-v39
+======================================================
+
+2026-07-18 11:36:00 INFO CONDITION_REPORT_BEGIN minute=2026-07-18 11:36
+2026-07-18 11:36:00 INFO CHECK minute=2026-07-18_11:36 weekday=Saturday phase=WEEKEND name=POSITION_IS_OPEN result=TRUE ticket=2131668 entry=28800.1 volume=0.01
+2026-07-18 11:36:00 INFO CHECK minute=2026-07-18_11:36 weekday=Saturday phase=WEEKEND name=ENTRY_SIGNAL_OPEN_AVAILABLE result=TRUE signal_open=28605.25 pending=False
+2026-07-18 11:36:00 INFO CHECK minute=2026-07-18_11:36 weekday=Saturday phase=WEEKEND name=EXIT_LATCH_CLEAR result=FALSE exit_latch=TO
+2026-07-18 11:36:00 INFO CHECK minute=2026-07-18_11:36 weekday=Saturday phase=WEEKEND name=OH result=FALSE error=Stale tick for US100: age=48960.1s
+2026-07-18 11:36:00 INFO CHECK minute=2026-07-18_11:36 weekday=Saturday phase=WEEKEND name=TSL result=TRUE current_sl=28684.89000 required_sl=28684.89000
+2026-07-18 11:36:00 INFO CONDITION_REPORT_END minute=2026-07-18 11:36 checks=5
+2026-07-18 11:36:00 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-18 11:36 current_price=28762.40000 profit=-57.20 profit_percent=-0.130902 leveraged_profit_percent=-1.047219 equity=27605.70 balance=27662.90 deposit=2185.64
+2026-07-18 11:36:12 WARNING EVENT PROTECTION_DEFERRED context=EXIT_TO symbol=US100 reason=stale_tick tick_age_seconds=48972.5 limit_seconds=10.0 existing_sl=28684.89000 existing_tp=0.00000 exit_latched=TO
+2026-07-18 11:37:00 INFO STATUS
+==================== TRADE STATUS - MINUTE ====================
+phase: WEEKEND protection regime: Closing position: TO
+time: 2026-07-18 11:37:00 CEST week: 2026-W29
+closest condition: TSL @ 28684.89000 — 77.51000 points below (0.2695%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 17:45:13 CEST
+open price: 28800.10000
+current ask: 28763.35000
+current P/L: -57.20 PLN
+current P/L %: -0.1309%
+current P/L % leveraged: -1.0472%
+equity: 27605.70 PLN deposit: 2185.64 PLN
+SL: 28684.89000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: TO
+final trading day: 2026-07-17
+weekly exit: OVERDUE_TO (due=True)
+previous M1: None
+build: 2026-07-18-dual-role-coordination-v39
+======================================================
+
+2026-07-18 11:37:00 INFO CONDITION_REPORT_BEGIN minute=2026-07-18 11:37
+2026-07-18 11:37:00 INFO CHECK minute=2026-07-18_11:37 weekday=Saturday phase=WEEKEND name=POSITION_IS_OPEN result=TRUE ticket=2131668 entry=28800.1 volume=0.01
+2026-07-18 11:37:00 INFO CHECK minute=2026-07-18_11:37 weekday=Saturday phase=WEEKEND name=ENTRY_SIGNAL_OPEN_AVAILABLE result=TRUE signal_open=28605.25 pending=False
+2026-07-18 11:37:00 INFO CHECK minute=2026-07-18_11:37 weekday=Saturday phase=WEEKEND name=EXIT_LATCH_CLEAR result=FALSE exit_latch=TO
+2026-07-18 11:37:00 INFO CHECK minute=2026-07-18_11:37 weekday=Saturday phase=WEEKEND name=OH result=FALSE error=Stale tick for US100: age=49020.2s
+2026-07-18 11:37:00 INFO CHECK minute=2026-07-18_11:37 weekday=Saturday phase=WEEKEND name=TSL result=TRUE current_sl=28684.89000 required_sl=28684.89000
+2026-07-18 11:37:00 INFO CONDITION_REPORT_END minute=2026-07-18 11:37 checks=5
+2026-07-18 11:37:00 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-18 11:37 current_price=28762.40000 profit=-57.20 profit_percent=-0.130902 leveraged_profit_percent=-1.047219 equity=27605.70 balance=27662.90 deposit=2185.64
+2026-07-18 11:37:12 WARNING EVENT PROTECTION_DEFERRED context=EXIT_TO symbol=US100 reason=stale_tick tick_age_seconds=49032.6 limit_seconds=10.0 existing_sl=28684.89000 existing_tp=0.00000 exit_latched=TO
+2026-07-18 11:38:00 INFO STATUS
+==================== TRADE STATUS - MINUTE ====================
+phase: WEEKEND protection regime: Closing position: TO
+time: 2026-07-18 11:38:00 CEST week: 2026-W29
+closest condition: TSL @ 28684.89000 — 77.51000 points below (0.2695%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 17:45:13 CEST
+open price: 28800.10000
+current ask: 28763.35000
+current P/L: -57.20 PLN
+current P/L %: -0.1309%
+current P/L % leveraged: -1.0472%
+equity: 27605.70 PLN deposit: 2185.64 PLN
+SL: 28684.89000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: TO
+final trading day: 2026-07-17
+weekly exit: OVERDUE_TO (due=True)
+previous M1: None
+build: 2026-07-18-dual-role-coordination-v39
+======================================================
+
+2026-07-18 11:38:00 INFO CONDITION_REPORT_BEGIN minute=2026-07-18 11:38
+2026-07-18 11:38:00 INFO CHECK minute=2026-07-18_11:38 weekday=Saturday phase=WEEKEND name=POSITION_IS_OPEN result=TRUE ticket=2131668 entry=28800.1 volume=0.01
+2026-07-18 11:38:00 INFO CHECK minute=2026-07-18_11:38 weekday=Saturday phase=WEEKEND name=ENTRY_SIGNAL_OPEN_AVAILABLE result=TRUE signal_open=28605.25 pending=False
+2026-07-18 11:38:00 INFO CHECK minute=2026-07-18_11:38 weekday=Saturday phase=WEEKEND name=EXIT_LATCH_CLEAR result=FALSE exit_latch=TO
+2026-07-18 11:38:00 INFO CHECK minute=2026-07-18_11:38 weekday=Saturday phase=WEEKEND name=OH result=FALSE error=Stale tick for US100: age=49080.2s
+2026-07-18 11:38:00 INFO CHECK minute=2026-07-18_11:38 weekday=Saturday phase=WEEKEND name=TSL result=TRUE current_sl=28684.89000 required_sl=28684.89000
+2026-07-18 11:38:00 INFO CONDITION_REPORT_END minute=2026-07-18 11:38 checks=5
+2026-07-18 11:38:00 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-18 11:38 current_price=28762.40000 profit=-57.20 profit_percent=-0.130902 leveraged_profit_percent=-1.047219 equity=27605.70 balance=27662.90 deposit=2185.64
+2026-07-18 11:38:12 WARNING EVENT PROTECTION_DEFERRED context=EXIT_TO symbol=US100 reason=stale_tick tick_age_seconds=49092.8 limit_seconds=10.0 existing_sl=28684.89000 existing_tp=0.00000 exit_latched=TO
+2026-07-18 11:39:00 INFO STATUS
+==================== TRADE STATUS - MINUTE ====================
+phase: WEEKEND protection regime: Closing position: TO
+time: 2026-07-18 11:39:00 CEST week: 2026-W29
+closest condition: TSL @ 28684.89000 — 77.51000 points below (0.2695%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 17:45:13 CEST
+open price: 28800.10000
+current ask: 28763.35000
+current P/L: -57.20 PLN
+current P/L %: -0.1309%
+current P/L % leveraged: -1.0472%
+equity: 27605.70 PLN deposit: 2185.64 PLN
+SL: 28684.89000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: TO
+final trading day: 2026-07-17
+weekly exit: OVERDUE_TO (due=True)
+previous M1: None
+build: 2026-07-18-dual-role-coordination-v39
+======================================================
+
+2026-07-18 11:39:00 INFO CONDITION_REPORT_BEGIN minute=2026-07-18 11:39
+2026-07-18 11:39:00 INFO CHECK minute=2026-07-18_11:39 weekday=Saturday phase=WEEKEND name=POSITION_IS_OPEN result=TRUE ticket=2131668 entry=28800.1 volume=0.01
+2026-07-18 11:39:00 INFO CHECK minute=2026-07-18_11:39 weekday=Saturday phase=WEEKEND name=ENTRY_SIGNAL_OPEN_AVAILABLE result=TRUE signal_open=28605.25 pending=False
+2026-07-18 11:39:00 INFO CHECK minute=2026-07-18_11:39 weekday=Saturday phase=WEEKEND name=EXIT_LATCH_CLEAR result=FALSE exit_latch=TO
+2026-07-18 11:39:00 INFO CHECK minute=2026-07-18_11:39 weekday=Saturday phase=WEEKEND name=OH result=FALSE error=Stale tick for US100: age=49140.2s
+2026-07-18 11:39:00 INFO CHECK minute=2026-07-18_11:39 weekday=Saturday phase=WEEKEND name=TSL result=TRUE current_sl=28684.89000 required_sl=28684.89000
+2026-07-18 11:39:00 INFO CONDITION_REPORT_END minute=2026-07-18 11:39 checks=5
+2026-07-18 11:39:00 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-18 11:39 current_price=28762.40000 profit=-57.20 profit_percent=-0.130902 leveraged_profit_percent=-1.047219 equity=27605.70 balance=27662.90 deposit=2185.64
+2026-07-18 11:39:03 INFO EVENT STRATEGY_STOPPED role=EXECUTOR
+2026-07-18 11:39:25 INFO EVENT MONITOR_PUBLISHER_STARTED role=EXECUTOR account_key=DEMO interval=5.0s endpoint=https://eloski.eu/oppw-backend/ingest.php
+2026-07-18 11:39:25 INFO EVENT CONNECTED role=EXECUTOR account=REMOVED_DEMO_ACCOUNT_ID server=BOSSAFX-Demo trade=US100 signal=US100 live=True build=2026-07-18-dual-role-coordination-v39 script=D:\oppw\mt5\oppw_mt5_continuous.py
+2026-07-18 11:39:25 INFO EVENT AUTOTRADING_ENABLED
+2026-07-18 11:39:25 INFO EVENT POSITION_RECOVERED ticket=2131668 identifier=2131668 magic=0 open_time=2026-07-17T17:45:13.656000+02:00 entry=28800.10000 volume=0.01 leverage=8 leverage_source=default_L8 signal_open=28605.25000 signal_open_pending=False break_even=False
+2026-07-18 11:39:25 WARNING EVENT PROTECTION_DEFERRED context=EXIT_TO symbol=US100 reason=stale_tick tick_age_seconds=49165.9 limit_seconds=10.0 existing_sl=28684.89000 existing_tp=0.00000 exit_latched=TO
+2026-07-18 11:39:25 INFO STATUS
+==================== TRADE STATUS - STARTUP ====================
+phase: WEEKEND protection regime: Closing position: TO
+time: 2026-07-18 11:39:25 CEST week: 2026-W29
+closest condition: TSL @ 28684.89000 — 77.51000 points below (0.2695%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 17:45:13 CEST
+open price: 28800.10000
+current ask: 28763.35000
+current P/L: -57.20 PLN
+current P/L %: -0.1309%
+current P/L % leveraged: -1.0472%
+equity: 27605.70 PLN deposit: 2185.64 PLN
+SL: 28684.89000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: TO
+final trading day: 2026-07-17
+weekly exit: OVERDUE_TO (due=True)
+previous M1: None
+build: 2026-07-18-dual-role-coordination-v39
+======================================================
+
+2026-07-18 11:39:25 INFO EVENT BACKEND_PUBLISHING_STATE role=EXECUTOR active=False reason=dedicated_publisher
+2026-07-18 11:39:25 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-18 11:39 current_price=28762.40000 profit=-57.20 profit_percent=-0.130902 leveraged_profit_percent=-1.047219 equity=27605.70 balance=27662.90 deposit=2185.64
+2026-07-18 11:39:25 INFO EVENT WEEK_PLAN week=2026-W29 sessions=2026-07-13,2026-07-14,2026-07-15,2026-07-16,2026-07-17 final_day=2026-07-17 open_action=2026-07-18 15:29:57 CEST weekly_TO=2026-07-17 21:59:57 CEST
+2026-07-18 11:40:00 INFO STATUS
+==================== TRADE STATUS - MINUTE ====================
+phase: WEEKEND protection regime: Closing position: TO
+time: 2026-07-18 11:40:00 CEST week: 2026-W29
+closest condition: TSL @ 28684.89000 — 77.51000 points below (0.2695%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 17:45:13 CEST
+open price: 28800.10000
+current ask: 28763.35000
+current P/L: -57.20 PLN
+current P/L %: -0.1309%
+current P/L % leveraged: -1.0472%
+equity: 27605.70 PLN deposit: 2185.64 PLN
+SL: 28684.89000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: TO
+final trading day: 2026-07-17
+weekly exit: OVERDUE_TO (due=True)
+previous M1: None
+build: 2026-07-18-dual-role-coordination-v39
+======================================================
+
+2026-07-18 11:40:00 INFO CONDITION_REPORT_BEGIN minute=2026-07-18 11:40
+2026-07-18 11:40:00 INFO CHECK minute=2026-07-18_11:40 weekday=Saturday phase=WEEKEND name=POSITION_IS_OPEN result=TRUE ticket=2131668 entry=28800.1 volume=0.01
+2026-07-18 11:40:00 ERROR EVENT MONITOR_EVENT_SPOOL_FAILED error=Instance lock is already held: D:\oppw\mt5\oppw_monitor_equity.events.jsonl.lock owner=unknown
+2026-07-18 11:40:00 INFO CHECK minute=2026-07-18_11:40 weekday=Saturday phase=WEEKEND name=ENTRY_SIGNAL_OPEN_AVAILABLE result=TRUE signal_open=28605.25 pending=False
+2026-07-18 11:40:00 INFO CHECK minute=2026-07-18_11:40 weekday=Saturday phase=WEEKEND name=EXIT_LATCH_CLEAR result=FALSE exit_latch=TO
+2026-07-18 11:40:00 INFO CHECK minute=2026-07-18_11:40 weekday=Saturday phase=WEEKEND name=OH result=FALSE error=Stale tick for US100: age=49200.1s
+2026-07-18 11:40:00 INFO CHECK minute=2026-07-18_11:40 weekday=Saturday phase=WEEKEND name=TSL result=TRUE current_sl=28684.89000 required_sl=28684.89000
+2026-07-18 11:40:00 INFO CONDITION_REPORT_END minute=2026-07-18 11:40 checks=5
+2026-07-18 11:40:00 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-18 11:40 current_price=28762.40000 profit=-57.20 profit_percent=-0.130902 leveraged_profit_percent=-1.047219 equity=27605.70 balance=27662.90 deposit=2185.64
+2026-07-18 11:40:26 WARNING EVENT PROTECTION_DEFERRED context=EXIT_TO symbol=US100 reason=stale_tick tick_age_seconds=49226.0 limit_seconds=10.0 existing_sl=28684.89000 existing_tp=0.00000 exit_latched=TO
+2026-07-18 11:41:00 INFO STATUS
+==================== TRADE STATUS - MINUTE ====================
+phase: WEEKEND protection regime: Closing position: TO
+time: 2026-07-18 11:41:00 CEST week: 2026-W29
+closest condition: TSL @ 28684.89000 — 77.51000 points below (0.2695%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 17:45:13 CEST
+open price: 28800.10000
+current ask: 28763.35000
+current P/L: -57.20 PLN
+current P/L %: -0.1309%
+current P/L % leveraged: -1.0472%
+equity: 27605.70 PLN deposit: 2185.64 PLN
+SL: 28684.89000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: TO
+final trading day: 2026-07-17
+weekly exit: OVERDUE_TO (due=True)
+previous M1: None
+build: 2026-07-18-dual-role-coordination-v39
+======================================================
+
+2026-07-18 11:41:00 INFO CONDITION_REPORT_BEGIN minute=2026-07-18 11:41
+2026-07-18 11:41:00 INFO CHECK minute=2026-07-18_11:41 weekday=Saturday phase=WEEKEND name=POSITION_IS_OPEN result=TRUE ticket=2131668 entry=28800.1 volume=0.01
+2026-07-18 11:41:00 INFO CHECK minute=2026-07-18_11:41 weekday=Saturday phase=WEEKEND name=ENTRY_SIGNAL_OPEN_AVAILABLE result=TRUE signal_open=28605.25 pending=False
+2026-07-18 11:41:00 INFO CHECK minute=2026-07-18_11:41 weekday=Saturday phase=WEEKEND name=EXIT_LATCH_CLEAR result=FALSE exit_latch=TO
+2026-07-18 11:41:00 INFO CHECK minute=2026-07-18_11:41 weekday=Saturday phase=WEEKEND name=OH result=FALSE error=Stale tick for US100: age=49260.2s
+2026-07-18 11:41:00 INFO CHECK minute=2026-07-18_11:41 weekday=Saturday phase=WEEKEND name=TSL result=TRUE current_sl=28684.89000 required_sl=28684.89000
+2026-07-18 11:41:00 INFO CONDITION_REPORT_END minute=2026-07-18 11:41 checks=5
+2026-07-18 11:41:00 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-18 11:41 current_price=28762.40000 profit=-57.20 profit_percent=-0.130902 leveraged_profit_percent=-1.047219 equity=27605.70 balance=27662.90 deposit=2185.64
+2026-07-18 11:41:26 WARNING EVENT PROTECTION_DEFERRED context=EXIT_TO symbol=US100 reason=stale_tick tick_age_seconds=49286.2 limit_seconds=10.0 existing_sl=28684.89000 existing_tp=0.00000 exit_latched=TO
+2026-07-18 11:42:00 INFO STATUS
+==================== TRADE STATUS - MINUTE ====================
+phase: WEEKEND protection regime: Closing position: TO
+time: 2026-07-18 11:42:00 CEST week: 2026-W29
+closest condition: TSL @ 28684.89000 — 77.51000 points below (0.2695%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 17:45:13 CEST
+open price: 28800.10000
+current ask: 28763.35000
+current P/L: -57.20 PLN
+current P/L %: -0.1309%
+current P/L % leveraged: -1.0472%
+equity: 27605.70 PLN deposit: 2185.64 PLN
+SL: 28684.89000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: TO
+final trading day: 2026-07-17
+weekly exit: OVERDUE_TO (due=True)
+previous M1: None
+build: 2026-07-18-dual-role-coordination-v39
+======================================================
+
+2026-07-18 11:42:00 INFO CONDITION_REPORT_BEGIN minute=2026-07-18 11:42
+2026-07-18 11:42:00 INFO CHECK minute=2026-07-18_11:42 weekday=Saturday phase=WEEKEND name=POSITION_IS_OPEN result=TRUE ticket=2131668 entry=28800.1 volume=0.01
+2026-07-18 11:42:00 INFO CHECK minute=2026-07-18_11:42 weekday=Saturday phase=WEEKEND name=ENTRY_SIGNAL_OPEN_AVAILABLE result=TRUE signal_open=28605.25 pending=False
+2026-07-18 11:42:00 INFO CHECK minute=2026-07-18_11:42 weekday=Saturday phase=WEEKEND name=EXIT_LATCH_CLEAR result=FALSE exit_latch=TO
+2026-07-18 11:42:00 INFO CHECK minute=2026-07-18_11:42 weekday=Saturday phase=WEEKEND name=OH result=FALSE error=Stale tick for US100: age=49320.2s
+2026-07-18 11:42:00 INFO CHECK minute=2026-07-18_11:42 weekday=Saturday phase=WEEKEND name=TSL result=TRUE current_sl=28684.89000 required_sl=28684.89000
+2026-07-18 11:42:00 INFO CONDITION_REPORT_END minute=2026-07-18 11:42 checks=5
+2026-07-18 11:42:00 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-18 11:42 current_price=28762.40000 profit=-57.20 profit_percent=-0.130902 leveraged_profit_percent=-1.047219 equity=27605.70 balance=27662.90 deposit=2185.64
+2026-07-18 11:42:26 WARNING EVENT PROTECTION_DEFERRED context=EXIT_TO symbol=US100 reason=stale_tick tick_age_seconds=49346.4 limit_seconds=10.0 existing_sl=28684.89000 existing_tp=0.00000 exit_latched=TO
+2026-07-18 11:43:00 INFO STATUS
+==================== TRADE STATUS - MINUTE ====================
+phase: WEEKEND protection regime: Closing position: TO
+time: 2026-07-18 11:43:00 CEST week: 2026-W29
+closest condition: TSL @ 28684.89000 — 77.51000 points below (0.2695%)
+position: 0.01 lot US100
+leverage: 8x
+opened: 2026-07-17 17:45:13 CEST
+open price: 28800.10000
+current ask: 28763.35000
+current P/L: -57.20 PLN
+current P/L %: -0.1309%
+current P/L % leveraged: -1.0472%
+equity: 27605.70 PLN deposit: 2185.64 PLN
+SL: 28684.89000 (TSL)
+TP: 0.00000 (-)
+break-even armed: False
+exit latch: TO
+final trading day: 2026-07-17
+weekly exit: OVERDUE_TO (due=True)
+previous M1: None
+build: 2026-07-18-dual-role-coordination-v39
+======================================================
+
+2026-07-18 11:43:00 INFO CONDITION_REPORT_BEGIN minute=2026-07-18 11:43
+2026-07-18 11:43:00 INFO CHECK minute=2026-07-18_11:43 weekday=Saturday phase=WEEKEND name=POSITION_IS_OPEN result=TRUE ticket=2131668 entry=28800.1 volume=0.01
+2026-07-18 11:43:00 INFO CHECK minute=2026-07-18_11:43 weekday=Saturday phase=WEEKEND name=ENTRY_SIGNAL_OPEN_AVAILABLE result=TRUE signal_open=28605.25 pending=False
+2026-07-18 11:43:00 INFO CHECK minute=2026-07-18_11:43 weekday=Saturday phase=WEEKEND name=EXIT_LATCH_CLEAR result=FALSE exit_latch=TO
+2026-07-18 11:43:00 INFO CHECK minute=2026-07-18_11:43 weekday=Saturday phase=WEEKEND name=OH result=FALSE error=Stale tick for US100: age=49380.1s
+2026-07-18 11:43:00 INFO CHECK minute=2026-07-18_11:43 weekday=Saturday phase=WEEKEND name=TSL result=TRUE current_sl=28684.89000 required_sl=28684.89000
+2026-07-18 11:43:00 INFO CONDITION_REPORT_END minute=2026-07-18 11:43 checks=5
+2026-07-18 11:43:00 INFO EVENT MONITOR_MINUTE_STATUS_QUEUED minute=2026-07-18 11:43 current_price=28762.40000 profit=-57.20 profit_percent=-0.130902 leveraged_profit_percent=-1.047219 equity=27605.70 balance=27662.90 deposit=2185.64
+2026-07-18 11:43:26 WARNING EVENT PROTECTION_DEFERRED context=EXIT_TO symbol=US100 reason=stale_tick tick_age_seconds=49406.5 limit_seconds=10.0 existing_sl=28684.89000 existing_tp=0.00000 exit_latched=TO
+2026-07-18 11:43:35 INFO EVENT STRATEGY_STOPPED role=EXECUTOR
+2026-07-18 11:43:35 INFO EVENT BACKEND_PUBLISHING_STATE role=EXECUTOR active=True reason=executor_fallback

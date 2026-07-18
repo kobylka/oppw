@@ -12,13 +12,18 @@ Key execution rules
 * Closing reasons are resolved from the MT5 closing deal and active protection state.
 * Status deposit is read directly from MT5 as float(account.margin).
 * Terminal/account AutoTrading permissions are verified continuously before every live trade request.
+* EXECUTOR mode is the only role permitted to submit or modify trades.
+* PUBLISHER mode is read-only and owns backend publishing while active.
+* EXECUTOR automatically publishes when no PUBLISHER heartbeat is active.
 
-Live trading is disabled unless LIVE_ENABLED=True in oppw_mt5_config.py or
-OPPW_LIVE=1 is set.
+Run the trading instance with `--mode executor` (the default) and the optional
+read-only backend instance with `--mode publisher`. Live trading is disabled
+unless LIVE_ENABLED=True in oppw_mt5_config.py or OPPW_LIVE=1 is set.
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import math
@@ -31,6 +36,7 @@ import threading
 import time as time_module
 import urllib.error
 import urllib.request
+import uuid
 from collections import deque
 from dataclasses import asdict, dataclass, fields
 from datetime import UTC, date, datetime, time, timedelta
@@ -39,10 +45,14 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-BUILD_ID = "2026-07-18-mobile-v9-autotrading-banner-v38"
+BUILD_ID = "2026-07-18-dual-role-coordination-v39"
 SCHEDULED_ACTION_LEAD_SECONDS = 3.0
 AUTOTRADING_REMINDER_SECONDS = 60.0
 STALE_TICK_REMINDER_SECONDS = 60.0
+PUBLISHER_HEARTBEAT_INTERVAL_SECONDS = 1.0
+PUBLISHER_HEARTBEAT_STALE_SECONDS = 8.0
+INSTANCE_MODE_EXECUTOR = "EXECUTOR"
+INSTANCE_MODE_PUBLISHER = "PUBLISHER"
 
 try:
     import exchange_calendars as xcals
@@ -158,25 +168,27 @@ class WarsawFormatter(logging.Formatter):
 
 
 class WeeklyFileHandler(logging.Handler):
-    def __init__(self, log_dir: Path, timezone: ZoneInfo):
+    def __init__(self, log_dir: Path, timezone: ZoneInfo, role: str):
         super().__init__(logging.INFO)
         self.log_dir = log_dir
         self.timezone = timezone
+        self.role = role
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
             current = datetime.fromtimestamp(record.created, self.timezone)
             iso = current.isocalendar()
-            path = self.log_dir / f"{iso.year:04d}_week_{iso.week:02d}.txt"
+            suffix = "" if self.role == INSTANCE_MODE_EXECUTOR else "_publisher"
+            path = self.log_dir / f"{iso.year:04d}_week_{iso.week:02d}{suffix}.txt"
             with path.open("a", encoding="utf-8") as handle:
                 handle.write(self.format(record) + "\n")
         except Exception:
             self.handleError(record)
 
 
-def setup_logging(log_dir: Path, timezone: ZoneInfo) -> logging.Logger:
-    logger = logging.getLogger("oppw_mt5")
+def setup_logging(log_dir: Path, timezone: ZoneInfo, role: str) -> logging.Logger:
+    logger = logging.getLogger(f"oppw_mt5.{role.lower()}")
     logger.setLevel(logging.INFO)
     logger.propagate = False
     logger.handlers.clear()
@@ -186,7 +198,7 @@ def setup_logging(log_dir: Path, timezone: ZoneInfo) -> logging.Logger:
     console.setLevel(logging.INFO)
     console.setFormatter(formatter)
 
-    weekly = WeeklyFileHandler(log_dir, timezone)
+    weekly = WeeklyFileHandler(log_dir, timezone, role)
     weekly.setLevel(logging.INFO)
     weekly.setFormatter(formatter)
 
@@ -221,30 +233,253 @@ def price_changed(current: float, desired: float, tolerance: float) -> bool:
         return False
     return abs(current - desired) >= tolerance
 
-@dataclass(frozen=True)
-class QueuedMonitorEvent:
-    sequence: int
-    payload: dict[str, Any]
 
+
+def derived_coordination_path(base: Path, label: str) -> Path:
+    suffix = base.suffix or ".lock"
+    return base.with_name(f"{base.stem}.{label}{suffix}")
+
+
+class InterProcessFileLock:
+    """OS-backed lock held for the lifetime of the open file handle."""
+
+    def __init__(self, path: Path, owner: Optional[dict[str, Any]] = None):
+        self.path = path
+        self.owner = owner or {}
+        self.handle = None
+        self.acquired = False
+
+    @staticmethod
+    def pid_is_running(pid: int) -> bool:
+        if pid <= 0:
+            return False
+        if os.name == "nt":
+            try:
+                import ctypes
+                process_query_limited_information = 0x1000
+                still_active = 259
+                handle = ctypes.windll.kernel32.OpenProcess(process_query_limited_information, False, pid)
+                if not handle:
+                    return False
+                exit_code = ctypes.c_ulong()
+                ok = ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
+                ctypes.windll.kernel32.CloseHandle(handle)
+                return bool(ok) and exit_code.value == still_active
+            except Exception:
+                return False
+        try:
+            os.kill(pid, 0)
+            return True
+        except PermissionError:
+            return True
+        except (ProcessLookupError, OSError):
+            return False
+
+    def try_acquire(self) -> bool:
+        if self.acquired:
+            return True
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        handle = self.path.open("a+b")
+        try:
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"\0")
+                handle.flush()
+            handle.seek(0)
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (OSError, BlockingIOError):
+            handle.close()
+            return False
+
+        self.handle = handle
+        self.acquired = True
+        metadata = {
+            "pid": os.getpid(),
+            "startedAt": datetime.now(UTC).isoformat(),
+            **self.owner,
+        }
+        handle.seek(0)
+        handle.truncate()
+        handle.write(json.dumps(metadata, separators=(",", ":")).encode("utf-8"))
+        handle.flush()
+        try:
+            os.fsync(handle.fileno())
+        except OSError:
+            pass
+        return True
+
+    def acquire(self) -> None:
+        if not self.try_acquire():
+            owner = ""
+            try:
+                owner = self.path.read_text(encoding="utf-8", errors="replace")[:500]
+            except OSError:
+                pass
+            raise RuntimeError(f"Instance lock is already held: {self.path} owner={owner or 'unknown'}")
+
+    def release(self) -> None:
+        if not self.acquired or self.handle is None:
+            return
+        try:
+            self.handle.seek(0)
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(self.handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            self.handle.close()
+            self.handle = None
+            self.acquired = False
+
+    def __enter__(self) -> "InterProcessFileLock":
+        self.acquire()
+        return self
+
+    def __exit__(self, _exc_type, _exc, _tb) -> None:
+        self.release()
+
+
+class PublisherPresence:
+    def __init__(self, path: Path, role: str):
+        self.path = path
+        self.role = role
+        self.token = uuid.uuid4().hex
+        self.last_touch_monotonic = 0.0
+        self.cached_active = False
+        self.last_check_monotonic = 0.0
+
+    def touch(self, force: bool = False) -> None:
+        if self.role != INSTANCE_MODE_PUBLISHER:
+            return
+        now = time_module.monotonic()
+        if not force and now - self.last_touch_monotonic < PUBLISHER_HEARTBEAT_INTERVAL_SECONDS:
+            return
+        self.last_touch_monotonic = now
+        payload = {
+            "pid": os.getpid(),
+            "token": self.token,
+            "role": self.role,
+            "updatedEpoch": time_module.time(),
+            "updatedAt": datetime.now(UTC).isoformat(),
+        }
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.path.with_name(f"{self.path.name}.{self.token}.tmp")
+        temporary.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+        os.replace(temporary, self.path)
+
+    def dedicated_publisher_active(self) -> bool:
+        if self.role == INSTANCE_MODE_PUBLISHER:
+            return True
+        now = time_module.monotonic()
+        if now - self.last_check_monotonic < 0.5:
+            return self.cached_active
+        self.last_check_monotonic = now
+        try:
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
+            pid = int(raw.get("pid", 0))
+            updated = float(raw.get("updatedEpoch", 0.0))
+            age = max(0.0, time_module.time() - updated)
+            self.cached_active = age <= PUBLISHER_HEARTBEAT_STALE_SECONDS and InterProcessFileLock.pid_is_running(pid)
+        except Exception:
+            self.cached_active = False
+        return self.cached_active
+
+    def remove_if_owner(self) -> None:
+        if self.role != INSTANCE_MODE_PUBLISHER:
+            return
+        try:
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
+            if raw.get("token") == self.token:
+                self.path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+class SharedEventSpool:
+    def __init__(self, path: Path, limit: int):
+        self.path = path
+        self.limit = max(1, limit)
+        self.lock_path = path.with_suffix(path.suffix + ".lock")
+
+    def _read_unlocked(self) -> list[dict[str, Any]]:
+        if not self.path.exists():
+            return []
+        result: list[dict[str, Any]] = []
+        for line in self.path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not line.strip():
+                continue
+            try:
+                item = json.loads(line)
+                if isinstance(item, dict):
+                    result.append(item)
+            except json.JSONDecodeError:
+                continue
+        return result
+
+    def _write_unlocked(self, events: list[dict[str, Any]]) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.path.with_suffix(self.path.suffix + ".tmp")
+        text = "".join(json.dumps(item, separators=(",", ":"), ensure_ascii=False) + "\n" for item in events)
+        temporary.write_text(text, encoding="utf-8")
+        os.replace(temporary, self.path)
+
+    def append(self, event: dict[str, Any]) -> None:
+        lock = InterProcessFileLock(self.lock_path, {"purpose": "monitor-event-spool"})
+        with lock:
+            events = self._read_unlocked()
+            item = dict(event)
+            item.setdefault("_spoolId", uuid.uuid4().hex)
+            item.setdefault("_sourcePid", os.getpid())
+            events.append(item)
+            self._write_unlocked(events[-self.limit:])
+
+    def claim(self, maximum: int) -> list[dict[str, Any]]:
+        lock = InterProcessFileLock(self.lock_path, {"purpose": "monitor-event-spool"})
+        with lock:
+            events = self._read_unlocked()
+            claimed = events[:max(0, maximum)]
+            self._write_unlocked(events[len(claimed):])
+            return claimed
+
+    def requeue_front(self, events: list[dict[str, Any]]) -> None:
+        if not events:
+            return
+        lock = InterProcessFileLock(self.lock_path, {"purpose": "monitor-event-spool"})
+        with lock:
+            current = self._read_unlocked()
+            seen: set[str] = set()
+            merged: list[dict[str, Any]] = []
+            for item in [*events, *current]:
+                key = str(item.get("_spoolId", ""))
+                if key and key in seen:
+                    continue
+                if key:
+                    seen.add(key)
+                merged.append(item)
+            self._write_unlocked(merged[:self.limit])
 
 class MobileMonitorPublisher:
-    """Asynchronous, read-only monitor publisher.
+    """Asynchronous monitor publisher with cross-process role coordination."""
 
-    The strategy thread only supplies immutable snapshots and log events. All
-    HTTPS work, retries, event retention, and equity-history persistence happen
-    on a daemon worker so publishing cannot delay trade execution.
-    """
-
-    def __init__(self, config: Config, logger: logging.Logger, timezone: ZoneInfo):
+    def __init__(self, config: Config, logger: logging.Logger, timezone: ZoneInfo, role: str, publisher_presence: PublisherPresence, event_spool: SharedEventSpool, publish_lock_path: Path):
         self.cfg = config
         self.log = logger
         self.timezone = timezone
+        self.role = role
+        self.publisher_presence = publisher_presence
+        self.event_spool = event_spool
+        self.publish_lock_path = publish_lock_path
         self.enabled = bool(config.monitor_enabled)
         self.ready = self.enabled and bool(config.monitor_ingest_url and config.monitor_write_token and config.monitor_account_key)
         self.condition = threading.Condition()
-        self.events: deque[QueuedMonitorEvent] = deque(maxlen=max(1, config.monitor_event_buffer_size))
         self.guaranteed_snapshots: deque[dict[str, Any]] = deque(maxlen=max(1, config.monitor_minute_snapshot_buffer_size))
-        self.sequence = 0
         self.latest_snapshot: Optional[dict[str, Any]] = None
         self.publish_requested = False
         self.stopping = False
@@ -252,18 +487,25 @@ class MobileMonitorPublisher:
         self.last_error_log_monotonic = 0.0
         self.last_success_utc = ""
         self.equity_history = self.load_equity_history()
+        self.last_publish_permission: Optional[bool] = None
 
         if self.enabled and not self.ready:
-            self.local_log(
-                logging.WARNING,
-                "EVENT MONITOR_DISABLED reason=missing_configuration required=OPPW_MONITOR_INGEST_URL,OPPW_MONITOR_WRITE_TOKEN,OPPW_MONITOR_ACCOUNT_KEY",
-            )
+            self.local_log(logging.WARNING, "EVENT MONITOR_DISABLED reason=missing_configuration required=OPPW_MONITOR_INGEST_URL,OPPW_MONITOR_WRITE_TOKEN,OPPW_MONITOR_ACCOUNT_KEY")
         elif self.ready and not config.monitor_ingest_url.lower().startswith("https://"):
             self.ready = False
             self.local_log(logging.ERROR, "EVENT MONITOR_DISABLED reason=endpoint_must_use_https")
 
     def local_log(self, level: int, message: str, *args: Any) -> None:
         self.log.log(level, message, *args, extra={"skip_mobile_publish": True})
+
+    def allowed_to_publish(self) -> bool:
+        dedicated_active = self.publisher_presence.dedicated_publisher_active()
+        allowed = self.role == INSTANCE_MODE_PUBLISHER or not dedicated_active
+        if self.last_publish_permission is None or self.last_publish_permission != allowed:
+            self.last_publish_permission = allowed
+            reason = "dedicated_publisher" if dedicated_active else "executor_fallback"
+            self.local_log(logging.INFO, "EVENT BACKEND_PUBLISHING_STATE role=%s active=%s reason=%s", self.role, allowed, reason)
+        return allowed
 
     def load_equity_history(self) -> list[dict[str, Any]]:
         try:
@@ -284,7 +526,7 @@ class MobileMonitorPublisher:
         try:
             path = self.cfg.monitor_history_file
             path.parent.mkdir(parents=True, exist_ok=True)
-            temporary = path.with_suffix(path.suffix + ".tmp")
+            temporary = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
             temporary.write_text(json.dumps(self.equity_history, separators=(",", ":")), encoding="utf-8")
             os.replace(temporary, path)
         except Exception as exc:
@@ -293,39 +535,34 @@ class MobileMonitorPublisher:
     def start(self) -> None:
         if not self.ready or self.thread is not None:
             return
-        self.thread = threading.Thread(target=self.worker, name="oppw-monitor-publisher", daemon=True)
+        self.thread = threading.Thread(target=self.worker, name=f"oppw-monitor-{self.role.lower()}", daemon=True)
         self.thread.start()
-        self.local_log(
-            logging.INFO,
-            "EVENT MONITOR_PUBLISHER_STARTED account_key=%s interval=%.1fs endpoint=%s",
-            self.cfg.monitor_account_key,
-            self.cfg.monitor_publish_interval_seconds,
-            self.cfg.monitor_ingest_url,
-        )
+        self.local_log(logging.INFO, "EVENT MONITOR_PUBLISHER_STARTED role=%s account_key=%s interval=%.1fs endpoint=%s", self.role, self.cfg.monitor_account_key, self.cfg.monitor_publish_interval_seconds, self.cfg.monitor_ingest_url)
 
     def stop(self) -> None:
         if self.thread is None:
             return
         with self.condition:
             self.stopping = True
-            if self.latest_snapshot is not None or self.guaranteed_snapshots:
+            if self.allowed_to_publish() and (self.latest_snapshot is not None or self.guaranteed_snapshots):
                 self.publish_requested = True
             self.condition.notify_all()
-        self.thread.join(timeout=max(1.0, self.cfg.monitor_timeout_seconds + 1.0))
+        self.thread.join(timeout=max(1.0, self.cfg.monitor_timeout_seconds + 2.0))
         self.thread = None
 
     def enqueue_event(self, event: dict[str, Any]) -> None:
         if not self.ready:
             return
-        with self.condition:
-            self.sequence += 1
-            self.events.append(QueuedMonitorEvent(self.sequence, event))
+        try:
+            self.event_spool.append(event)
+        except Exception as exc:
+            self.rate_limited_error("EVENT MONITOR_EVENT_SPOOL_FAILED error=%s", exc)
 
     def submit_snapshot(self, snapshot: dict[str, Any], guaranteed: bool = False) -> None:
         if not self.ready:
             return
         with self.condition:
-            if guaranteed:
+            if guaranteed and self.allowed_to_publish():
                 self.guaranteed_snapshots.append(snapshot)
             else:
                 self.latest_snapshot = snapshot
@@ -339,6 +576,7 @@ class MobileMonitorPublisher:
             self.local_log(logging.ERROR, message, *args)
 
     def update_equity_history(self, snapshot: dict[str, Any], captured_at: str) -> None:
+        self.equity_history = self.load_equity_history()
         account = snapshot.get("account")
         if not isinstance(account, dict):
             return
@@ -361,28 +599,14 @@ class MobileMonitorPublisher:
             self.save_equity_history()
         snapshot["equityHistory"] = list(self.equity_history)
 
-    def send(self, snapshot: dict[str, Any], events: list[QueuedMonitorEvent]) -> None:
+    def send(self, snapshot: dict[str, Any], events: list[dict[str, Any]]) -> None:
         captured_at = datetime.now(UTC).isoformat()
         snapshot_copy = json.loads(json.dumps(snapshot, separators=(",", ":")))
         self.update_equity_history(snapshot_copy, captured_at)
-        payload = {
-            "accountKey": self.cfg.monitor_account_key,
-            "capturedAt": captured_at,
-            "snapshot": snapshot_copy,
-            "events": [event.payload for event in events],
-        }
+        public_events = [{key: value for key, value in event.items() if not key.startswith("_spool") and key != "_sourcePid"} for event in events]
+        payload = {"accountKey": self.cfg.monitor_account_key, "capturedAt": captured_at, "snapshot": snapshot_copy, "events": public_events}
         body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-        request = urllib.request.Request(
-            self.cfg.monitor_ingest_url,
-            data=body,
-            method="POST",
-            headers={
-                "Authorization": f"Bearer {self.cfg.monitor_write_token}",
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-                "User-Agent": "OPPW-MT5-Publisher/36",
-            },
-        )
+        request = urllib.request.Request(self.cfg.monitor_ingest_url, data=body, method="POST", headers={"Authorization": f"Bearer {self.cfg.monitor_write_token}", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "OPPW-MT5-Publisher/39"})
         try:
             with urllib.request.urlopen(request, timeout=self.cfg.monitor_timeout_seconds) as response:
                 if int(response.status) not in (200, 201):
@@ -402,7 +626,6 @@ class MobileMonitorPublisher:
                     return
                 guaranteed = bool(self.guaranteed_snapshots)
                 snapshot = self.guaranteed_snapshots.popleft() if guaranteed else self.latest_snapshot
-                events = list(self.events)
                 self.publish_requested = bool(self.guaranteed_snapshots)
 
             if snapshot is None:
@@ -410,22 +633,47 @@ class MobileMonitorPublisher:
                     return
                 continue
 
+            if not self.allowed_to_publish():
+                with self.condition:
+                    self.guaranteed_snapshots.clear()
+                    self.latest_snapshot = snapshot
+                    self.publish_requested = False
+                if self.stopping:
+                    return
+                continue
+
+            publish_lock = InterProcessFileLock(self.publish_lock_path, {"purpose": "backend-publish", "role": self.role})
+            if not publish_lock.try_acquire():
+                with self.condition:
+                    self.latest_snapshot = snapshot
+                    self.publish_requested = not self.stopping
+                if self.stopping:
+                    return
+                time_module.sleep(0.2)
+                continue
+
+            events: list[dict[str, Any]] = []
             succeeded = False
             try:
+                if not self.allowed_to_publish():
+                    continue
+                events = self.event_spool.claim(max(1, self.cfg.monitor_event_buffer_size))
                 self.send(snapshot, events)
                 succeeded = True
                 self.last_success_utc = datetime.now(UTC).isoformat()
-                if events:
-                    highest = events[-1].sequence
-                    with self.condition:
-                        while self.events and self.events[0].sequence <= highest:
-                            self.events.popleft()
             except Exception as exc:
+                if events:
+                    try:
+                        self.event_spool.requeue_front(events)
+                    except Exception as spool_exc:
+                        self.rate_limited_error("EVENT MONITOR_EVENT_REQUEUE_FAILED error=%s", spool_exc)
                 self.rate_limited_error("EVENT MONITOR_PUBLISH_FAILED error=%s queued_events=%s", exc, len(events))
                 if guaranteed and not self.stopping:
                     with self.condition:
                         self.guaranteed_snapshots.appendleft(snapshot)
                         self.publish_requested = False
+            finally:
+                publish_lock.release()
 
             if self.stopping:
                 if not succeeded:
@@ -512,58 +760,20 @@ class MobileEventHandler(logging.Handler):
             self.handleError(record)
 
 
-class SingleInstanceLock:
-    def __init__(self, path: Path):
-        self.path = path
-        self.acquired = False
-
-    @staticmethod
-    def pid_is_running(pid: int) -> bool:
-        if pid <= 0:
-            return False
-        try:
-            os.kill(pid, 0)
-            return True
-        except PermissionError:
-            return True
-        except (ProcessLookupError, OSError):
-            return False
-
-    def acquire(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        if self.path.exists():
-            try:
-                old_pid = int(self.path.read_text(encoding="utf-8").strip())
-            except (OSError, ValueError):
-                old_pid = 0
-            if self.pid_is_running(old_pid):
-                raise RuntimeError(f"Another strategy instance is running with PID {old_pid}: {self.path}")
-            self.path.unlink(missing_ok=True)
-
-        fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(str(os.getpid()))
-        self.acquired = True
-
-    def release(self) -> None:
-        if self.acquired:
-            try:
-                self.path.unlink(missing_ok=True)
-            finally:
-                self.acquired = False
-
-
 # -----------------------------------------------------------------------------
 # Strategy engine
 # -----------------------------------------------------------------------------
 
 
 class OPPWContinuousStrategy:
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, role: str, publisher_presence: PublisherPresence, event_spool: SharedEventSpool, publish_lock_path: Path):
         self.cfg = config
+        self.role = role
+        self.is_executor = role == INSTANCE_MODE_EXECUTOR
+        self.publisher_presence = publisher_presence
         self.tz = ZoneInfo(config.timezone_name)
         self.market_tz = ZoneInfo(config.market_timezone_name)
-        self.log = setup_logging(config.log_dir, self.tz)
+        self.log = setup_logging(config.log_dir, self.tz, role)
         try:
             self.state = StrategyState.load(config.state_file)
         except Exception as exc:
@@ -583,7 +793,7 @@ class OPPWContinuousStrategy:
         self._session_times_cache: dict[date, SessionTimes] = {}
         self.last_monitor_publish_monotonic = 0.0
         self.last_monitor_minute_key = ""
-        self.monitor_publisher = MobileMonitorPublisher(config, self.log, self.tz)
+        self.monitor_publisher = MobileMonitorPublisher(config, self.log, self.tz, role, publisher_presence, event_spool, publish_lock_path)
         self.monitor_event_handler = MobileEventHandler(self.monitor_publisher)
         if self.monitor_publisher.ready:
             self.log.addHandler(self.monitor_event_handler)
@@ -615,14 +825,17 @@ class OPPWContinuousStrategy:
 
         self.connected = True
         self.log.info(
-            "EVENT CONNECTED account=%s server=%s trade=%s signal=%s live=%s build=%s script=%s",
-            getattr(account, "login", "?"), getattr(account, "server", "?"), self.cfg.trade_symbol,
+            "EVENT CONNECTED role=%s account=%s server=%s trade=%s signal=%s live=%s build=%s script=%s",
+            self.role, getattr(account, "login", "?"), getattr(account, "server", "?"), self.cfg.trade_symbol,
             self.cfg.signal_symbol, self.cfg.live_enabled, BUILD_ID, Path(__file__).resolve(),
         )
-        if not self.cfg.live_enabled:
-            self.log.warning("EVENT DRY_RUN live_enabled=false")
+        if self.is_executor:
+            if not self.cfg.live_enabled:
+                self.log.warning("EVENT DRY_RUN live_enabled=false")
+            else:
+                self.ensure_autotrading_enabled("CONNECT", force_log=True)
         else:
-            self.ensure_autotrading_enabled("CONNECT", force_log=True)
+            self.log.info("EVENT INSTANCE_ROLE role=PUBLISHER trading_allowed=false backend_publishing=true")
 
     def disconnect(self) -> None:
         if self.connected:
@@ -651,6 +864,8 @@ class OPPWContinuousStrategy:
         return enabled, values
 
     def ensure_autotrading_enabled(self, context: str, force_log: bool = False) -> bool:
+        if not self.is_executor:
+            return False
         if not self.cfg.live_enabled:
             return True
 
@@ -1487,6 +1702,8 @@ class OPPWContinuousStrategy:
         return {
             "connection": {
                 "connected": connected,
+                "instanceRole": self.role,
+                "backendPublisher": self.monitor_publisher.allowed_to_publish(),
                 "lastSync": now.isoformat(),
                 "accountId": account_login,
                 "week": iso_week_key(now.date()),
@@ -1708,7 +1925,15 @@ class OPPWContinuousStrategy:
         self.last_trade_request_monotonic = time_module.monotonic()
         return True
 
+    def trade_request_role_allowed(self, event: str) -> bool:
+        if self.is_executor:
+            return True
+        self.log.critical("EVENT TRADE_BLOCKED_BY_ROLE role=%s event=%s action=none", self.role, event)
+        return False
+
     def send_buy(self, current_day: date) -> bool:
+        if not self.trade_request_role_allowed("BUY"):
+            return False
         account = mt5.account_info()
         info = mt5.symbol_info(self.cfg.trade_symbol)
         tick = self.require_fresh_tick(self.cfg.trade_symbol)
@@ -1795,6 +2020,8 @@ class OPPWContinuousStrategy:
         return True
 
     def modify_sltp(self, position, desired_sl: float, desired_tp: float, reason: str, sl_reason: str = "", tp_reason: str = "") -> bool:
+        if not self.trade_request_role_allowed(f"SLTP_{reason}"):
+            return False
         info = mt5.symbol_info(position.symbol)
         if info is None:
             raise RuntimeError(f"symbol_info({position.symbol}) failed: {mt5.last_error()}")
@@ -1841,6 +2068,8 @@ class OPPWContinuousStrategy:
         return True
 
     def close_position_market(self, position, reason: str, now: datetime) -> bool:
+        if not self.trade_request_role_allowed(f"SELL_{reason}"):
+            return False
         info = mt5.symbol_info(position.symbol)
         tick = self.require_fresh_tick(position.symbol)
         if info is None:
@@ -2173,6 +2402,8 @@ class OPPWContinuousStrategy:
     # ----- Startup and loop ---------------------------------------------------
 
     def startup_reconcile(self) -> None:
+        if not self.is_executor:
+            raise RuntimeError("startup_reconcile is executor-only")
         now = datetime.now(self.tz)
         position = self.managed_position()
         if position is None and self.state.active_position_identifier:
@@ -2188,6 +2419,8 @@ class OPPWContinuousStrategy:
         self.publish_mobile_minute_status(position, now, current_bar, force=True)
 
     def cycle(self) -> None:
+        if not self.is_executor:
+            raise RuntimeError("cycle is executor-only")
         now = datetime.now(self.tz)
         self.ensure_autotrading_enabled("CYCLE")
         self.log_week_plan(now.date())
@@ -2230,13 +2463,50 @@ class OPPWContinuousStrategy:
         if not minute_published:
             self.publish_mobile_if_due(position, now, current_bar)
 
-    def run(self) -> None:
+    def reload_state_read_only(self) -> None:
+        try:
+            self.state = StrategyState.load(self.cfg.state_file)
+        except Exception as exc:
+            self.log.warning("EVENT PUBLISHER_STATE_READ_FAILED path=%s error=%s", self.cfg.state_file, exc)
+
+    def publisher_startup(self) -> None:
+        if not self.monitor_publisher.ready:
+            raise RuntimeError("Publisher mode requires valid monitor configuration")
+        self.publisher_presence.touch(force=True)
+        self.reload_state_read_only()
+        now = datetime.now(self.tz)
+        position = self.managed_position()
+        current_bar = self.current_m1_bar(self.cfg.trade_symbol)
+        self.emit_status("PUBLISHER_STARTUP", position, now, current_bar)
+        self.last_minute_status = now.strftime("%Y-%m-%d %H:%M")
+        self.last_meaningful_signature = self.status_signature(position, now)
+        self.publish_mobile_minute_status(position, now, current_bar, force=True)
+
+    def publisher_cycle(self) -> None:
+        self.publisher_presence.touch()
+        self.reload_state_read_only()
+        now = datetime.now(self.tz)
+        position = self.managed_position()
+        current_bar = self.current_m1_bar(self.cfg.trade_symbol)
+        minute_key = now.strftime("%Y-%m-%d %H:%M")
+        if minute_key != self.last_minute_status:
+            self.last_minute_status = minute_key
+            self.emit_status("PUBLISHER_MINUTE", position, now, current_bar)
+        signature = self.status_signature(position, now)
+        if signature != self.last_meaningful_signature:
+            self.last_meaningful_signature = signature
+            self.emit_status("PUBLISHER_STATUS_CHANGE", position, now, current_bar)
+        minute_published = self.publish_mobile_minute_status(position, now, current_bar)
+        if not minute_published:
+            self.publish_mobile_if_due(position, now, current_bar)
+
+    def run_executor(self) -> None:
         self.connect()
         self.startup_reconcile()
         while self.running:
             try:
                 if not self.connection_healthy():
-                    self.log.error("EVENT CONNECTION_LOST reconnecting=true")
+                    self.log.error("EVENT CONNECTION_LOST role=EXECUTOR reconnecting=true")
                     self.disconnect()
                     time_module.sleep(self.cfg.reconnect_seconds)
                     self.connect()
@@ -2245,9 +2515,37 @@ class OPPWContinuousStrategy:
             except KeyboardInterrupt:
                 self.running = False
             except Exception:
-                self.log.exception("EVENT STRATEGY_CYCLE_FAILED")
+                self.log.exception("EVENT STRATEGY_CYCLE_FAILED role=EXECUTOR")
             time_module.sleep(self.cfg.poll_seconds)
-        self.log.info("EVENT STRATEGY_STOPPED")
+        self.log.info("EVENT STRATEGY_STOPPED role=EXECUTOR")
+
+    def run_publisher(self) -> None:
+        self.publisher_presence.touch(force=True)
+        self.connect()
+        self.publisher_startup()
+        while self.running:
+            try:
+                self.publisher_presence.touch()
+                if not self.connection_healthy():
+                    self.log.error("EVENT CONNECTION_LOST role=PUBLISHER reconnecting=true")
+                    self.disconnect()
+                    time_module.sleep(self.cfg.reconnect_seconds)
+                    self.publisher_presence.touch(force=True)
+                    self.connect()
+                    self.publisher_startup()
+                self.publisher_cycle()
+            except KeyboardInterrupt:
+                self.running = False
+            except Exception:
+                self.log.exception("EVENT PUBLISHER_CYCLE_FAILED role=PUBLISHER")
+            time_module.sleep(self.cfg.poll_seconds)
+        self.log.info("EVENT STRATEGY_STOPPED role=PUBLISHER")
+
+    def run(self) -> None:
+        if self.is_executor:
+            self.run_executor()
+        else:
+            self.run_publisher()
 
     def stop(self, *_args: Any) -> None:
         self.running = False
@@ -2258,24 +2556,78 @@ class OPPWContinuousStrategy:
 # -----------------------------------------------------------------------------
 
 
-def main() -> int:
-    cfg = Config()
-    lock = SingleInstanceLock(cfg.lock_file)
-    strategy = OPPWContinuousStrategy(cfg)
+def parse_arguments(argv: Optional[list[str]] = None) -> argparse.Namespace:
+    default_mode = os.getenv("OPPW_INSTANCE_MODE", INSTANCE_MODE_EXECUTOR).strip().upper() or INSTANCE_MODE_EXECUTOR
+    if default_mode not in {INSTANCE_MODE_EXECUTOR, INSTANCE_MODE_PUBLISHER}:
+        default_mode = INSTANCE_MODE_EXECUTOR
+    parser = argparse.ArgumentParser(description="OPPW MT5 continuous strategy")
+    parser.add_argument(
+        "--mode",
+        choices=(INSTANCE_MODE_EXECUTOR.lower(), INSTANCE_MODE_PUBLISHER.lower()),
+        default=default_mode.lower(),
+        help="executor may trade and publishes only when no publisher exists; publisher is read-only and handles backend publishing",
+    )
+    return parser.parse_args(argv)
+
+
+def legacy_live_pid(path: Path) -> int:
     try:
-        lock.acquire()
+        text = path.read_text(encoding="utf-8").strip()
+        if not text or not text.lstrip("-").isdigit():
+            return 0
+        pid = int(text)
+        return pid if InterProcessFileLock.pid_is_running(pid) else 0
+    except OSError:
+        return 0
+
+
+def main() -> int:
+    args = parse_arguments()
+    role = str(args.mode).upper()
+    cfg = Config()
+
+    old_pid = legacy_live_pid(cfg.lock_file)
+    if old_pid:
+        print(
+            f"FATAL: legacy OPPW instance PID {old_pid} is still running. Stop all v38/older instances before starting v39 roles.",
+            file=sys.stderr,
+        )
+        return 1
+
+    publisher_lock_path = derived_coordination_path(cfg.lock_file, "publisher")
+    role_lock_path = cfg.lock_file if role == INSTANCE_MODE_EXECUTOR else publisher_lock_path
+    heartbeat_path = cfg.lock_file.with_name(f"{cfg.lock_file.stem}.publisher.heartbeat.json")
+    publish_lock_path = derived_coordination_path(cfg.lock_file, "backend-publish")
+    event_spool_path = cfg.monitor_history_file.with_name(f"{cfg.monitor_history_file.stem}.events.jsonl")
+
+    role_lock = InterProcessFileLock(role_lock_path, {"role": role, "build": BUILD_ID})
+    publisher_presence = PublisherPresence(heartbeat_path, role)
+    event_spool = SharedEventSpool(event_spool_path, cfg.monitor_event_buffer_size)
+    strategy: Optional[OPPWContinuousStrategy] = None
+
+    try:
+        role_lock.acquire()
+        strategy = OPPWContinuousStrategy(cfg, role, publisher_presence, event_spool, publish_lock_path)
+        if role == INSTANCE_MODE_PUBLISHER and not strategy.monitor_publisher.ready:
+            raise RuntimeError("Publisher mode cannot start because backend monitor publishing is not configured")
         signal.signal(signal.SIGINT, strategy.stop)
         if hasattr(signal, "SIGTERM"):
             signal.signal(signal.SIGTERM, strategy.stop)
         strategy.run()
         return 0
     except Exception:
-        strategy.log.exception("EVENT FATAL_STARTUP_FAILURE")
+        if strategy is not None:
+            strategy.log.exception("EVENT FATAL_STARTUP_FAILURE role=%s", role)
+        else:
+            logging.basicConfig(level=logging.ERROR)
+            logging.exception("FATAL_STARTUP_FAILURE role=%s", role)
         return 1
     finally:
-        strategy.shutdown_mobile_publisher()
-        strategy.disconnect()
-        lock.release()
+        if strategy is not None:
+            strategy.shutdown_mobile_publisher()
+            strategy.disconnect()
+        publisher_presence.remove_if_owner()
+        role_lock.release()
 
 
 if __name__ == "__main__":
