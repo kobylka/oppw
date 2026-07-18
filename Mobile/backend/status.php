@@ -243,11 +243,8 @@ function positive_number(array $row, string $field): ?float
 function strategy_week_start(DateTimeImmutable $local): DateTimeImmutable
 {
     $date = $local->setTime(0, 0);
-    $weekday = (int)$local->format('N');
-    $daysSinceFriday = ($weekday - 5 + 7) % 7;
-    $start = $date->modify("-$daysSinceFriday days");
-    if ($weekday === 5 && $local->format('H:i:s') < '15:30:00') $start = $start->modify('-7 days');
-    return $start;
+    $daysSinceMonday = (int)$local->format('N') - 1;
+    return $date->modify("-$daysSinceMonday days");
 }
 
 function market_point_price(array $row, string $field, ?float $fallback = null): ?float
@@ -290,12 +287,15 @@ function build_market_week_stats(array $rows, DateTimeImmutable $weekStart, Date
         if ($price !== null) $currentPrice = $price;
     }
 
+    ksort($days, SORT_STRING);
+    $firstTradingDayKey = array_key_first($days);
     foreach ($days as $dayKey => &$day) {
         usort($day['rows'], static fn(array $a, array $b): int => $a[1]->getTimestamp() <=> $b[1]->getTimestamp());
-        if ($dayKey === $weekStartKey) {
-            foreach ($day['rows'] as $candidate) {
+        if ($dayKey === $firstTradingDayKey) {
+            for ($index = count($day['rows']) - 1; $index >= 0; $index--) {
+                $candidate = $day['rows'][$index];
                 $seconds = ((int)$candidate[1]->format('H')) * 3600 + ((int)$candidate[1]->format('i')) * 60 + (int)$candidate[1]->format('s');
-                if ($seconds >= 15 * 3600 + 30 * 60 && $seconds <= 15 * 3600 + 35 * 60) {
+                if ($seconds >= 15 * 3600 + 25 * 60 && $seconds <= 15 * 3600 + 30 * 60) {
                     $day['open'] = $candidate[2];
                     break;
                 }
@@ -306,7 +306,7 @@ function build_market_week_stats(array $rows, DateTimeImmutable $weekStart, Date
     }
     unset($day);
 
-    $weekOpen = $days[$weekStartKey]['open'] ?? null;
+    $weekOpen = $firstTradingDayKey !== null ? ($days[$firstTradingDayKey]['open'] ?? null) : null;
     $latestDayDate = array_key_last($days) ?: '';
     $latestDay = $latestDayDate !== '' ? $days[$latestDayDate] : null;
     $relative = static fn(?float $value): ?float => $weekOpen !== null && $weekOpen > 0 && $value !== null ? ($value / $weekOpen - 1.0) * 100.0 : null;
