@@ -1,0 +1,16 @@
+OPPW MT5 v34 -> v35 AST method comparison
+
+Changed methods:
+- build_mobile_snapshot
+- closest_price_condition
+- log_minute_condition_report
+- monitor_all_conditions
+- monitor_position_exposure
+- oh_check_pending
+- protection_regime
+
+Intent:
+- OH condition lifecycle ends after the scheduled daily open check.
+- Exposure is deposit x20.
+- Protection labels are human-readable.
+- Potential OH/CH target is published explicitly.

@@ -65,6 +65,15 @@ fun AnalyticsScreen(state: UiState, onRetry: () -> Unit) {
                 }
                 item {
                     AppCard(Modifier.fillMaxWidth()) {
+                        SectionTitle("Risk-adjusted performance", "${s.riskSampleDays} daily returns")
+                        MetricRow("Sharpe ratio", String.format("%.2f", s.sharpeRatio), "Sortino ratio", String.format("%.2f", s.sortinoRatio))
+                        MetricRow("Calmar ratio", String.format("%.2f", s.calmarRatio), "Omega ratio", String.format("%.2f", s.omegaRatio))
+                        MetricRow("Ulcer index", percent(s.ulcerIndexPercent), "Daily VaR 95%", percent(-s.valueAtRisk95Percent))
+                        MetricRow("Expected shortfall 95%", percent(-s.expectedShortfall95Percent), "Sample", "${s.riskSampleDays} days")
+                    }
+                }
+                item {
+                    AppCard(Modifier.fillMaxWidth()) {
                         SectionTitle("Risk and consistency")
                         MetricRow("Max drawdown", money(s.maxDrawdown, currency), "Time in market", percent(s.timeInMarketPercent))
                         MetricRow("Consistency score", String.format("%.2f", s.consistencyScore), "Best trade", money(s.bestTrade, currency))

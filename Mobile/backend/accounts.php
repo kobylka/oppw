@@ -7,7 +7,11 @@ $session = require_mobile_session();
 $db = pdo();
 $stmt = $db->prepare(
     'SELECT a.account_key, a.display_name, a.account_type, a.broker_account_id, a.is_default,
-            s.payload, s.captured_at
+            s.payload, s.captured_at,
+            (SELECT MAX(mp.captured_minute)
+               FROM strategy_market_points mp
+              WHERE mp.strategy_key = a.account_key
+                AND (COALESCE(mp.current_price, 0) > 0 OR COALESCE(mp.bid, 0) > 0 OR COALESCE(mp.ask, 0) > 0)) AS last_tick_at
        FROM monitor_device_accounts da
        JOIN monitor_accounts a ON a.account_key = da.account_key
        LEFT JOIN strategy_snapshots s ON s.id = (
@@ -20,9 +24,16 @@ $stmt = $db->prepare(
 );
 $stmt->execute([$session['device_id']]);
 
-$accounts = array_map(static function (array $row): array {
+$now = utc_now();
+$warsaw = new DateTimeZone('Europe/Warsaw');
+$priceWarningSeconds = max(10, (int)(config()['monitor_price_warning_seconds'] ?? 60));
+$accounts = array_map(static function (array $row) use ($now, $priceWarningSeconds): array {
     $snapshot = $row['payload'] ? json_decode((string)$row['payload'], true) : null;
     $connection = is_array($snapshot) && isset($snapshot['connection']) && is_array($snapshot['connection']) ? $snapshot['connection'] : [];
+    $capturedAt = $row['captured_at'] ? new DateTimeImmutable((string)$row['captured_at'], new DateTimeZone('UTC')) : null;
+    $lastTickAt = $row['last_tick_at'] ? new DateTimeImmutable((string)$row['last_tick_at'], new DateTimeZone('UTC')) : null;
+    $lastTickAge = $lastTickAt ? max(0, $now->getTimestamp() - $lastTickAt->getTimestamp()) : null;
+    $health = $lastTickAge === null ? 'UNKNOWN' : ($lastTickAge <= $priceWarningSeconds ? 'OK' : 'WARNING');
     return [
         'key' => (string)$row['account_key'],
         'displayName' => (string)$row['display_name'],
@@ -30,8 +41,8 @@ $accounts = array_map(static function (array $row): array {
         'brokerAccountId' => (string)$row['broker_account_id'],
         'isDefault' => (bool)$row['is_default'],
         'connected' => (bool)($connection['connected'] ?? false),
-        'health' => (string)($connection['health'] ?? 'NO DATA'),
-        'lastSync' => isset($connection['lastSync']) ? (string)$connection['lastSync'] : '',
+        'health' => $health,
+        'lastSync' => $capturedAt ? atom_datetime($capturedAt) : '',
     ];
 }, $stmt->fetchAll());
 

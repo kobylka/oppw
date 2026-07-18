@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -99,26 +100,19 @@ fun PositionScreen(state: UiState, onRetry: () -> Unit) {
                     }
                 }
 
-                item {
-                    AppCard(Modifier.fillMaxWidth()) {
-                        SectionTitle("Closest condition")
-                        if (closest == null) {
-                            Text("No active price condition", color = TextSecondary)
-                        } else {
-                            Text(closest.name, color = PrimaryBlue, style = MaterialTheme.typography.headlineMedium)
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                                Metric("Target price", price(closest.targetPrice), Modifier.weight(1f))
-                                Metric("Distance", "${price(closest.distancePoints)} pts\n(${String.format("%.2f", closest.distancePercent)}%)", Modifier.weight(1f), PrimaryBlue)
-                            }
+                item { ConditionCard("Closest condition", closest, true) }
+
+                item { SectionTitle("All conditions", conditions.size.toString()) }
+                if (conditions.isEmpty()) {
+                    item {
+                        AppCard(Modifier.fillMaxWidth()) {
+                            Text("No conditions supplied by the strategy publisher.", color = TextSecondary)
                         }
                     }
-                }
-
-                item {
-                    AppCard(Modifier.fillMaxWidth()) {
-                        SectionTitle("All conditions", conditions.size.toString())
-                        if (conditions.isEmpty()) Text("No conditions supplied by the strategy publisher.", color = TextSecondary)
-                        conditions.forEach { condition -> ConditionRow(condition, closest?.name == condition.name) }
+                } else {
+                    items(conditions.size, key = { index -> "condition-${conditions[index].name}-$index" }) { index ->
+                        val condition = conditions[index]
+                        ConditionCard(condition.name, condition, closest?.name == condition.name)
                     }
                 }
 
@@ -157,19 +151,24 @@ fun PositionScreen(state: UiState, onRetry: () -> Unit) {
 }
 
 @Composable
-private fun ConditionRow(condition: PriceCondition, closest: Boolean) {
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(condition.name, color = if (closest) PrimaryBlue else MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleMedium)
-                if (closest) StatusChip("NEAREST")
-            }
-            Text(condition.source, color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+private fun ConditionCard(title: String, condition: PriceCondition?, nearest: Boolean) {
+    AppCard(Modifier.fillMaxWidth()) {
+        SectionTitle(title, condition?.source ?: "")
+        if (condition == null) {
+            Text("No active price condition", color = TextSecondary)
+            return@AppCard
         }
-        Text(
-            "Target ${price(condition.targetPrice)} · Current ${price(condition.currentPrice)} · ${price(condition.distancePoints)} pts ${condition.direction} (${String.format("%.3f", condition.distancePercent)}%)",
-            color = TextSecondary,
-            style = MaterialTheme.typography.bodyMedium,
-        )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(condition.name, color = if (nearest) PrimaryBlue else MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.headlineMedium)
+            if (nearest) StatusChip("NEAREST")
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            Metric("Target price", price(condition.targetPrice), Modifier.weight(1f))
+            Metric("Distance", "${price(condition.distancePoints)} pts\n(${String.format("%.2f", condition.distancePercent)}%)", Modifier.weight(1f), if (nearest) PrimaryBlue else MaterialTheme.colorScheme.onSurface)
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            Metric("Current price", price(condition.currentPrice), Modifier.weight(1f))
+            Metric("Direction", condition.direction.replaceFirstChar { it.uppercase() }, Modifier.weight(1f))
+        }
     }
 }

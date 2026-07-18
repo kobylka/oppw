@@ -43,6 +43,48 @@ try {
     json_response(['ok' => false, 'error' => 'Stored snapshot is invalid'], 500);
 }
 
+$serverNowUtc = utc_now();
+$warsaw = new DateTimeZone('Europe/Warsaw');
+$localNow = $serverNowUtc->setTimezone($warsaw);
+$snapshotCapturedAt = new DateTimeImmutable((string)$row['captured_at'], new DateTimeZone('UTC'));
+$lastUpdateAgeSeconds = max(0.0, (float)($serverNowUtc->getTimestamp() - $snapshotCapturedAt->getTimestamp()));
+$heartbeatStaleSeconds = max(60, (int)(config()['monitor_heartbeat_stale_seconds'] ?? 180));
+$priceWarningSeconds = max(10, (int)(config()['monitor_price_warning_seconds'] ?? 60));
+$positionValue = $snapshot['position'] ?? null;
+$positionOpen = is_array($positionValue) && (!array_key_exists('open', $positionValue) || (bool)$positionValue['open']);
+$weekendIdle = !$positionOpen && (int)$localNow->format('N') >= 6;
+$heartbeatStatus = $weekendIdle ? 'WEEKEND IDLE' : ($lastUpdateAgeSeconds <= $heartbeatStaleSeconds ? 'RUNNING' : 'STALE');
+
+$lastTickStmt = $db->prepare(
+    'SELECT captured_minute
+       FROM strategy_market_points
+      WHERE strategy_key = ?
+        AND (COALESCE(current_price, 0) > 0 OR COALESCE(bid, 0) > 0 OR COALESCE(ask, 0) > 0)
+      ORDER BY captured_minute DESC
+      LIMIT 1'
+);
+$lastTickStmt->execute([$accountKey]);
+$lastTickRaw = $lastTickStmt->fetchColumn();
+$lastTickAt = is_string($lastTickRaw) && $lastTickRaw !== '' ? new DateTimeImmutable($lastTickRaw, new DateTimeZone('UTC')) : null;
+$lastTickAgeSeconds = $lastTickAt ? max(0.0, (float)($serverNowUtc->getTimestamp() - $lastTickAt->getTimestamp())) : null;
+$priceHealth = $lastTickAgeSeconds === null ? 'UNKNOWN' : ($lastTickAgeSeconds <= $priceWarningSeconds ? 'OK' : 'WARNING');
+
+if (!is_array($snapshot['connection'] ?? null)) $snapshot['connection'] = [];
+$snapshot['connection']['heartbeatStatus'] = $heartbeatStatus;
+$snapshot['connection']['lastUpdate'] = atom_datetime($snapshotCapturedAt);
+$snapshot['connection']['lastUpdateAgeSeconds'] = $lastUpdateAgeSeconds;
+$snapshot['connection']['lastTick'] = $lastTickAt ? atom_datetime($lastTickAt) : '';
+$snapshot['connection']['us100AgeSeconds'] = $lastTickAgeSeconds;
+$snapshot['connection']['health'] = $priceHealth;
+if ($weekendIdle) {
+    $snapshot['connection']['phase'] = 'Weekend';
+    $snapshot['connection']['regime'] = 'None';
+    $snapshot['connection']['nextAction'] = 'None';
+    $snapshot['connection']['nextActionAt'] = '';
+    $snapshot['conditions'] = [];
+    $snapshot['closestCondition'] = null;
+}
+
 // Normalize v7/v34 snapshots so exposure and OH lifecycle are correct immediately,
 // even before the upgraded publisher sends its first v35 snapshot.
 if (is_array($snapshot['position'] ?? null) && (!array_key_exists('open', $snapshot['position']) || (bool)$snapshot['position']['open'])) {
@@ -95,8 +137,8 @@ function equity_points(PDO $db, string $accountKey, string $whereSql, int $maxim
 
 function all_time_equity_points(PDO $db, string $accountKey): array
 {
-    $sql =
-        'SELECT p.captured_minute, p.equity
+    $equitySql =
+        'SELECT p.captured_minute, p.balance, p.equity
            FROM strategy_equity_points p
            JOIN (
                 SELECT DATE(captured_minute) AS day_key, MAX(captured_minute) AS last_time
@@ -106,35 +148,91 @@ function all_time_equity_points(PDO $db, string $accountKey): array
            ) daily ON daily.last_time = p.captured_minute
           WHERE p.strategy_key = ?
           ORDER BY p.captured_minute';
-    $statement = $db->prepare($sql);
-    $statement->execute([$accountKey, $accountKey]);
-    $dailyRows = $statement->fetchAll();
+    $equityStmt = $db->prepare($equitySql);
+    $equityStmt->execute([$accountKey, $accountKey]);
+    $equityByDay = [];
+    foreach ($equityStmt->fetchAll() as $row) $equityByDay[substr((string)$row['captured_minute'], 0, 10)] = $row;
 
-    $flowStatement = $db->prepare('SELECT occurred_at, flow_type, amount FROM account_cash_flows WHERE strategy_key = ? ORDER BY occurred_at, id');
-    $flowStatement->execute([$accountKey]);
-    $flows = $flowStatement->fetchAll();
-    $flowIndex = 0;
+    $flowStmt = $db->prepare('SELECT occurred_at, flow_type, amount, balance_after FROM account_cash_flows WHERE strategy_key = ? ORDER BY occurred_at, id');
+    $flowStmt->execute([$accountKey]);
+    $flowsByDay = [];
+    $hasPositiveInitial = false;
+    foreach ($flowStmt->fetchAll() as $flow) {
+        $type = strtoupper((string)$flow['flow_type']);
+        $amount = abs((float)$flow['amount']);
+        $balanceAfter = is_numeric($flow['balance_after'] ?? null) ? abs((float)$flow['balance_after']) : 0.0;
+        if ($type === 'INITIAL' && max($amount, $balanceAfter) > 0) $hasPositiveInitial = true;
+        $flowsByDay[substr((string)$flow['occurred_at'], 0, 10)][] = $flow;
+    }
+
+    if (!$hasPositiveInitial && $equityByDay) {
+        $firstDay = array_key_first($equityByDay);
+        $firstRow = $equityByDay[$firstDay];
+        $fallbackInitial = is_numeric($firstRow['balance'] ?? null) && (float)$firstRow['balance'] > 0
+            ? (float)$firstRow['balance']
+            : (float)$firstRow['equity'];
+        if ($fallbackInitial > 0) {
+            $flowsByDay[$firstDay][] = [
+                'occurred_at' => $firstDay . ' 00:00:00',
+                'flow_type' => 'INITIAL',
+                'amount' => $fallbackInitial,
+                'balance_after' => $fallbackInitial,
+            ];
+        }
+    }
+
+    $days = array_values(array_unique(array_merge(array_keys($equityByDay), array_keys($flowsByDay))));
+    sort($days, SORT_STRING);
     $cumulativeDeposits = 0.0;
+    $lastEquity = null;
     $rows = [];
 
-    foreach ($dailyRows as $value) {
-        $pointTime = new DateTimeImmutable((string)$value['captured_minute'], new DateTimeZone('UTC'));
-        while ($flowIndex < count($flows)) {
-            $flowTime = new DateTimeImmutable((string)$flows[$flowIndex]['occurred_at'], new DateTimeZone('UTC'));
-            if ($flowTime > $pointTime) break;
-            $amount = (float)$flows[$flowIndex]['amount'];
-            $type = strtoupper((string)$flows[$flowIndex]['flow_type']);
-            if (in_array($type, ['INITIAL', 'TOP_UP'], true)) $cumulativeDeposits += abs($amount);
-            elseif ($type === 'ADJUSTMENT' && $amount > 0) $cumulativeDeposits += $amount;
-            $flowIndex++;
+    foreach ($days as $day) {
+        $dayFlows = $flowsByDay[$day] ?? [];
+        usort($dayFlows, static fn(array $a, array $b): int => strcmp((string)$a['occurred_at'], (string)$b['occurred_at']));
+        $netExternalFlow = 0.0;
+        $pointTime = null;
+        $balanceAfter = null;
+        foreach ($dayFlows as $flow) {
+            $flowTime = new DateTimeImmutable((string)$flow['occurred_at'], new DateTimeZone('UTC'));
+            $pointTime = $pointTime === null || $flowTime > $pointTime ? $flowTime : $pointTime;
+            $rawAmount = (float)$flow['amount'];
+            $amount = abs($rawAmount);
+            $type = strtoupper((string)$flow['flow_type']);
+            $flowBalanceAfter = is_numeric($flow['balance_after'] ?? null) ? (float)$flow['balance_after'] : null;
+            if ($type === 'INITIAL') $cumulativeDeposits += $amount > 0 ? $amount : max(0.0, (float)($flowBalanceAfter ?? 0.0));
+            elseif ($type === 'TOP_UP') $cumulativeDeposits += $amount;
+            elseif ($type === 'ADJUSTMENT' && $rawAmount > 0) $cumulativeDeposits += $rawAmount;
+            if ($type === 'TOP_UP') $netExternalFlow += $amount;
+            elseif ($type === 'WITHDRAWAL') $netExternalFlow -= $amount;
+            elseif ($type === 'ADJUSTMENT') $netExternalFlow += $rawAmount;
+            if ($flowBalanceAfter !== null) $balanceAfter = $flowBalanceAfter;
         }
-        $rows[] = [
-            'time' => atom_datetime($pointTime),
-            'value' => (float)$value['equity'],
-            'deposits' => $cumulativeDeposits,
-        ];
+
+        if (isset($equityByDay[$day])) {
+            $equityRow = $equityByDay[$day];
+            $pointTime = new DateTimeImmutable((string)$equityRow['captured_minute'], new DateTimeZone('UTC'));
+            $equity = (float)$equityRow['equity'];
+        } elseif ($lastEquity !== null) {
+            $equity = $lastEquity + $netExternalFlow;
+        } else {
+            $equity = $balanceAfter ?? $cumulativeDeposits;
+        }
+
+        $pointTime ??= new DateTimeImmutable($day . ' 23:59:00', new DateTimeZone('UTC'));
+        $rows[] = ['time' => atom_datetime($pointTime), 'value' => $equity, 'deposits' => $cumulativeDeposits];
+        $lastEquity = $equity;
     }
-    return downsample_points($rows, 730);
+
+    if (count($rows) <= 730) return $rows;
+    $required = [0 => true, count($rows) - 1 => true];
+    for ($index = 1; $index < count($rows); $index++) {
+        if ((float)$rows[$index]['deposits'] !== (float)$rows[$index - 1]['deposits']) $required[$index] = true;
+    }
+    $step = (int)ceil(count($rows) / 730);
+    for ($index = 0; $index < count($rows); $index += $step) $required[$index] = true;
+    ksort($required, SORT_NUMERIC);
+    return array_values(array_map(static fn(int $index): array => $rows[$index], array_keys($required)));
 }
 
 function positive_number(array $row, string $field): ?float
@@ -142,72 +240,83 @@ function positive_number(array $row, string $field): ?float
     return is_numeric($row[$field] ?? null) && (float)$row[$field] > 0 ? (float)$row[$field] : null;
 }
 
-function build_market_week_stats(array $rows, string $weekKey, DateTimeZone $localTimezone): ?array
+function strategy_week_start(DateTimeImmutable $local): DateTimeImmutable
 {
+    $date = $local->setTime(0, 0);
+    $weekday = (int)$local->format('N');
+    $daysSinceFriday = ($weekday - 5 + 7) % 7;
+    $start = $date->modify("-$daysSinceFriday days");
+    if ($weekday === 5 && $local->format('H:i:s') < '15:30:00') $start = $start->modify('-7 days');
+    return $start;
+}
+
+function market_point_price(array $row, string $field, ?float $fallback = null): ?float
+{
+    return positive_number($row, $field) ?? $fallback;
+}
+
+function build_market_week_stats(array $rows, DateTimeImmutable $weekStart, DateTimeZone $localTimezone): ?array
+{
+    $weekStartKey = $weekStart->format('Y-m-d');
     $weekRows = [];
     foreach ($rows as $marketRow) {
         $local = (new DateTimeImmutable((string)$marketRow['captured_minute'], new DateTimeZone('UTC')))->setTimezone($localTimezone);
-        if ($local->format('o-\WW') === $weekKey) $weekRows[] = [$marketRow, $local];
+        if (strategy_week_start($local)->format('Y-m-d') === $weekStartKey) $weekRows[] = [$marketRow, $local];
     }
     if (!$weekRows) return null;
 
+    $days = [];
     $weekOpen = null;
-    $weekOpenDate = '';
     $weeklyHigh = null;
     $weeklyLow = null;
     $weeklyClose = null;
     $currentPrice = null;
-    $lastPointAt = '';
-    $days = [];
 
     foreach ($weekRows as [$row, $local]) {
-        $regular = stripos((string)($row['phase'] ?? ''), 'regular') !== false;
-        $price = positive_number($row, 'current_price') ?? positive_number($row, 'bid') ?? positive_number($row, 'ask');
-        $open = positive_number($row, 'm1_open') ?? $price;
-        $high = positive_number($row, 'm1_high') ?? $price;
-        $low = positive_number($row, 'm1_low') ?? $price;
-        $close = positive_number($row, 'm1_close') ?? $price;
         $dayKey = $local->format('Y-m-d');
-
-        if (!isset($days[$dayKey])) {
-            $days[$dayKey] = ['open' => null, 'high' => null, 'low' => null, 'close' => null, 'last' => ''];
-        }
-        if ($regular && $days[$dayKey]['open'] === null && $open !== null) $days[$dayKey]['open'] = $open;
+        $price = positive_number($row, 'current_price') ?? positive_number($row, 'bid') ?? positive_number($row, 'ask');
+        $open = market_point_price($row, 'm1_open', $price);
+        $high = market_point_price($row, 'm1_high', $price);
+        $low = market_point_price($row, 'm1_low', $price);
+        $close = market_point_price($row, 'm1_close', $price);
+        if (!isset($days[$dayKey])) $days[$dayKey] = ['rows' => [], 'open' => null, 'high' => null, 'low' => null, 'close' => null];
+        $days[$dayKey]['rows'][] = [$row, $local, $open, $high, $low, $close, $price];
         if ($high !== null) $days[$dayKey]['high'] = $days[$dayKey]['high'] === null ? $high : max($days[$dayKey]['high'], $high);
         if ($low !== null) $days[$dayKey]['low'] = $days[$dayKey]['low'] === null ? $low : min($days[$dayKey]['low'], $low);
         if ($close !== null) $days[$dayKey]['close'] = $close;
-        $days[$dayKey]['last'] = $local->format(DATE_ATOM);
-
-        if ($regular && $weekOpen === null && $open !== null) {
-            $weekOpen = $open;
-            $weekOpenDate = $dayKey;
-        }
         if ($high !== null) $weeklyHigh = $weeklyHigh === null ? $high : max($weeklyHigh, $high);
         if ($low !== null) $weeklyLow = $weeklyLow === null ? $low : min($weeklyLow, $low);
         if ($close !== null) $weeklyClose = $close;
         if ($price !== null) $currentPrice = $price;
-        $lastPointAt = $local->format(DATE_ATOM);
     }
 
-    if ($weekOpen === null) {
-        foreach ($days as $dayKey => $day) {
-            if ($day['open'] !== null) {
-                $weekOpen = (float)$day['open'];
-                $weekOpenDate = $dayKey;
-                break;
+    foreach ($days as $dayKey => &$day) {
+        usort($day['rows'], static fn(array $a, array $b): int => $a[1]->getTimestamp() <=> $b[1]->getTimestamp());
+        if ($dayKey === $weekStartKey) {
+            foreach ($day['rows'] as $candidate) {
+                $seconds = ((int)$candidate[1]->format('H')) * 3600 + ((int)$candidate[1]->format('i')) * 60 + (int)$candidate[1]->format('s');
+                if ($seconds >= 15 * 3600 + 30 * 60 && $seconds <= 15 * 3600 + 35 * 60) {
+                    $day['open'] = $candidate[2];
+                    break;
+                }
             }
+        } else {
+            $day['open'] = $day['rows'][0][2] ?? null;
         }
     }
+    unset($day);
 
-    $latestDayDate = $days ? array_key_last($days) : '';
+    $weekOpen = $days[$weekStartKey]['open'] ?? null;
+    $latestDayDate = array_key_last($days) ?: '';
     $latestDay = $latestDayDate !== '' ? $days[$latestDayDate] : null;
-    $relative = static fn(?float $value): ?float => $weekOpen !== null && $value !== null ? ($value / $weekOpen - 1.0) * 100.0 : null;
+    $relative = static fn(?float $value): ?float => $weekOpen !== null && $weekOpen > 0 && $value !== null ? ($value / $weekOpen - 1.0) * 100.0 : null;
+    $weekEnd = $weekStart->modify('+6 days');
 
     return [
-        'week' => $weekKey,
+        'week' => $weekStart->format('d M') . ' – ' . $weekEnd->format('d M Y'),
         'currentPrice' => $currentPrice,
         'weekOpen' => $weekOpen,
-        'weekOpenDate' => $weekOpenDate,
+        'weekOpenDate' => '',
         'weeklyHigh' => $weeklyHigh,
         'weeklyLow' => $weeklyLow,
         'weeklyClose' => $weeklyClose,
@@ -222,8 +331,6 @@ function build_market_week_stats(array $rows, string $weekKey, DateTimeZone $loc
         'dailyHighPercent' => $latestDay !== null ? $relative($latestDay['high'] === null ? null : (float)$latestDay['high']) : null,
         'dailyLowPercent' => $latestDay !== null ? $relative($latestDay['low'] === null ? null : (float)$latestDay['low']) : null,
         'dailyClosePercent' => $latestDay !== null ? $relative($latestDay['close'] === null ? null : (float)$latestDay['close']) : null,
-        'lastPointAt' => $lastPointAt,
-        // Backward-compatible aliases for older app versions.
         'fridayOpen' => $weekOpen,
         'dailyLowDate' => $latestDayDate,
     ];
@@ -232,18 +339,16 @@ function build_market_week_stats(array $rows, string $weekKey, DateTimeZone $loc
 $marketStmt = $db->prepare(
     'SELECT captured_minute, current_price, bid, ask, m1_open, m1_high, m1_low, m1_close, phase
        FROM strategy_market_points
-      WHERE strategy_key = ? AND captured_minute >= UTC_TIMESTAMP() - INTERVAL 22 DAY
+      WHERE strategy_key = ? AND captured_minute >= UTC_TIMESTAMP() - INTERVAL 35 DAY
       ORDER BY captured_minute'
 );
 $marketStmt->execute([$accountKey]);
 $marketRows = $marketStmt->fetchAll();
-$warsaw = new DateTimeZone('Europe/Warsaw');
-$localNow = utc_now()->setTimezone($warsaw);
-$currentWeekKey = $localNow->format('o-\WW');
-$previousWeekKey = $localNow->modify('-7 days')->format('o-\WW');
+$currentWeekStart = strategy_week_start($localNow);
+$previousWeekStart = $currentWeekStart->modify('-7 days');
 $snapshot['marketStats'] = [
-    'currentWeek' => build_market_week_stats($marketRows, $currentWeekKey, $warsaw),
-    'previousWeek' => build_market_week_stats($marketRows, $previousWeekKey, $warsaw),
+    'currentWeek' => build_market_week_stats($marketRows, $currentWeekStart, $warsaw),
+    'previousWeek' => build_market_week_stats($marketRows, $previousWeekStart, $warsaw),
 ];
 $snapshot['equityCurves'] = [
     'daily' => equity_points($db, $accountKey, 'AND captured_minute >= UTC_TIMESTAMP() - INTERVAL 24 HOUR', 144),
@@ -253,7 +358,8 @@ $snapshot['equityCurves'] = [
 
 $eventTypesStmt = $db->prepare('SELECT DISTINCT name FROM strategy_events WHERE strategy_key = ? ORDER BY name');
 $eventTypesStmt->execute([$accountKey]);
-$eventTypes = array_map(static fn(array $event): string => (string)$event['name'], $eventTypesStmt->fetchAll());
+$eventTypes = array_values(array_unique(array_map(static fn(array $event): string => strtoupper((string)$event['name']) === 'POSITION_OPEN' ? 'POSITION_IS_OPEN' : (string)$event['name'], $eventTypesStmt->fetchAll())));
+sort($eventTypes, SORT_STRING);
 
 json_response([
     'ok' => true,

@@ -36,14 +36,17 @@ function market_number(mixed $value): ?float
 $db = pdo();
 $accounts = market_accounts($db);
 $warsaw = new DateTimeZone('Europe/Warsaw');
-$newYork = new DateTimeZone('America/New_York');
 $utc = new DateTimeZone('UTC');
-$previousMonday = (new DateTimeImmutable('monday this week', $warsaw))->modify('-7 days');
-$weekStartValue = trim((string)($_POST['week_start'] ?? $previousMonday->format('Y-m-d')));
+$today = new DateTimeImmutable('now', $warsaw);
+$daysSinceFriday = (((int)$today->format('N')) - 5 + 7) % 7;
+$currentFriday = $today->setTime(0, 0)->modify("-$daysSinceFriday days");
+$previousFriday = $currentFriday->modify('-7 days');
+$weekStartValue = trim((string)($_POST['week_start'] ?? $previousFriday->format('Y-m-d')));
 $accountKey = trim((string)($_POST['account_key'] ?? ($accounts[0]['account_key'] ?? '')));
 $error = '';
 $message = '';
 $values = [];
+$dayOffsets = [0, 3, 4, 5, 6];
 for ($day = 0; $day < 5; $day++) {
     foreach (['open', 'high', 'low', 'close'] as $field) $values[$day][$field] = trim((string)($_POST["d{$day}_{$field}"] ?? ''));
 }
@@ -61,7 +64,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
             if (!$accountStmt->fetchColumn()) throw new RuntimeException('Select a valid account.');
 
             $weekStart = DateTimeImmutable::createFromFormat('!Y-m-d', $weekStartValue, $warsaw);
-            if (!$weekStart || $weekStart->format('Y-m-d') !== $weekStartValue || $weekStart->format('N') !== '1') throw new RuntimeException('Week start must be a valid Monday.');
+            if (!$weekStart || $weekStart->format('Y-m-d') !== $weekStartValue || $weekStart->format('N') !== '5') throw new RuntimeException('Week start must be a valid Friday.');
 
             $upsert = $db->prepare(
                 'INSERT INTO strategy_market_points(strategy_key, captured_minute, current_price, bid, ask, m1_open, m1_high, m1_low, m1_close, phase)
@@ -72,7 +75,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
             $insertedDays = [];
             $db->beginTransaction();
             for ($day = 0; $day < 5; $day++) {
-                $date = $weekStart->modify("+$day days");
+                $date = $weekStart->modify("+{$dayOffsets[$day]} days");
                 $open = market_number($values[$day]['open']);
                 $high = market_number($values[$day]['high']);
                 $low = market_number($values[$day]['low']);
@@ -84,8 +87,9 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
                 if ($high < max($open, $close) || $low > min($open, $close) || $high < $low) throw new RuntimeException($date->format('Y-m-d') . ': invalid O/H/L/C relationship.');
 
                 $dateText = $date->format('Y-m-d');
-                $openUtc = (new DateTimeImmutable($dateText . ' 09:30:00', $newYork))->setTimezone($utc)->format('Y-m-d H:i:s');
-                $closeUtc = (new DateTimeImmutable($dateText . ' 15:59:00', $newYork))->setTimezone($utc)->format('Y-m-d H:i:s');
+                $openTime = $day === 0 ? '15:30:00' : '00:00:00';
+                $openUtc = (new DateTimeImmutable($dateText . ' ' . $openTime, $warsaw))->setTimezone($utc)->format('Y-m-d H:i:s');
+                $closeUtc = (new DateTimeImmutable($dateText . ' 23:59:00', $warsaw))->setTimezone($utc)->format('Y-m-d H:i:s');
                 $upsert->execute([$accountKey, $openUtc, $open, $open, $open, $open, $open, $open, $open, 'REGULAR MANUAL OPEN']);
                 $upsert->execute([$accountKey, $closeUtc, $close, $close, $close, $open, $high, $low, $close, 'REGULAR MANUAL CLOSE']);
                 $insertedDays[] = $dateText;
@@ -101,7 +105,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     }
 }
 
-$displayWeek = DateTimeImmutable::createFromFormat('!Y-m-d', $weekStartValue, $warsaw) ?: $previousMonday;
+$displayWeek = DateTimeImmutable::createFromFormat('!Y-m-d', $weekStartValue, $warsaw) ?: $previousFriday;
 ?>
 <!doctype html>
 <html lang="en">
@@ -112,17 +116,17 @@ $displayWeek = DateTimeImmutable::createFromFormat('!Y-m-d', $weekStartValue, $w
 </style></head>
 <body><main><section>
 <h1>Add weekly US100 O/H/L/C</h1>
-<p class="muted">Choose the Monday starting the week. Leave holidays blank. The page stores exchange-open and exchange-close markers in UTC, so daylight-saving changes are handled automatically.</p>
+<p class="muted">Choose the Friday starting the strategy week. Friday open is stored at 15:30 Warsaw; Monday–Thursday opens are stored at 00:00 Warsaw. Leave holidays blank.</p>
 <?php if ($error !== ''): ?><div class="error"><?= market_h($error) ?></div><?php endif; ?>
 <?php if ($message !== ''): ?><div class="ok"><?= market_h($message) ?></div><?php endif; ?>
 <form method="post" autocomplete="off">
 <div class="top">
 <label>Admin token<input type="password" name="admin_token" required autocomplete="current-password"></label>
 <label>Account<select name="account_key" required><?php foreach ($accounts as $account): $key=(string)$account['account_key']; ?><option value="<?= market_h($key) ?>" <?= $key===$accountKey?'selected':'' ?>><?= market_h((string)$account['display_name'].' ('.$key.')') ?></option><?php endforeach; ?></select></label>
-<label>Week start (Monday)<input type="date" name="week_start" value="<?= market_h($weekStartValue) ?>" required></label>
+<label>Week start (Friday)<input type="date" name="week_start" value="<?= market_h($weekStartValue) ?>" required></label>
 </div>
 <div class="days"><table><thead><tr><th>Date</th><th>Open</th><th>High</th><th>Low</th><th>Close</th></tr></thead><tbody>
-<?php for ($day=0;$day<5;$day++): $date=$displayWeek->modify("+$day days"); ?>
+<?php for ($day=0;$day<5;$day++): $date=$displayWeek->modify("+{$dayOffsets[$day]} days"); ?>
 <tr><th><?= market_h($date->format('D Y-m-d')) ?></th><?php foreach (['open','high','low','close'] as $field): ?><td><input type="number" step="0.00001" min="0" name="d<?= $day ?>_<?= $field ?>" value="<?= market_h($values[$day][$field]) ?>"></td><?php endforeach; ?></tr>
 <?php endfor; ?>
 </tbody></table></div>

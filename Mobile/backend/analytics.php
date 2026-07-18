@@ -49,6 +49,16 @@ $stddev = static function (array $values, float $mean): float {
     $variance = array_sum(array_map(static fn(float $value): float => ($value - $mean) ** 2, $values)) / (count($values) - 1);
     return sqrt(max(0.0, $variance));
 };
+$percentile = static function (array $values, float $probability): float {
+    if (!$values) return 0.0;
+    sort($values, SORT_NUMERIC);
+    $position = max(0.0, min(1.0, $probability)) * (count($values) - 1);
+    $lower = (int)floor($position);
+    $upper = (int)ceil($position);
+    if ($lower === $upper) return (float)$values[$lower];
+    $weight = $position - $lower;
+    return (float)$values[$lower] * (1.0 - $weight) + (float)$values[$upper] * $weight;
+};
 $duration = static function (array $row): int {
     if ($row['closed_at'] === null) return 0;
     return max(0, (new DateTimeImmutable((string)$row['closed_at'], new DateTimeZone('UTC')))->getTimestamp() - (new DateTimeImmutable((string)$row['opened_at'], new DateTimeZone('UTC')))->getTimestamp());
@@ -72,6 +82,70 @@ $withdrawals = $float($flowRow['withdrawals'] ?? 0);
 $capitalBase = $initialBalance + $topUps;
 $netContributions = $capitalBase - $withdrawals;
 $totalSlippagePoints = $sum($entrySlip) + $sum($exitSlip);
+
+// Daily capital-adjusted returns for risk metrics. External cash flows are removed
+// from the corresponding day's equity change so deposits and withdrawals do not
+// masquerade as strategy performance.
+$dailyEquityStmt = $db->prepare(
+    'SELECT p.captured_minute, p.equity
+       FROM strategy_equity_points p
+       JOIN (
+            SELECT DATE(captured_minute) AS day_key, MAX(captured_minute) AS last_time
+              FROM strategy_equity_points
+             WHERE strategy_key = ?
+             GROUP BY DATE(captured_minute)
+       ) daily ON daily.last_time = p.captured_minute
+      WHERE p.strategy_key = ?
+      ORDER BY p.captured_minute'
+);
+$dailyEquityStmt->execute([$accountKey, $accountKey]);
+$dailyEquityRows = $dailyEquityStmt->fetchAll();
+$dailyFlowStmt = $db->prepare("SELECT occurred_at, flow_type, amount FROM account_cash_flows WHERE strategy_key = ? AND flow_type <> 'INITIAL' ORDER BY occurred_at, id");
+$dailyFlowStmt->execute([$accountKey]);
+$flowsByDay = [];
+foreach ($dailyFlowStmt->fetchAll() as $flow) {
+    $day = substr((string)$flow['occurred_at'], 0, 10);
+    $type = strtoupper((string)$flow['flow_type']);
+    $amount = (float)$flow['amount'];
+    $signed = $type === 'TOP_UP' ? abs($amount) : ($type === 'WITHDRAWAL' ? -abs($amount) : $amount);
+    $flowsByDay[$day] = ($flowsByDay[$day] ?? 0.0) + $signed;
+}
+$dailyReturns = [];
+$previousEquity = null;
+foreach ($dailyEquityRows as $dailyRow) {
+    $equityValue = (float)$dailyRow['equity'];
+    $day = substr((string)$dailyRow['captured_minute'], 0, 10);
+    if ($previousEquity !== null && $previousEquity > 0) {
+        $adjustedClosingEquity = $equityValue - ($flowsByDay[$day] ?? 0.0);
+        $dailyReturns[] = $adjustedClosingEquity / $previousEquity - 1.0;
+    }
+    $previousEquity = $equityValue;
+}
+$dailyMean = $avg($dailyReturns);
+$dailyDeviation = $stddev($dailyReturns, $dailyMean);
+$downsideSquares = array_map(static fn(float $value): float => min(0.0, $value) ** 2, $dailyReturns);
+$downsideDeviation = $downsideSquares ? sqrt(array_sum($downsideSquares) / count($downsideSquares)) : 0.0;
+$sharpeRatio = $dailyDeviation > 0 ? $dailyMean / $dailyDeviation * sqrt(252.0) : 0.0;
+$sortinoRatio = $downsideDeviation > 0 ? $dailyMean / $downsideDeviation * sqrt(252.0) : 0.0;
+$positiveReturnSum = array_sum(array_filter($dailyReturns, static fn(float $value): bool => $value > 0));
+$negativeReturnSum = abs(array_sum(array_filter($dailyReturns, static fn(float $value): bool => $value < 0)));
+$omegaRatio = $negativeReturnSum > 0 ? $positiveReturnSum / $negativeReturnSum : 0.0;
+$growthIndex = 1.0;
+$growthPeak = 1.0;
+$drawdownPercents = [];
+foreach ($dailyReturns as $returnValue) {
+    $growthIndex *= max(0.000001, 1.0 + $returnValue);
+    $growthPeak = max($growthPeak, $growthIndex);
+    $drawdownPercents[] = $growthPeak > 0 ? ($growthPeak - $growthIndex) / $growthPeak * 100.0 : 0.0;
+}
+$maxDrawdownPercent = $drawdownPercents ? max($drawdownPercents) : 0.0;
+$ulcerIndexPercent = $drawdownPercents ? sqrt(array_sum(array_map(static fn(float $value): float => $value ** 2, $drawdownPercents)) / count($drawdownPercents)) : 0.0;
+$annualizedReturn = $dailyReturns && $growthIndex > 0 ? pow($growthIndex, 252.0 / count($dailyReturns)) - 1.0 : 0.0;
+$calmarRatio = $maxDrawdownPercent > 0 ? ($annualizedReturn * 100.0) / $maxDrawdownPercent : 0.0;
+$varThreshold = $percentile($dailyReturns, 0.05);
+$tailReturns = array_values(array_filter($dailyReturns, static fn(float $value): bool => $value <= $varThreshold));
+$valueAtRisk95Percent = max(0.0, -$varThreshold * 100.0);
+$expectedShortfall95Percent = $tailReturns ? max(0.0, -$avg($tailReturns) * 100.0) : 0.0;
 
 $peak = 0.0;
 $curve = 0.0;
@@ -224,6 +298,14 @@ json_response([
         'timeInMarketPercent' => $timeInMarket,
         'bestTrade' => $profits ? max($profits) : 0.0,
         'worstTrade' => $profits ? min($profits) : 0.0,
+        'sharpeRatio' => $sharpeRatio,
+        'sortinoRatio' => $sortinoRatio,
+        'calmarRatio' => $calmarRatio,
+        'omegaRatio' => $omegaRatio,
+        'ulcerIndexPercent' => $ulcerIndexPercent,
+        'valueAtRisk95Percent' => $valueAtRisk95Percent,
+        'expectedShortfall95Percent' => $expectedShortfall95Percent,
+        'riskSampleDays' => count($dailyReturns),
     ],
     'exitReasons' => $exitReasonRows,
     'weekly' => array_slice($weeklyRows, 0, 52),

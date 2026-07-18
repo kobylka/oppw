@@ -1,9 +1,9 @@
-# OPPW Monitor v9.1 validation
+# OPPW Monitor v9 validation
 
 Validation performed in the packaging environment:
 
 - All PHP files pass `php -l`.
-- MT5 v38 and the generic current MT5 script pass Python bytecode compilation; neither file changed in v9.1.
+- MT5 v38 and the generic current MT5 script pass Python bytecode compilation.
 - Android XML files parse successfully.
 - JSON example payload parses successfully.
 - Pure Kotlin models, sample data, and formatters compile with Kotlin/JVM.

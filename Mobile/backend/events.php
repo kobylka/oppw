@@ -11,6 +11,7 @@ require_mobile_session($accountKey);
 $limit = max(20, min(150, (int)($_GET['limit'] ?? 75)));
 $beforeId = max(0, (int)($_GET['before_id'] ?? 0));
 $buySellOnly = filter_var($_GET['buy_sell_only'] ?? false, FILTER_VALIDATE_BOOLEAN);
+$hideRoutine = filter_var($_GET['hide_routine'] ?? false, FILTER_VALIDATE_BOOLEAN);
 $eventName = trim((string)($_GET['event_name'] ?? ''));
 
 $filterWhere = ['strategy_key = ?'];
@@ -19,8 +20,14 @@ if ($buySellOnly) {
     $filterWhere[] = "name IN ('BUY_REQUEST','BUY_ACCEPTED','BUY_REJECTED','BUY_CHECK_REJECTED','BUY_DRY_RUN','BUY_SKIPPED','SELL_REQUEST','SELL_ACCEPTED','SELL_REJECTED','SELL_CHECK_REJECTED','SELL_DRY_RUN','POSITION_CLOSED')";
 }
 if ($eventName !== '') {
-    $filterWhere[] = 'name = ?';
-    $filterParams[] = $eventName;
+    if (strtoupper($eventName) === 'POSITION_IS_OPEN') {
+        $filterWhere[] = "name IN ('POSITION_OPEN','POSITION_IS_OPEN')";
+    } else {
+        $filterWhere[] = 'name = ?';
+        $filterParams[] = $eventName;
+    }
+} elseif ($hideRoutine) {
+    $filterWhere[] = "name NOT IN ('POSITION_OPEN','POSITION_IS_OPEN','ENTRY_SIGNAL_OPEN_AVAILABLE','EXIT_LATCH_CLEAR','OH','CH') AND name NOT LIKE 'TSL%'";
 }
 
 $countStmt = $db->prepare('SELECT COUNT(*) FROM strategy_events WHERE ' . implode(' AND ', $filterWhere));
@@ -41,14 +48,17 @@ $rows = $stmt->fetchAll();
 $hasMore = count($rows) > $limit;
 if ($hasMore) array_pop($rows);
 
-$events = array_map(static fn(array $event): array => [
-    'id' => (int)$event['id'],
-    'time' => atom_datetime(new DateTimeImmutable((string)$event['event_time'], new DateTimeZone('UTC'))),
-    'level' => (string)$event['level'],
-    'name' => (string)$event['name'],
-    'result' => $event['result'] === null ? null : (bool)$event['result'],
-    'message' => (string)$event['message'],
-], $rows);
+$events = array_map(static function (array $event): array {
+    $name = strtoupper((string)$event['name']) === 'POSITION_OPEN' ? 'POSITION_IS_OPEN' : (string)$event['name'];
+    return [
+        'id' => (int)$event['id'],
+        'time' => atom_datetime(new DateTimeImmutable((string)$event['event_time'], new DateTimeZone('UTC'))),
+        'level' => (string)$event['level'],
+        'name' => $name,
+        'result' => $event['result'] === null ? null : (bool)$event['result'],
+        'message' => (string)$event['message'],
+    ];
+}, $rows);
 
 json_response([
     'ok' => true,

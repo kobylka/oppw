@@ -27,6 +27,8 @@ return [
     'pairing_code_ttl_minutes' => 10,
     'default_account_key' => 'REAL',
     'event_limit' => 50,
+    'monitor_heartbeat_stale_seconds' => 180,
+    'monitor_price_warning_seconds' => 60,
 
     // Leave true in production. Enable forwarded proto only behind a trusted proxy
     // that overwrites X-Forwarded-Proto itself.

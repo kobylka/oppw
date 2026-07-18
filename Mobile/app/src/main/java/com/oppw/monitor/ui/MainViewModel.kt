@@ -26,6 +26,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import java.time.DayOfWeek
+import java.time.Instant
+import java.time.ZoneId
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = StatusRepository(application)
@@ -114,11 +117,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun eventPager(accountKey: String, buySellOnly: Boolean, eventName: String?): Flow<PagingData<MonitorEvent>> {
+    fun eventPager(accountKey: String, buySellOnly: Boolean, hideRoutine: Boolean, eventName: String?): Flow<PagingData<MonitorEvent>> {
         _logTotalMatching.value = 0
         return Pager(
             config = PagingConfig(pageSize = 75, initialLoadSize = 75, prefetchDistance = 20, maxSize = 500, enablePlaceholders = false),
-            pagingSourceFactory = { EventsPagingSource(repository, accountKey, buySellOnly, eventName) { total -> _logTotalMatching.value = total } },
+            pagingSourceFactory = { EventsPagingSource(repository, accountKey, buySellOnly, hideRoutine, eventName) { total -> _logTotalMatching.value = total } },
         ).flow
     }
 
@@ -150,6 +153,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun checkForegroundStaleness(now: Long) {
         val state = _uiState.value
         if (state.authStatus != AuthStatus.PAIRED) return
+        if (state.response?.snapshot?.position == null && isWeekend(now)) {
+            staleNotificationShown = false
+            NotificationHelper.cancelApiStale(getApplication<Application>())
+            return
+        }
+        val connection = state.response?.snapshot?.connection
+        if (connection != null) {
+            if (connection.heartbeatStatus.equals("RUNNING", true) || connection.heartbeatStatus.equals("WEEKEND IDLE", true)) {
+                staleNotificationShown = false
+                NotificationHelper.cancelApiStale(getApplication<Application>())
+                return
+            }
+            val seconds = (connection.lastUpdateAgeSeconds ?: 0.0).toLong()
+            if (connection.heartbeatStatus.equals("STALE", true) && seconds >= BuildConfig.API_STALE_SECONDS && !staleNotificationShown) {
+                staleNotificationShown = true
+                NotificationHelper.showApiStale(getApplication<Application>(), seconds)
+            }
+            return
+        }
         val reference = state.lastSuccessfulFetchEpochMs.takeIf { it > 0L } ?: statusMonitoringStartedMs
         val seconds = (now - reference).coerceAtLeast(0L) / 1000L
         if (seconds >= BuildConfig.API_STALE_SECONDS && !staleNotificationShown) {
@@ -182,8 +204,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.value = _uiState.value.copy(accountsLoading = false, accounts = accounts, selectedAccountKey = selectedKey)
             val response = repository.refresh(selectedKey)
             val now = System.currentTimeMillis()
-            staleNotificationShown = false
-            NotificationHelper.cancelApiStale(getApplication<Application>())
+            if (response.snapshot.connection.heartbeatStatus.equals("RUNNING", true) || response.snapshot.connection.heartbeatStatus.equals("WEEKEND IDLE", true)) {
+                staleNotificationShown = false
+                NotificationHelper.cancelApiStale(getApplication<Application>())
+            }
             preferences.edit().putLong(PREF_BACKGROUND_LAST_SUCCESS, now).apply()
             _uiState.value = _uiState.value.copy(
                 loading = false,
@@ -238,6 +262,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+
+    private fun isWeekend(nowEpochMs: Long): Boolean {
+        val day = Instant.ofEpochMilli(nowEpochMs).atZone(ZoneId.systemDefault()).dayOfWeek
+        return day == DayOfWeek.SATURDAY || day == DayOfWeek.SUNDAY
+    }
 
     private fun defaultDeviceName(): String = listOf(Build.MANUFACTURER, Build.MODEL).map { it.trim() }.filter { it.isNotBlank() }.distinct().joinToString(" ").ifBlank { "Android device" }
 

@@ -25,6 +25,7 @@ import math
 import os
 import signal
 import shlex
+import shutil
 import sys
 import threading
 import time as time_module
@@ -38,7 +39,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-BUILD_ID = "2026-07-18-weekend-stale-tick-v37"
+BUILD_ID = "2026-07-18-mobile-v9-autotrading-banner-v38"
 SCHEDULED_ACTION_LEAD_SECONDS = 3.0
 AUTOTRADING_REMINDER_SECONDS = 60.0
 STALE_TICK_REMINDER_SECONDS = 60.0
@@ -658,29 +659,23 @@ class OPPWContinuousStrategy:
             enabled, values["connected"], values["terminal_trade_allowed"], values["tradeapi_disabled"],
             values["account_trade_allowed"], values["account_trade_expert"],
         )
-        now = time_module.monotonic()
-
-        if enabled:
-            if force_log or (self.last_autotrading_signature is not None and not bool(self.last_autotrading_signature[0])):
-                self.log.info(
-                    "EVENT AUTOTRADING_ENABLED context=%s terminal_trade_allowed=%s tradeapi_disabled=%s account_trade_allowed=%s account_trade_expert=%s",
-                    context, values["terminal_trade_allowed"], values["tradeapi_disabled"],
-                    values["account_trade_allowed"], values["account_trade_expert"],
-                )
-            self.last_autotrading_signature = signature
-            return True
-
-        changed = signature != self.last_autotrading_signature
-        reminder_due = now - self.last_autotrading_log_monotonic >= AUTOTRADING_REMINDER_SECONDS
-        if force_log or changed or reminder_due:
-            self.last_autotrading_log_monotonic = now
-            self.log.error(
-                "EVENT AUTOTRADING_DISABLED context=%s connected=%s terminal_trade_allowed=%s tradeapi_disabled=%s account_trade_allowed=%s account_trade_expert=%s action=enable_AutoTrading_in_MT5",
-                context, values["connected"], values["terminal_trade_allowed"], values["tradeapi_disabled"],
-                values["account_trade_allowed"], values["account_trade_expert"],
-            )
+        state_changed = self.last_autotrading_signature is None or bool(self.last_autotrading_signature[0]) != enabled
+        if force_log or state_changed:
+            if enabled:
+                self.log.info("EVENT AUTOTRADING_ENABLED")
+            else:
+                self.log.error("EVENT AUTOTRADING_DISABLED")
         self.last_autotrading_signature = signature
-        return False
+        return enabled
+
+    def print_autotrading_banner(self, now: datetime) -> None:
+        enabled = True if not self.cfg.live_enabled else self.autotrading_status()[0]
+        status = "AUTOTRADING_ENABLED" if enabled else "AUTOTRADING_DISABLED"
+        text = f"{now:%Y-%m-%d %H:%M:%S} {status}"
+        width = max(len(text), shutil.get_terminal_size((120, 20)).columns)
+        color = "\033[1;92m" if enabled else "\033[1;91m"
+        reset = "\033[0m"
+        print(f"\n{color}{text.center(width)}{reset}\n", flush=True)
 
     # ----- Sessions -----------------------------------------------------------
 
@@ -1124,6 +1119,8 @@ class OPPWContinuousStrategy:
     # ----- Status -------------------------------------------------------------
 
     def phase(self, now: datetime) -> str:
+        if now.weekday() >= 5:
+            return "WEEKEND"
         session = self.session_times(now.date())
         if now < session.cash_open:
             return "PREMARKET"
@@ -1202,7 +1199,7 @@ class OPPWContinuousStrategy:
         currency = str(getattr(account, "currency", "")).strip() if account is not None else ""
         currency_suffix = f" {currency}" if currency else ""
         phase = self.phase(now)
-        regime = self.protection_regime(now)
+        regime = self.protection_regime(now) if position is not None else "None"
 
         if position is None:
             leverage = self.choose_leverage()
@@ -2123,14 +2120,14 @@ class OPPWContinuousStrategy:
             current_day = now.date()
             new_week = self.is_new_week_entry(current_day)
             session = self.session_times(current_day)
-            self.log_check(now, "POSITION_OPEN", False)
+            self.log_check(now, "POSITION_IS_OPEN", False)
             self.log_check(now, "NEW_WEEK_ENTRY", new_week)
             self.log_check(now, "BUY_TIME_REACHED", now >= session.open_action, scheduled=session.open_action.strftime("%H:%M:%S"))
             self.log.info("CONDITION_REPORT_END minute=%s checks=3", now.strftime("%Y-%m-%d %H:%M"))
             return
 
         entry = float(position.price_open)
-        self.log_check(now, "POSITION_OPEN", True, ticket=position.ticket, entry=entry, volume=position.volume)
+        self.log_check(now, "POSITION_IS_OPEN", True, ticket=position.ticket, entry=entry, volume=position.volume)
         self.log_check(now, "ENTRY_SIGNAL_OPEN_AVAILABLE", self.state.entry_signal_daily_open > 0 and not self.state.entry_signal_open_pending, signal_open=self.state.entry_signal_daily_open, pending=self.state.entry_signal_open_pending)
         self.log_check(now, "EXIT_LATCH_CLEAR", not bool(self.state.exit_latched_reason), exit_latch=self.state.exit_latched_reason or "none")
 
@@ -2165,6 +2162,7 @@ class OPPWContinuousStrategy:
         if minute_key != self.last_minute_status:
             self.last_minute_status = minute_key
             self.emit_status("MINUTE", position, now, current_bar)
+            self.print_autotrading_banner(now)
             self.log_minute_condition_report(position, now, current_bar)
 
         signature = self.status_signature(position, now)
@@ -2184,6 +2182,7 @@ class OPPWContinuousStrategy:
             self.apply_standard_protection(position, now)
         current_bar = self.current_m1_bar(self.cfg.trade_symbol)
         self.emit_status("STARTUP", position, now, current_bar)
+        self.print_autotrading_banner(now)
         self.last_minute_status = now.strftime("%Y-%m-%d %H:%M")
         self.last_meaningful_signature = self.status_signature(position, now)
         self.publish_mobile_minute_status(position, now, current_bar, force=True)

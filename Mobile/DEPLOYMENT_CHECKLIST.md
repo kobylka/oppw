@@ -1,19 +1,23 @@
-# OPPW Monitor v8 deployment checklist
+# OPPW Monitor v9.1 deployment checklist
 
-- [ ] Back up MySQL.
-- [ ] Confirm the v7 migration has already been imported; v8 needs no new SQL migration.
-- [ ] Upload all v8 backend PHP files while preserving private `config.php`.
-- [ ] Add `manual_admin_enabled` and `manual_admin_token` only when browser imports are needed.
-- [ ] Verify `market-admin.php` and `trade-admin.php` return 404 while manual administration is disabled.
-- [ ] Replace MT5 Python with `oppw_mt5_continuous_v35.py` and keep private config.
-- [ ] Confirm current exposure equals MT5 deposit × 20.
-- [ ] Confirm OH disappears after the daily scheduled open check.
-- [ ] Confirm CH remains visible after market open.
-- [ ] Confirm the position summary shows a potential OH/CH target.
-- [ ] Confirm all-time chart shows dates, equity and deposits-to-date.
-- [ ] Confirm regime text is human-readable.
-- [ ] Confirm Logs switch remains fully visible on a narrow phone.
-- [ ] Confirm Health displays `Heartbeat: …`.
-- [ ] Test manual previous-week O/H/L/C import.
-- [ ] Test manual trade import with balance before/after.
-- [ ] Disable `manual_admin_enabled` after imports.
+1. Upload the complete `backend/` directory while preserving your private `config.php`.
+2. No SQL migration is required.
+3. The optional health threshold may be added to `config.php`; the default is 60 seconds:
+
+```php
+'monitor_price_warning_seconds' => 60,
+```
+
+4. Replace the Android project while preserving `local.properties`.
+5. Open the project in Android Studio, synchronize Gradle, and install over the current app to preserve pairing.
+6. MT5 v38 is unchanged; do not replace the running MT5 script for this correction.
+7. Verify on Saturday/Sunday with no open position:
+   - Phase: `Weekend`
+   - Regime: `None`
+   - Next action: `None`
+   - no OH countdown
+8. Verify Overview shows:
+   - `Health: OK/UNKNOWN/WARNING`
+   - `Heartbeat: …`
+   - `Last tick: …`
+9. Verify the all-time chart shows both Equity and the dashed Deposits-to-date line.

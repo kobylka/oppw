@@ -47,6 +47,7 @@ import com.oppw.monitor.ui.theme.TextSecondary
 import com.oppw.monitor.ui.theme.WarningAmber
 import com.oppw.monitor.util.age
 import com.oppw.monitor.util.liveSourceAge
+import com.oppw.monitor.util.priceHealth
 import com.oppw.monitor.util.shortDateTime
 
 @Composable
@@ -58,13 +59,16 @@ fun LogsScreen(state: UiState, viewModel: MainViewModel, onRetry: () -> Unit) {
         else -> {
             val response = state.response!!
             val connection = response.snapshot.connection
-            val us100Age = liveSourceAge(connection.us100AgeSeconds, connection.lastSync, state.nowEpochMs)
-            val qqqAge = liveSourceAge(connection.qqqAgeSeconds, connection.lastSync, state.nowEpochMs)
+            val us100Age = liveSourceAge(connection.us100AgeSeconds, response.generatedAt, state.nowEpochMs)
+            val qqqAge = liveSourceAge(connection.qqqAgeSeconds, response.generatedAt, state.nowEpochMs)
+            val health = priceHealth(us100Age)
             var buySellOnly by rememberSaveable { mutableStateOf(false) }
+            var showRoutineChecks by rememberSaveable { mutableStateOf(false) }
             var selectedEvent by rememberSaveable { mutableStateOf(ALL_EVENTS) }
             val accountKey = state.selectedAccountKey!!
             val eventName = selectedEvent.takeUnless { it == ALL_EVENTS }
-            val flow = remember(accountKey, buySellOnly, eventName) { viewModel.eventPager(accountKey, buySellOnly, eventName) }
+            val hideRoutine = !showRoutineChecks && eventName == null && !buySellOnly
+            val flow = remember(accountKey, buySellOnly, hideRoutine, eventName) { viewModel.eventPager(accountKey, buySellOnly, hideRoutine, eventName) }
             val events = flow.collectAsLazyPagingItems()
             val totalMatching by viewModel.logTotalMatching.collectAsStateWithLifecycle()
 
@@ -75,7 +79,7 @@ fun LogsScreen(state: UiState, viewModel: MainViewModel, onRetry: () -> Unit) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                             Metric("US100", age(us100Age), Modifier.weight(1f), freshnessColor(us100Age))
                             Metric("QQQ", age(qqqAge), Modifier.weight(1f), freshnessColor(qqqAge))
-                            Metric("Health", connection.health, Modifier.weight(1f), if (connection.health.equals("OK", true)) BrightGreen else WarningAmber)
+                            Metric("Health", health, Modifier.weight(1f), when (health) { "OK" -> BrightGreen; "WARNING" -> WarningAmber; else -> Muted })
                         }
                     }
                 }
@@ -89,6 +93,13 @@ fun LogsScreen(state: UiState, viewModel: MainViewModel, onRetry: () -> Unit) {
                                 Text("and POSITION_CLOSED", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
                             }
                             Switch(checked = buySellOnly, onCheckedChange = { buySellOnly = it })
+                        }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                                Text("Show routine condition checks", style = MaterialTheme.typography.titleMedium)
+                                Text("POSITION_IS_OPEN, signal availability, latch, OH, CH and TSL", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                            }
+                            Switch(checked = showRoutineChecks, onCheckedChange = { showRoutineChecks = it })
                         }
                         EventNameSelector(response.eventTypes, selectedEvent) { selectedEvent = it }
                     }
@@ -130,12 +141,12 @@ private fun EventNameSelector(names: List<String>, selected: String, onSelected:
     var expanded by rememberSaveable { mutableStateOf(false) }
     Box(Modifier.fillMaxWidth()) {
         OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
-            Text(if (selected == ALL_EVENTS) "All event types" else selected)
+            Text(if (selected == ALL_EVENTS) "All event types" else humanEventName(selected))
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             DropdownMenuItem(text = { Text("All event types") }, onClick = { expanded = false; onSelected(ALL_EVENTS) })
             names.filter { it.isNotBlank() }.distinct().sorted().forEach { name ->
-                DropdownMenuItem(text = { Text(name) }, onClick = { expanded = false; onSelected(name) })
+                DropdownMenuItem(text = { Text(humanEventName(name)) }, onClick = { expanded = false; onSelected(name) })
             }
         }
     }
@@ -149,7 +160,7 @@ private fun EventCard(event: MonitorEvent) {
             Canvas(Modifier.size(10.dp)) { drawCircle(color) }
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(event.name, color = color, style = MaterialTheme.typography.titleMedium)
+                    Text(humanEventName(event.name), color = color, style = MaterialTheme.typography.titleMedium)
                     Text(shortDateTime(event.time), color = TextSecondary, style = MaterialTheme.typography.labelMedium)
                 }
                 Text(event.message, color = TextSecondary)
@@ -172,6 +183,11 @@ private fun freshnessColor(value: Double?): Color = when {
     value <= 2.0 -> BrightGreen
     value <= 10.0 -> WarningAmber
     else -> DangerRed
+}
+
+private fun humanEventName(name: String): String = when (name.uppercase()) {
+    "POSITION_OPEN", "POSITION_IS_OPEN" -> "POSITION_IS_OPEN"
+    else -> name
 }
 
 private const val ALL_EVENTS = "__ALL__"

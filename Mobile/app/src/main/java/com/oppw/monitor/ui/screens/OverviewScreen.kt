@@ -36,12 +36,16 @@ import com.oppw.monitor.util.age
 import com.oppw.monitor.util.countdown
 import com.oppw.monitor.util.humanProtection
 import com.oppw.monitor.util.leverage
+import com.oppw.monitor.util.liveSourceAge
 import com.oppw.monitor.util.money
 import com.oppw.monitor.util.optionalPercent
 import com.oppw.monitor.util.optionalPrice
 import com.oppw.monitor.util.percent
-import com.oppw.monitor.util.secondsSinceEpoch
+import com.oppw.monitor.util.priceHealth
 import com.oppw.monitor.util.shortDateTime
+import java.time.DayOfWeek
+import java.time.Instant
+import java.time.ZoneId
 
 @Composable
 fun OverviewScreen(state: UiState, onRetry: () -> Unit) {
@@ -54,17 +58,22 @@ fun OverviewScreen(state: UiState, onRetry: () -> Unit) {
             val connection = snapshot.connection
             val account = snapshot.account
             val position = snapshot.position
-            val retrievalAge = secondsSinceEpoch(state.lastSuccessfulFetchEpochMs, state.nowEpochMs)
+            val weekendIdle = position == null && isWeekend(state.nowEpochMs)
+            val heartbeatAge = liveSourceAge(connection.lastUpdateAgeSeconds, response.generatedAt, state.nowEpochMs)
+            val lastTickAge = liveSourceAge(connection.us100AgeSeconds, response.generatedAt, state.nowEpochMs)
+            val health = priceHealth(lastTickAge)
+            val lastTick = connection.lastTick.ifBlank { position?.priceTime?.takeIf { it.isNotBlank() } ?: connection.lastSync }
             val effectivePnlPercent = if (account.balance != 0.0) (position?.profit ?: 0.0) / account.balance * 100.0 else 0.0
             val exposure = if (position != null) account.deposit * 20.0 else 0.0
             val effectiveLeverage = if (account.equity > 0.0) exposure / account.equity else 0.0
-            val regime = humanProtection(position?.protectionRegime?.ifBlank { null } ?: connection.regime.ifBlank { "None" })
-            val nextActionLabel = displayNextAction(connection.nextAction, connection.nextActionAt)
+            val phase = if (weekendIdle) "Weekend" else connection.phase
+            val regime = if (weekendIdle) "None" else humanProtection(position?.protectionRegime?.ifBlank { null } ?: connection.regime.ifBlank { "None" })
+            val nextAction = if (weekendIdle) "None" else connection.nextAction
+            val nextActionAt = if (weekendIdle) "" else connection.nextActionAt
+            val nextActionLabel = displayNextAction(nextAction, nextActionAt)
+            val initialBalance = snapshot.equityCurves.allTime.firstOrNull()?.value ?: account.balance
 
-            LazyColumn(
-                Modifier.fillMaxSize().padding(horizontal = 14.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
+            LazyColumn(Modifier.fillMaxSize().padding(horizontal = 14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 item {
                     AppCard(Modifier.fillMaxWidth()) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -72,7 +81,7 @@ fun OverviewScreen(state: UiState, onRetry: () -> Unit) {
                                 Icon(if (connection.connected) Icons.Outlined.CloudDone else Icons.Outlined.CloudOff, null, tint = if (connection.connected) BrightGreen else DangerRed)
                                 Text(if (connection.connected) "Remote DB connected" else "Remote DB unavailable", color = if (connection.connected) BrightGreen else DangerRed)
                             }
-                            Text(shortDateTime(connection.lastSync), color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                            Text(shortDateTime(response.generatedAt), color = TextSecondary, style = MaterialTheme.typography.labelMedium)
                         }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text("Account: ${connection.accountId}", color = PrimaryBlue)
@@ -84,13 +93,14 @@ fun OverviewScreen(state: UiState, onRetry: () -> Unit) {
                 item {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         AppCard(Modifier.weight(1f)) {
-                            Text("Health", color = TextSecondary)
-                            StatusChip(connection.health, connection.health)
-                            Text("Heartbeat: ${age(retrievalAge)}", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                            Text("Health:", color = TextSecondary)
+                            StatusChip(health, healthTone(health))
+                            Text("Heartbeat: ${age(heartbeatAge)}", style = MaterialTheme.typography.bodyMedium)
+                            Text("Last tick: ${shortDateTime(lastTick)}", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
                         }
                         AppCard(Modifier.weight(1f)) {
                             Text("Phase", color = TextSecondary)
-                            Text(connection.phase, color = PrimaryBlue, style = MaterialTheme.typography.titleMedium)
+                            Text(phase, color = PrimaryBlue, style = MaterialTheme.typography.titleMedium)
                             Text("Regime", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
                             Text(regime, style = MaterialTheme.typography.bodyMedium)
                         }
@@ -99,9 +109,13 @@ fun OverviewScreen(state: UiState, onRetry: () -> Unit) {
 
                 item {
                     AppCard(Modifier.fillMaxWidth()) {
-                        SectionTitle("Next action", nextActionLabel)
-                        Text(countdown(connection.nextActionAt, state.nowEpochMs), color = BrightGreen, style = MaterialTheme.typography.headlineMedium)
-                        Text(shortDateTime(connection.nextActionAt), color = TextSecondary)
+                        SectionTitle("Next action", nextActionLabel.ifBlank { "None" })
+                        if (nextAction.equals("None", true) || nextActionAt.isBlank()) {
+                            Text(if (weekendIdle) "No weekend checks scheduled" else "No scheduled checks", color = TextSecondary, style = MaterialTheme.typography.titleMedium)
+                        } else {
+                            Text(countdown(nextActionAt, state.nowEpochMs), color = BrightGreen, style = MaterialTheme.typography.headlineMedium)
+                            Text(shortDateTime(nextActionAt), color = TextSecondary)
+                        }
                     }
                 }
 
@@ -148,7 +162,7 @@ fun OverviewScreen(state: UiState, onRetry: () -> Unit) {
                 item {
                     AppCard(Modifier.fillMaxWidth()) {
                         SectionTitle("Equity curve", "all time")
-                        AllTimeEquityChart(snapshot.equityCurves.allTime, account.currency)
+                        AllTimeEquityChart(snapshot.equityCurves.allTime, account.currency, initialBalance)
                     }
                 }
 
@@ -170,7 +184,6 @@ private fun WeekMarketCard(title: String, stats: MarketWeekStats?, currentLabel:
             Metric(currentLabel, optionalPrice(stats.currentPrice), Modifier.weight(1f))
             Metric("Week open", optionalPrice(stats.weekOpen), Modifier.weight(1f))
         }
-        Text("Week opened: ${stats.weekOpenDate.ifBlank { "—" }}", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             Metric("Weekly high", optionalPrice(stats.weeklyHigh), Modifier.weight(1f))
             Metric("High %", optionalPercent(stats.weeklyHighPercent), Modifier.weight(1f), pnlColor(stats.weeklyHighPercent ?: 0.0))
@@ -201,8 +214,19 @@ private fun WeekMarketCard(title: String, stats: MarketWeekStats?, currentLabel:
 }
 
 private fun pnlColor(value: Double): Color = if (value >= 0) BrightGreen else DangerRed
+private fun healthTone(value: String): String = when (value.uppercase()) {
+    "OK" -> "green"
+    "WARNING" -> "warning"
+    else -> "blue"
+}
+
+private fun isWeekend(nowEpochMs: Long): Boolean {
+    val day = Instant.ofEpochMilli(nowEpochMs).atZone(ZoneId.systemDefault()).dayOfWeek
+    return day == DayOfWeek.SATURDAY || day == DayOfWeek.SUNDAY
+}
 
 private fun displayNextAction(action: String, timestamp: String): String {
+    if (action.isBlank() || action.equals("None", true)) return "None"
     if (!action.contains("BUY WINDOW", ignoreCase = true)) return action
     return runCatching {
         val day = java.time.OffsetDateTime.parse(timestamp).dayOfWeek.name.lowercase().replaceFirstChar { it.uppercase() }

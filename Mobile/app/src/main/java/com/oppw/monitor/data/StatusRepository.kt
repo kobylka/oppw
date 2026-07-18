@@ -13,7 +13,7 @@ class StatusRepository(context: Context) {
     suspend fun accounts(): List<MonitorAccount> = api.fetchAccounts()
     suspend fun refresh(accountKey: String): MonitorResponse = api.fetchStatus(accountKey)
     suspend fun analytics(accountKey: String): AnalyticsResponse = api.fetchAnalytics(accountKey)
-    suspend fun events(accountKey: String, beforeId: Long?, limit: Int, buySellOnly: Boolean, eventName: String?): EventPage = api.fetchEvents(accountKey, beforeId, limit, buySellOnly, eventName)
+    suspend fun events(accountKey: String, beforeId: Long?, limit: Int, buySellOnly: Boolean, hideRoutine: Boolean, eventName: String?): EventPage = api.fetchEvents(accountKey, beforeId, limit, buySellOnly, hideRoutine, eventName)
     suspend fun registerPushToken(token: String) = api.registerPushToken(token)
     suspend fun unregisterPushToken(token: String? = null) = api.unregisterPushToken(token)
 }

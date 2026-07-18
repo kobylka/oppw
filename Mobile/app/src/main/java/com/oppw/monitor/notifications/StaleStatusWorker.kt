@@ -10,17 +10,27 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.oppw.monitor.BuildConfig
 import com.oppw.monitor.data.StatusRepository
+import java.time.DayOfWeek
+import java.time.ZonedDateTime
 import java.util.concurrent.TimeUnit
 
 class StaleStatusWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
         val repository = StatusRepository(applicationContext)
         if (!repository.hasSession()) return Result.success()
+        val day = ZonedDateTime.now().dayOfWeek
+        if (day == DayOfWeek.SATURDAY || day == DayOfWeek.SUNDAY) {
+            NotificationHelper.cancelApiStale(applicationContext)
+            return Result.success()
+        }
         val preferences = applicationContext.getSharedPreferences("oppw_monitor", Context.MODE_PRIVATE)
         val account = preferences.getString("selected_account", null) ?: return Result.success()
         return runCatching {
-            repository.refresh(account)
-            NotificationHelper.cancelApiStale(applicationContext)
+            val response = repository.refresh(account)
+            val connection = response.snapshot.connection
+            val age = (connection.lastUpdateAgeSeconds ?: 0.0).toLong()
+            if (connection.heartbeatStatus.equals("STALE", true) && age >= BuildConfig.API_STALE_SECONDS) NotificationHelper.showApiStale(applicationContext, age)
+            else NotificationHelper.cancelApiStale(applicationContext)
             preferences.edit().putLong("background_last_success_ms", System.currentTimeMillis()).apply()
             Result.success()
         }.getOrElse {

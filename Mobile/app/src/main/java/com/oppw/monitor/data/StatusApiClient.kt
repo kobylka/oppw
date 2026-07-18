@@ -40,12 +40,13 @@ class StatusApiClient(context: Context, private val baseUrl: String = BuildConfi
     suspend fun fetchStatus(accountKey: String): MonitorResponse = JsonParser.parseResponse(authenticatedRequest("GET", "status.php?account=${encode(accountKey)}").body)
     suspend fun fetchAnalytics(accountKey: String): AnalyticsResponse = JsonParser.parseAnalytics(authenticatedRequest("GET", "analytics.php?account=${encode(accountKey)}").body)
 
-    suspend fun fetchEvents(accountKey: String, beforeId: Long?, limit: Int, buySellOnly: Boolean, eventName: String?): EventPage {
+    suspend fun fetchEvents(accountKey: String, beforeId: Long?, limit: Int, buySellOnly: Boolean, hideRoutine: Boolean, eventName: String?): EventPage {
         val query = buildString {
             append("events.php?account=").append(encode(accountKey))
             append("&limit=").append(limit.coerceIn(20, 150))
             if (beforeId != null && beforeId > 0) append("&before_id=").append(beforeId)
             if (buySellOnly) append("&buy_sell_only=1")
+            if (hideRoutine) append("&hide_routine=1")
             if (!eventName.isNullOrBlank()) append("&event_name=").append(encode(eventName))
         }
         return JsonParser.parseEventPage(authenticatedRequest("GET", query).body)

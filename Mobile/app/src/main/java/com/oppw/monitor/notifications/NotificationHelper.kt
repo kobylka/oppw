@@ -20,7 +20,7 @@ object NotificationHelper {
         manager.createNotificationChannels(
             listOf(
                 NotificationChannel(CRITICAL_CHANNEL, "Critical OPPW alerts", NotificationManager.IMPORTANCE_HIGH).apply {
-                    description = "Protection, disconnection and stale API alerts"
+                    description = "Protection, disconnection and stale strategy-heartbeat alerts"
                     enableVibration(true)
                 },
                 NotificationChannel(TRADE_CHANNEL, "Trade events", NotificationManager.IMPORTANCE_HIGH).apply {
@@ -55,8 +55,8 @@ object NotificationHelper {
 
     fun showApiStale(context: Context, seconds: Long) = show(
         context,
-        "OPPW API status is stale",
-        "No successful HTTPS status retrieval for ${seconds}s.",
+        "OPPW strategy heartbeat is stale",
+        "The continuous MT5 loop has not updated the backend for ${seconds}s.",
         CRITICAL_CHANNEL,
         7001,
     )

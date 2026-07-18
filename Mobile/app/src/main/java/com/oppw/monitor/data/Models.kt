@@ -44,6 +44,10 @@ data class ConnectionStatus(
     val nextActionAt: String,
     val us100AgeSeconds: Double?,
     val qqqAgeSeconds: Double?,
+    val heartbeatStatus: String,
+    val lastUpdate: String,
+    val lastUpdateAgeSeconds: Double?,
+    val lastTick: String,
 )
 
 data class AccountStatus(
@@ -168,6 +172,14 @@ data class AnalyticsSummary(
     val timeInMarketPercent: Double,
     val bestTrade: Double,
     val worstTrade: Double,
+    val sharpeRatio: Double,
+    val sortinoRatio: Double,
+    val calmarRatio: Double,
+    val omegaRatio: Double,
+    val ulcerIndexPercent: Double,
+    val valueAtRisk95Percent: Double,
+    val expectedShortfall95Percent: Double,
+    val riskSampleDays: Int,
 )
 
 data class ExitReasonAnalytics(

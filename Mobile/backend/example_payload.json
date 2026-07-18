@@ -13,7 +13,11 @@
       "nextAction": "CH / TO",
       "nextActionAt": "2026-07-17T21:59:57+02:00",
       "us100AgeSeconds": 0.3,
-      "qqqAgeSeconds": 0.5
+      "qqqAgeSeconds": 0.5,
+      "heartbeatStatus": "RUNNING",
+      "lastUpdate": "2026-07-17T21:15:00+02:00",
+      "lastUpdateAgeSeconds": 0.0,
+      "lastTick": "2026-07-17T19:15:00Z"
     },
     "account": {
       "currency": "PLN",

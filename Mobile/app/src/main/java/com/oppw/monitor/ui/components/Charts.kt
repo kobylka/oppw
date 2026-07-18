@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
@@ -74,13 +75,19 @@ fun EquityChart(points: List<EquityPoint>, currency: String, modifier: Modifier 
 }
 
 @Composable
-fun AllTimeEquityChart(points: List<EquityPoint>, currency: String, modifier: Modifier = Modifier) {
-    if (points.size < 2) {
-        Text("Not enough all-time history yet", color = TextSecondary)
+fun AllTimeEquityChart(points: List<EquityPoint>, currency: String, initialBalance: Double, modifier: Modifier = Modifier) {
+    if (points.isEmpty()) {
+        Text("No all-time history yet", color = TextSecondary)
         return
     }
-    val depositValues = points.mapNotNull { it.deposits }
-    val allValues = points.map { it.value } + depositValues
+    val firstExplicitDeposit = points.firstNotNullOfOrNull { point -> point.deposits?.takeIf { it > 0.0 } }
+    var carriedDeposits = firstExplicitDeposit ?: initialBalance.takeIf { it > 0.0 } ?: points.first().value.coerceAtLeast(0.0)
+    val normalizedDeposits = points.map { point ->
+        val explicit = point.deposits
+        if (explicit != null && explicit > 0.0) carriedDeposits = explicit
+        carriedDeposits
+    }
+    val allValues = points.map { it.value } + normalizedDeposits
     val min = allValues.minOrNull() ?: 0.0
     val max = allValues.maxOrNull() ?: 1.0
     val range = (max - min).takeIf { it > 0 } ?: 1.0
@@ -97,25 +104,34 @@ fun AllTimeEquityChart(points: List<EquityPoint>, currency: String, modifier: Mo
                 drawLine(CardBorder, Offset(0f, y), Offset(size.width, y), strokeWidth = 1f)
             }
 
-            fun pathFor(values: List<Double?>): Path {
+            fun pathFor(values: List<Double>, stepped: Boolean = false): Path {
                 val path = Path()
-                var started = false
+                var previousY: Float? = null
                 values.forEachIndexed { index, value ->
-                    if (value == null) return@forEachIndexed
-                    val x = size.width * index / points.lastIndex.coerceAtLeast(1).toFloat()
+                    val x = if (values.size == 1) size.width / 2f else size.width * index / values.lastIndex.toFloat()
                     val y = size.height - ((value - min) / range * size.height).toFloat()
-                    if (!started) {
-                        path.moveTo(x, y)
-                        started = true
-                    } else {
+                    if (previousY == null) path.moveTo(x, y)
+                    else if (stepped) {
+                        path.lineTo(x, previousY!!)
                         path.lineTo(x, y)
-                    }
+                    } else path.lineTo(x, y)
+                    previousY = y
                 }
                 return path
             }
 
             drawPath(pathFor(points.map { it.value }), PrimaryBlue, style = Stroke(width = 5f, cap = StrokeCap.Round))
-            if (depositValues.isNotEmpty()) drawPath(pathFor(points.map { it.deposits }), BrightGreen, style = Stroke(width = 4f, cap = StrokeCap.Round))
+            drawPath(
+                pathFor(normalizedDeposits, stepped = true),
+                BrightGreen,
+                style = Stroke(width = 4f, cap = StrokeCap.Round, pathEffect = PathEffect.dashPathEffect(floatArrayOf(14f, 10f))),
+            )
+            if (points.size == 1) {
+                val equityY = size.height - ((points.first().value - min) / range * size.height).toFloat()
+                val depositsY = size.height - ((normalizedDeposits.first() - min) / range * size.height).toFloat()
+                drawCircle(PrimaryBlue, radius = 6f, center = Offset(size.width / 2f, equityY))
+                drawCircle(BrightGreen, radius = 5f, center = Offset(size.width / 2f, depositsY))
+            }
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(dateOnly(points.first().time), color = TextSecondary, style = MaterialTheme.typography.labelSmall)
@@ -124,7 +140,7 @@ fun AllTimeEquityChart(points: List<EquityPoint>, currency: String, modifier: Mo
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("Equity ${money(points.last().value, currency)}", style = MaterialTheme.typography.labelMedium)
-            points.last().deposits?.let { Text("Deposits ${money(it, currency)}", color = BrightGreen, style = MaterialTheme.typography.labelMedium) }
+            Text("Deposits ${money(normalizedDeposits.last(), currency)}", color = BrightGreen, style = MaterialTheme.typography.labelMedium)
         }
     }
 }

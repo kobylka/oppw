@@ -84,7 +84,10 @@ object JsonParser {
                 captureEfficiencyPercent = summary.optDouble("captureEfficiencyPercent"), edgeRatio = summary.optDouble("edgeRatio"), maxDrawdown = summary.optDouble("maxDrawdown"),
                 recoveryFactor = summary.optDouble("recoveryFactor"), consistencyScore = summary.optDouble("consistencyScore"), maxWinStreak = summary.optInt("maxWinStreak"),
                 maxLossStreak = summary.optInt("maxLossStreak"), timeInMarketPercent = summary.optDouble("timeInMarketPercent"), bestTrade = summary.optDouble("bestTrade"),
-                worstTrade = summary.optDouble("worstTrade"),
+                worstTrade = summary.optDouble("worstTrade"), sharpeRatio = summary.optDouble("sharpeRatio"), sortinoRatio = summary.optDouble("sortinoRatio"),
+                calmarRatio = summary.optDouble("calmarRatio"), omegaRatio = summary.optDouble("omegaRatio"), ulcerIndexPercent = summary.optDouble("ulcerIndexPercent"),
+                valueAtRisk95Percent = summary.optDouble("valueAtRisk95Percent"), expectedShortfall95Percent = summary.optDouble("expectedShortfall95Percent"),
+                riskSampleDays = summary.optInt("riskSampleDays"),
             ),
             exitReasons = buildList {
                 val values = root.optJSONArray("exitReasons") ?: JSONArray()
@@ -130,6 +133,8 @@ object JsonParser {
         health = json.optString("health", "UNKNOWN"), phase = json.optString("phase", "Unknown"), regime = json.optString("regime", "None"),
         nextAction = json.optString("nextAction", "None"), nextActionAt = json.optString("nextActionAt"),
         us100AgeSeconds = json.optNullableDouble("us100AgeSeconds"), qqqAgeSeconds = json.optNullableDouble("qqqAgeSeconds"),
+        heartbeatStatus = json.optString("heartbeatStatus", "UNKNOWN"), lastUpdate = json.optString("lastUpdate", json.optString("lastSync")),
+        lastUpdateAgeSeconds = json.optNullableDouble("lastUpdateAgeSeconds"), lastTick = json.optString("lastTick"),
     )
 
     private fun parseAccount(json: JSONObject) = AccountStatus(

@@ -24,6 +24,12 @@ fun leverage(value: Double): String = if (value <= 0) "—" else String.format(L
 fun volume(value: Double): String = String.format(Locale.US, "%.2f", value)
 fun age(value: Double?): String = value?.let { String.format(Locale.US, "%.1fs", max(0.0, it)) } ?: "—"
 
+fun priceHealth(ageSeconds: Double?, warningAfterSeconds: Double = 60.0): String = when {
+    ageSeconds == null -> "UNKNOWN"
+    ageSeconds <= warningAfterSeconds -> "OK"
+    else -> "WARNING"
+}
+
 fun shortDateTime(value: String): String = runCatching {
     OffsetDateTime.parse(value).toInstant().atZone(deviceZone).format(DateTimeFormatter.ofPattern("dd MMM HH:mm:ss"))
 }.getOrDefault(value.ifBlank { "—" })

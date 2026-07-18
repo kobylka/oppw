@@ -1,0 +1,12 @@
+MT5 v37 -> v38 monitoring audit
+
+Changed/added function names:
+- ensure_autotrading_enabled
+- format_status
+- log_minute_condition_report
+- log_status_if_needed
+- phase
+- print_autotrading_banner
+- startup_reconcile
+
+The changes are limited to AutoTrading status logging/banner presentation, weekend phase/status publication, and the monitoring event name POSITION_IS_OPEN. No order sizing, entry, exit, SL/TP calculation, close execution, order request, or scheduling method changed.
