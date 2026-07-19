@@ -48,7 +48,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-BUILD_ID = "2026-07-19-risk-cap-preview-v44"
+BUILD_ID = "2026-07-19-event-spool-lock-v44.2"
 SCHEDULED_ACTION_LEAD_SECONDS = 3.0
 AUTOTRADING_REMINDER_SECONDS = 60.0
 STALE_TICK_REMINDER_SECONDS = 60.0
@@ -482,11 +482,28 @@ class PublisherPresence:
             pass
 
 
+class EventSpoolLockTimeout(RuntimeError):
+    pass
+
+
 class SharedEventSpool:
+    """Cross-process JSONL event queue with in-process serialization.
+
+    The OS file lock protects executor and publisher processes. The RLock
+    prevents two threads in the same Python process from opening a second
+    Windows lock handle against a region that the process already owns.
+    Short cross-process contention is retried instead of being reported as a
+    backend publishing failure.
+    """
+
+    FILE_LOCK_TIMEOUT_SECONDS = 5.0
+    FILE_LOCK_RETRY_SECONDS = 0.02
+
     def __init__(self, path: Path, limit: int):
         self.path = path
         self.limit = max(1, limit)
         self.lock_path = path.with_suffix(path.suffix + ".lock")
+        self.thread_lock = threading.RLock()
 
     def _read_unlocked(self) -> list[dict[str, Any]]:
         if not self.path.exists():
@@ -505,45 +522,83 @@ class SharedEventSpool:
 
     def _write_unlocked(self, events: list[dict[str, Any]]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.path.with_suffix(self.path.suffix + ".tmp")
+        temporary = self.path.with_name(
+            f"{self.path.name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp"
+        )
         text = "".join(json.dumps(item, separators=(",", ":"), ensure_ascii=False) + "\n" for item in events)
-        temporary.write_text(text, encoding="utf-8")
-        os.replace(temporary, self.path)
+        try:
+            temporary.write_text(text, encoding="utf-8")
+            os.replace(temporary, self.path)
+        finally:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    def _acquire_file_lock(self) -> InterProcessFileLock:
+        lock = InterProcessFileLock(self.lock_path, {
+            "purpose": "monitor-event-spool",
+            "pid": os.getpid(),
+            "thread": threading.get_ident(),
+        })
+        deadline = time_module.monotonic() + self.FILE_LOCK_TIMEOUT_SECONDS
+        while not lock.try_acquire():
+            if time_module.monotonic() >= deadline:
+                owner = ""
+                try:
+                    owner = self.lock_path.read_text(encoding="utf-8", errors="replace")[:500]
+                except OSError:
+                    pass
+                raise EventSpoolLockTimeout(
+                    f"Event spool lock timed out after {self.FILE_LOCK_TIMEOUT_SECONDS:.1f}s: "
+                    f"{self.lock_path} owner={owner or 'unknown'}"
+                )
+            time_module.sleep(self.FILE_LOCK_RETRY_SECONDS)
+        return lock
 
     def append(self, event: dict[str, Any]) -> None:
-        lock = InterProcessFileLock(self.lock_path, {"purpose": "monitor-event-spool"})
-        with lock:
-            events = self._read_unlocked()
-            item = dict(event)
-            item.setdefault("_spoolId", uuid.uuid4().hex)
-            item.setdefault("_sourcePid", os.getpid())
-            events.append(item)
-            self._write_unlocked(events[-self.limit:])
+        with self.thread_lock:
+            lock = self._acquire_file_lock()
+            try:
+                events = self._read_unlocked()
+                item = dict(event)
+                item.setdefault("_spoolId", uuid.uuid4().hex)
+                item.setdefault("_sourcePid", os.getpid())
+                events.append(item)
+                self._write_unlocked(events[-self.limit:])
+            finally:
+                lock.release()
 
     def claim(self, maximum: int) -> list[dict[str, Any]]:
-        lock = InterProcessFileLock(self.lock_path, {"purpose": "monitor-event-spool"})
-        with lock:
-            events = self._read_unlocked()
-            claimed = events[:max(0, maximum)]
-            self._write_unlocked(events[len(claimed):])
-            return claimed
+        with self.thread_lock:
+            lock = self._acquire_file_lock()
+            try:
+                events = self._read_unlocked()
+                claimed = events[:max(0, maximum)]
+                self._write_unlocked(events[len(claimed):])
+                return claimed
+            finally:
+                lock.release()
 
     def requeue_front(self, events: list[dict[str, Any]]) -> None:
         if not events:
             return
-        lock = InterProcessFileLock(self.lock_path, {"purpose": "monitor-event-spool"})
-        with lock:
-            current = self._read_unlocked()
-            seen: set[str] = set()
-            merged: list[dict[str, Any]] = []
-            for item in [*events, *current]:
-                key = str(item.get("_spoolId", ""))
-                if key and key in seen:
-                    continue
-                if key:
-                    seen.add(key)
-                merged.append(item)
-            self._write_unlocked(merged[:self.limit])
+        with self.thread_lock:
+            lock = self._acquire_file_lock()
+            try:
+                current = self._read_unlocked()
+                seen: set[str] = set()
+                merged: list[dict[str, Any]] = []
+                for item in [*events, *current]:
+                    key = str(item.get("_spoolId", ""))
+                    if key and key in seen:
+                        continue
+                    if key:
+                        seen.add(key)
+                    merged.append(item)
+                self._write_unlocked(merged[:self.limit])
+            finally:
+                lock.release()
 
 class MobileMonitorPublisher:
     """Asynchronous monitor publisher with cross-process role coordination."""
@@ -686,7 +741,7 @@ class MobileMonitorPublisher:
         public_events = [{key: value for key, value in event.items() if not key.startswith("_spool") and key != "_sourcePid"} for event in events]
         payload = {"accountKey": self.cfg.monitor_account_key, "capturedAt": captured_at, "snapshot": snapshot_copy, "events": public_events}
         body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-        request = urllib.request.Request(self.cfg.monitor_ingest_url, data=body, method="POST", headers={"Authorization": f"Bearer {self.cfg.monitor_write_token}", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "OPPW-MT5-Publisher/44"})
+        request = urllib.request.Request(self.cfg.monitor_ingest_url, data=body, method="POST", headers={"Authorization": f"Bearer {self.cfg.monitor_write_token}", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "OPPW-MT5-Publisher/44.2"})
         try:
             with urllib.request.urlopen(request, timeout=self.cfg.monitor_timeout_seconds) as response:
                 if int(response.status) not in (200, 201):
@@ -741,6 +796,16 @@ class MobileMonitorPublisher:
                 self.send(snapshot, events)
                 succeeded = True
                 self.last_success_utc = datetime.now(UTC).isoformat()
+            except EventSpoolLockTimeout as exc:
+                self.rate_limited_error("EVENT MONITOR_EVENT_SPOOL_BUSY error=%s", exc)
+                if not self.stopping:
+                    with self.condition:
+                        if guaranteed:
+                            self.guaranteed_snapshots.appendleft(snapshot)
+                        else:
+                            self.latest_snapshot = snapshot
+                        self.publish_requested = True
+                    time_module.sleep(0.1)
             except Exception as exc:
                 if events:
                     try:
@@ -1604,8 +1669,17 @@ class OPPWContinuousStrategy:
             position_exits = [deal for deal in position_deals if int(getattr(deal, "entry", -1)) in out_values]
             if not entries or not position_exits:
                 continue
-            strategy_entry = any(int(getattr(deal, "magic", 0) or 0) == int(self.cfg.magic) or str(getattr(deal, "comment", "")).startswith(str(self.cfg.comment_prefix)) for deal in entries)
-            if not strategy_entry:
+            known_last_position = int(self.state.last_exit_position_identifier or 0)
+            strategy_entry = any(
+                int(getattr(deal, "magic", 0) or 0) == int(self.cfg.magic)
+                or str(getattr(deal, "comment", "")).startswith(str(self.cfg.comment_prefix))
+                for deal in entries
+            )
+            # v44 introduced last_exit_position_identifier after some positions
+            # had already closed. Adopted/manual positions may also lack the
+            # strategy magic/comment. A matching persisted position identifier
+            # is still authoritative for reconstructing that exact trade.
+            if not strategy_entry and position_id != known_last_position:
                 continue
             entry_volume = sum(abs(float(getattr(deal, "volume", 0.0) or 0.0)) for deal in entries)
             exit_volume = sum(abs(float(getattr(deal, "volume", 0.0) or 0.0)) for deal in position_exits)
@@ -1637,31 +1711,57 @@ class OPPWContinuousStrategy:
         self.cached_previous_full_week_change = float(full_week) if full_week is not None else float(self.state.prev_full_week_change)
         self.cached_previous_full_week_source = "market history" if full_week is not None else "state fallback"
 
-        state_has_labeled_trade = bool(self.state.last_exit_time) and (
-            int(self.state.last_exit_position_identifier) > 0
-            or abs(float(self.state.last_exit_preleverage_return)) > 1e-12
-            or abs(float(self.state.prev_change)) > 1e-12
-        )
-        if state_has_labeled_trade:
-            recorded = float(self.state.last_exit_preleverage_return)
-            if abs(recorded) <= 1e-12 and abs(float(self.state.prev_change)) > 1e-12:
-                recorded = float(self.state.prev_change)
-            self.cached_previous_trade_change = recorded
+        state_has_last_trade_identity = bool(self.state.last_exit_time) or int(self.state.last_exit_position_identifier) > 0
+        labeled_return = float(self.state.last_exit_preleverage_return)
+        legacy_return = float(self.state.prev_change)
+        recorded_return: Optional[float] = None
+        if abs(labeled_return) > 1e-12:
+            recorded_return = labeled_return
+        elif abs(legacy_return) > 1e-12:
+            recorded_return = legacy_return
+
+        # A non-zero recorded value is authoritative. A zero from a legacy
+        # state is not: v44 previously treated position identity alone as proof
+        # that 0.0 was the real return and consequently ignored MT5 history.
+        # Use MT5 reconstruction before accepting such an ambiguous zero.
+        repaired_from_history = False
+        if recorded_return is not None:
+            self.cached_previous_trade_change = recorded_return
             self.cached_previous_trade_source = "publisher-labeled strategy state"
         elif history_trade is not None:
             self.cached_previous_trade_change = float(history_trade)
-            self.cached_previous_trade_source = "MT5 deal history"
+            repaired_from_history = state_has_last_trade_identity and abs(float(history_trade)) > 1e-12
+            self.cached_previous_trade_source = "MT5 deal history (legacy-state repair)" if repaired_from_history else "MT5 deal history"
+        elif state_has_last_trade_identity:
+            self.cached_previous_trade_change = 0.0
+            self.cached_previous_trade_source = "publisher-labeled strategy state (confirmed zero unavailable)"
         else:
-            self.cached_previous_trade_change = float(self.state.prev_change)
+            self.cached_previous_trade_change = legacy_return
             self.cached_previous_trade_source = "state fallback"
 
-        if self.is_executor:
-            changed = abs(self.state.prev_full_week_change - self.cached_previous_full_week_change) > 1e-12 or abs(self.state.prev_change - self.cached_previous_trade_change) > 1e-12
-            self.state.prev_full_week_change = self.cached_previous_full_week_change
-            self.state.prev_change = self.cached_previous_trade_change
-            if changed:
-                self.state.save(self.cfg.state_file)
-                self.log.info("EVENT LEVERAGE_INPUTS_RECOVERED previous_full_week_change=%.6f full_week_source=%s previous_trade_change=%.6f trade_source=%s", self.cached_previous_full_week_change, self.cached_previous_full_week_source.replace(" ", "_"), self.cached_previous_trade_change, self.cached_previous_trade_source.replace(" ", "_"))
+        state_changed_for_save = (
+            abs(self.state.prev_full_week_change - self.cached_previous_full_week_change) > 1e-12
+            or abs(self.state.prev_change - self.cached_previous_trade_change) > 1e-12
+        )
+        self.state.prev_full_week_change = self.cached_previous_full_week_change
+        self.state.prev_change = self.cached_previous_trade_change
+        if repaired_from_history:
+            self.state.last_exit_preleverage_return = self.cached_previous_trade_change
+            if not self.state.last_exit_trade_class:
+                self.state.last_exit_trade_class = self.trade_class(self.cached_previous_trade_change, self.state.last_exit_reason)
+            state_changed_for_save = True
+
+        # Both roles use the same account-scoped state. Persist the repair from
+        # whichever role first reconstructs it so executor and publisher stop
+        # publishing conflicting values after their next restart.
+        if state_changed_for_save:
+            self.state.save(self.cfg.state_file)
+            event_name = "PREVIOUS_TRADE_STATE_REPAIRED" if repaired_from_history else "LEVERAGE_INPUTS_RECOVERED"
+            self.log.info(
+                "EVENT %s previous_full_week_change=%.6f full_week_source=%s previous_trade_change=%.6f trade_source=%s",
+                event_name, self.cached_previous_full_week_change, self.cached_previous_full_week_source.replace(" ", "_"),
+                self.cached_previous_trade_change, self.cached_previous_trade_source.replace(" ", "_"),
+            )
         return self.cached_previous_full_week_change, self.cached_previous_trade_change, self.cached_previous_full_week_source, self.cached_previous_trade_source
 
     def leverage_decision(self) -> tuple[int, str]:
@@ -2123,6 +2223,27 @@ class OPPWContinuousStrategy:
     def monitor_position_exposure(self, position, deposit: float, account=None) -> float:
         return deposit * self.broker_margin_leverage(account) if position is not None and deposit > 0 else 0.0
 
+    def last_closed_trade_payload(self) -> Optional[dict[str, Any]]:
+        if not (self.state.last_exit_time or self.state.last_exit_trade_class or self.state.last_exit_position_identifier):
+            return None
+        value = float(self.state.last_exit_preleverage_return)
+        source = "publisher-labeled strategy state"
+        if abs(value) <= 1e-12:
+            _, resolved_trade, _, resolved_source = self.resolved_leverage_inputs()
+            if abs(float(resolved_trade)) > 1e-12:
+                value = float(resolved_trade)
+                source = resolved_source
+        trade_class = self.state.last_exit_trade_class or self.trade_class(value, self.state.last_exit_reason)
+        return {
+            "positionIdentifier": int(self.state.last_exit_position_identifier),
+            "closedAt": self.state.last_exit_time,
+            "exitReason": self.state.last_exit_reason,
+            "preleverageReturn": value,
+            "preleverageReturnPercent": value * 100.0,
+            "tradeClass": trade_class,
+            "returnSource": source,
+        }
+
     def build_mobile_snapshot(self, position, now: datetime, current_bar: Optional[M1Bar]) -> dict[str, Any]:
         account = mt5.account_info()
         balance = float(getattr(account, "balance", 0.0)) if account is not None else 0.0
@@ -2268,14 +2389,7 @@ class OPPWContinuousStrategy:
             "position": position_payload,
             "potentialPosition": (preview := self.potential_position_preview()) if position is None else None,
             "strategyDecision": self.strategy_decision_payload(preview) if position is None else self.last_strategy_decision_payload,
-            "lastClosedTrade": {
-                "positionIdentifier": int(self.state.last_exit_position_identifier),
-                "closedAt": self.state.last_exit_time,
-                "exitReason": self.state.last_exit_reason,
-                "preleverageReturn": float(self.state.last_exit_preleverage_return),
-                "preleverageReturnPercent": float(self.state.last_exit_preleverage_return) * 100.0,
-                "tradeClass": self.state.last_exit_trade_class,
-            } if self.state.last_exit_time or self.state.last_exit_trade_class else None,
+            "lastClosedTrade": self.last_closed_trade_payload(),
             "conditions": conditions,
             "closestCondition": closest,
             "equityHistory": [],
