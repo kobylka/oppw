@@ -47,7 +47,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-BUILD_ID = "2026-07-18-event-spool-lock-v42.2"
+BUILD_ID = "2026-07-18-position-margin-current-price-v42.3"
 SCHEDULED_ACTION_LEAD_SECONDS = 3.0
 AUTOTRADING_REMINDER_SECONDS = 60.0
 STALE_TICK_REMINDER_SECONDS = 60.0
@@ -1688,6 +1688,26 @@ class OPPWContinuousStrategy:
             )
         return self.cfg.base_leverage, f"{self.cfg.base_leverage}x because base leverage is configured as {self.cfg.base_leverage}x"
 
+    @staticmethod
+    def broker_margin_leverage(account) -> float:
+        value = float(getattr(account, "leverage", 0.0) or 0.0) if account is not None else 0.0
+        return value if value > 0 else 20.0
+
+    def position_required_deposit(self, position, current_price: float) -> float:
+        if position is None:
+            return 0.0
+        volume = float(getattr(position, "volume", 0.0) or 0.0)
+        symbol = str(getattr(position, "symbol", "") or self.cfg.trade_symbol)
+        price = float(current_price or getattr(position, "price_current", 0.0) or 0.0)
+        if volume <= 0 or price <= 0:
+            return 0.0
+        position_type = int(getattr(position, "type", mt5.POSITION_TYPE_BUY))
+        order_type = mt5.ORDER_TYPE_SELL if position_type == int(mt5.POSITION_TYPE_SELL) else mt5.ORDER_TYPE_BUY
+        margin = mt5.order_calc_margin(order_type, symbol, volume, price)
+        if margin is None:
+            raise RuntimeError(f"order_calc_margin failed for open position: {mt5.last_error()}")
+        return float(margin)
+
     def potential_position_preview(self) -> dict[str, Any]:
         leverage, leverage_reason = self.leverage_decision()
         previous_full_week, previous_trade, full_week_source, trade_source = self.resolved_leverage_inputs()
@@ -1709,6 +1729,9 @@ class OPPWContinuousStrategy:
             "positionNotional": 0.0,
             "sizingUnits": 0,
             "minimumVolumeFloor": False,
+            "brokerMarginLeverage": 0.0,
+            "depositPrice": 0.0,
+            "depositSource": "",
             "error": "",
         }
         try:
@@ -1731,16 +1754,20 @@ class OPPWContinuousStrategy:
                     f"Broker minimum {float(info.volume_min):.2f} lot requires {minimum_margin:.2f}, available balance is {balance:.2f}"
                 )
             required_deposit = float(sizing["requiredMargin"])
+            broker_leverage = self.broker_margin_leverage(account)
             result.update({
                 "available": True,
                 "price": price,
                 "volume": float(sizing["volume"]),
                 "requiredDeposit": required_deposit,
                 "balance": balance,
-                "effectiveLeverage": (required_deposit * 20.0) / balance if balance > 0 else 0.0,
+                "effectiveLeverage": (required_deposit * broker_leverage) / balance if balance > 0 else 0.0,
                 "positionNotional": float(sizing["positionNotional"]),
                 "sizingUnits": int(sizing["sizingUnits"]),
                 "minimumVolumeFloor": bool(sizing["minimumVolumeFloor"]),
+                "brokerMarginLeverage": broker_leverage,
+                "depositPrice": price,
+                "depositSource": "MT5 order_calc_margin(proposed volume, current BUY price)",
             })
         except Exception as exc:
             result["error"] = str(exc)
@@ -1750,7 +1777,7 @@ class OPPWContinuousStrategy:
         due, due_reason, final_day = self.weekly_exit_status(position, now)
         account = mt5.account_info()
         equity = float(getattr(account, "equity", 0.0)) if account is not None else 0.0
-        deposit = float(getattr(account, "margin", 0.0)) if account is not None else 0.0
+        deposit = 0.0
         currency = str(getattr(account, "currency", "")).strip() if account is not None else ""
         currency_suffix = f" {currency}" if currency else ""
         phase = self.phase(now)
@@ -1764,7 +1791,8 @@ class OPPWContinuousStrategy:
                 potential_lines = [
                     f"next potential position: BUY {float(preview['volume']):.2f} lot {preview['symbol']} @ {float(preview['price']):.5f}",
                     f"required deposit: {float(preview['requiredDeposit']):.2f}{currency_suffix}",
-                    f"effective leverage: {float(preview['effectiveLeverage']):.4f}x (20 × required deposit / balance)",
+                    f"effective leverage: {float(preview['effectiveLeverage']):.4f}x ({float(preview['brokerMarginLeverage']):.0f} × required deposit / balance)",
+                    f"deposit source: MT5 order_calc_margin at current price {float(preview['depositPrice']):.5f}",
                     f"potential notional: {float(preview['positionNotional']):.2f}{currency_suffix}",
                 ]
             else:
@@ -1800,6 +1828,15 @@ class OPPWContinuousStrategy:
         except Exception:
             bid = float(getattr(position, "price_current", 0.0))
             ask = 0.0
+
+        current_position_price = float(getattr(position, "price_current", 0.0) or 0.0)
+        if current_position_price <= 0:
+            current_position_price = bid if bid > 0 else ask
+        try:
+            deposit = self.position_required_deposit(position, current_position_price)
+        except Exception as exc:
+            self.log.warning("EVENT POSITION_MARGIN_CALC_FAILED ticket=%s price=%.5f error=%s", position.ticket, current_position_price, exc)
+            deposit = 0.0
 
         entry = float(position.price_open)
         raw_pnl_pct = bid / entry - 1.0 if bid > 0 and entry > 0 else 0.0
@@ -1839,6 +1876,7 @@ class OPPWContinuousStrategy:
             f"current P/L %: {raw_pnl_pct:.4%}",
             f"current P/L % leveraged: {leveraged_pnl_pct:.4%}",
             f"equity: {equity:.2f}{currency_suffix} deposit: {deposit:.2f}{currency_suffix}",
+            f"deposit source: MT5 order_calc_margin({float(position.volume):.2f} lot, current position price {current_position_price:.5f})",
             f"SL: {float(position.sl):.5f} ({self.state.active_sl_reason or '-'})",
             f"TP: {float(position.tp):.5f} ({self.state.active_tp_reason or '-'})",
             f"break-even armed: {self.state.break_even}",
@@ -1996,11 +2034,20 @@ class OPPWContinuousStrategy:
         position_payload: Optional[dict[str, Any]] = None
         conditions: list[dict[str, Any]] = []
         closest = None
-        deposit = float(getattr(account, "margin", 0.0)) if account is not None else 0.0
+        deposit = 0.0
         if position is not None:
             bid = trade_bid if trade_bid > 0 else float(getattr(position, "price_current", 0.0) or 0.0)
             ask = trade_ask
             entry = float(position.price_open)
+            current_position_price = float(getattr(position, "price_current", 0.0) or 0.0)
+            if current_position_price <= 0:
+                current_position_price = bid if bid > 0 else ask
+            try:
+                deposit = self.position_required_deposit(position, current_position_price)
+            except Exception as exc:
+                self.log.warning("EVENT POSITION_MARGIN_CALC_FAILED ticket=%s price=%.5f error=%s", position.ticket, current_position_price, exc, extra={"skip_mobile_publish": True})
+                deposit = 0.0
+            broker_leverage = self.broker_margin_leverage(account)
             raw_change = bid / entry - 1.0 if bid > 0 and entry > 0 else 0.0
             leverage = self.state.entry_leverage or self.choose_leverage()
             profit = float(getattr(position, "profit", 0.0)) + float(getattr(position, "swap", 0.0))
@@ -2030,7 +2077,11 @@ class OPPWContinuousStrategy:
                 "strategyLeverage": float(leverage),
                 "leveragedProfitPercent": raw_change * leverage * 100.0,
                 "exposure": exposure,
-                "effectiveLeverage": exposure / balance if balance > 0 else 0.0,
+                "requiredDeposit": deposit,
+                "depositPrice": current_position_price,
+                "depositSource": "MT5 order_calc_margin(position volume, current position price)",
+                "brokerMarginLeverage": broker_leverage,
+                "effectiveLeverage": (deposit * broker_leverage) / balance if balance > 0 else 0.0,
                 "stopLoss": float(position.sl),
                 "takeProfit": float(position.tp),
                 "potentialTakeProfit": potential_take_profit,
