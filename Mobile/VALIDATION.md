@@ -1,19 +1,15 @@
-# OPPW v12 validation
+# Validation
 
-Completed in the packaging environment:
+Completed:
 
-- Python v43 and the Android patch utility pass `py_compile`.
-- MT5 pure-logic tests pass for all A/B/C/D boundaries and priority.
-- Stop formula tests pass: 8x = -6.25%, 10x = -5.00%.
-- What-if scenarios de-duplicate a hard stop that equals another scenario.
-- Strategy decision IDs remain stable for identical inputs.
-- PHP analytics passes `php -l`.
-- PHP tests verify annualized Sharpe/Sortino with two returns, positive-only Sortino infinity and zero-variance Sharpe behavior.
-- Android patch applies successfully to a representative v11 model/parser project.
-- Patched Kotlin and overlay files pass delimiter/string-state validation.
-- Analytics overlay explicitly sorts returns descending and labels the chart best-to-worst.
-- No private configuration or credential is included.
+- Python v44 compiles with `py_compile`.
+- Unit test verifies that a requested `-62.5%` account loss is moved to exactly `-50%` in a linear MT5 profit model.
+- Unit test verifies that a safer requested stop remains unchanged.
+- Unit test verifies effective leverage uses the strategy multiplier `20`, not broker leverage `100`.
+- Unit test verifies a stored `-0.5%` publisher-labeled trade takes priority over a zero MT5-history result.
+- Kotlin `Models.kt` and `Formatters.kt` compile with Kotlin/JVM.
+- Android model/parser field mapping for `accountLossCapApplied` is present.
+- Android hard-stop formula text was removed.
+- Android version is `12.3.0`, code `21`.
 
-A full Android APK build was not possible in this environment because the complete v11 Android project, Android SDK and its downloaded Gradle dependency cache were not available in the active runtime. Build the patched project in Android Studio/JDK 17 before installation.
-
-A live MT5 broker connection and production MySQL migration were not executed. The MT5 file was syntax-compiled and its pure calculations were exercised with deterministic stubs; the SQL migration should first be run against a database backup.
+A full APK build was not run because the active environment has no Android SDK/Compose dependency cache.

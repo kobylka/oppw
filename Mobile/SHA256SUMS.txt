@@ -1,0 +1,14 @@
+652c11e285bc9e3c34aac9c328867a091d196a5cbe0ecdc2800abeff6dfe4d73  ./Mobile/app/build.gradle.kts
+09237fb40f78a0de083f4bc048377747e5888e1f92ced56b0859ceef927bc0d7  ./Mobile/app/src/main/java/com/oppw/monitor/data/JsonParser.kt
+f6387efbf10c6a8afb25ded7def42ff109d3d91018ffff2d708dff53e90e4930  ./Mobile/app/src/main/java/com/oppw/monitor/data/Models.kt
+cbfd1418cadbf55357bffc0981e81edf3be634c80bf474bba120afd081ac2d79  ./Mobile/app/src/main/java/com/oppw/monitor/ui/screens/PositionScreen.kt
+2bb35217304cc986debae4d5079c6e77ed7973a79ec2c6165b234489a70d507c  ./Mobile/app/src/main/java/com/oppw/monitor/util/Formatters.kt
+704bf9e06d0e0a3f9cbcb7786dd3ab206b89ab575eb95c34c81a47af0281efd8  ./Mobile_v12_2_to_v12_3.diff
+62b839a3b2312271e27f2188c3dd965c43338641cd4dc23896f28db10678a084  ./README.md
+0ca188dd442640bc16015a5983ffc32aaf8d52f7efce4098f052a70edd081e30  ./V13_PROPOSALS_NOT_IMPLEMENTED.md
+1433495e50a4c86e52cdb048abbc26bf2905a2d0ebe856f08810d44169f52490  ./VALIDATION.md
+6b21623ef7e232a83b56c938b4a5ed96d136d3293861b78db8c8d4ffdf1764a3  ./apply-v12.3-v44.ps1
+2938fa7724477139b716dfd93305a578d3fcf7c59a32e7c658ed22fecaaaa2ce  ./mt5/oppw_mt5_continuous.py
+2938fa7724477139b716dfd93305a578d3fcf7c59a32e7c658ed22fecaaaa2ce  ./mt5/oppw_mt5_continuous_v44.py
+e3180136a82b582a57fe036ac52b7255b82496b942b65bca772b24df8c4d378f  ./oppw_mt5_v43_to_v44.diff
+305d5e4217c2023e6d19e82cea5703aeb8cd04ab44237a59e64586ddb3031284  ./test_v44.py

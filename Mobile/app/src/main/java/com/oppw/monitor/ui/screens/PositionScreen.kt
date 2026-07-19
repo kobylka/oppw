@@ -32,6 +32,7 @@ import com.oppw.monitor.util.leverage
 import com.oppw.monitor.util.liveSourceAge
 import com.oppw.monitor.util.money
 import com.oppw.monitor.util.percent
+import com.oppw.monitor.util.unsignedPercent
 import com.oppw.monitor.util.price
 import com.oppw.monitor.util.shortDateTime
 import com.oppw.monitor.util.timeOnly
@@ -81,11 +82,12 @@ fun PositionScreen(state: UiState, onRetry: () -> Unit) {
                                         }
                                         StatusChip("${potential.strategyLeverage.toInt()}x", "green")
                                     }
+                                    val effectiveLeverage = if (potential.balance > 0.0 && potential.requiredDeposit > 0.0) 20.0 * potential.requiredDeposit / potential.balance else potential.effectiveLeverage
                                     MetricRow("Potential volume", volume(potential.volume), "Current price", price(potential.price), BrightGreen)
-                                    MetricRow("Required deposit", money(potential.requiredDeposit, account.currency), "Effective leverage", leverage(potential.effectiveLeverage))
+                                    MetricRow("Required deposit", money(potential.requiredDeposit, account.currency), "Effective leverage", leverage(effectiveLeverage))
                                     MetricRow("Balance", money(potential.balance, account.currency), "Equity", money(potential.equity, account.currency))
                                     MetricRow("Free margin now", money(potential.freeMargin, account.currency), "Free margin after", money(potential.freeMarginAfter, account.currency), if (potential.freeMarginAfter >= 0.0) BrightGreen else DangerRed)
-                                    MetricRow("Margin usage", percent(potential.marginUsagePercent), "Margin level after", percent(potential.marginLevelAfterPercent))
+                                    MetricRow("Margin usage", unsignedPercent(potential.marginUsagePercent), "Margin level after", unsignedPercent(potential.marginLevelAfterPercent))
                                     MetricRow("Potential notional", money(potential.positionNotional, account.currency), "Sizing units", potential.sizingUnits.toString())
                                     Text("Margin source: ${potential.depositSource}", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
                                 }
@@ -95,10 +97,10 @@ fun PositionScreen(state: UiState, onRetry: () -> Unit) {
                     if (potential?.available == true) {
                         item {
                             AppCard(Modifier.fillMaxWidth()) {
-                                SectionTitle("Potential hard stop loss", potential.stopLossFormula)
-                                MetricRow("Underlying stop", percent(potential.potentialStopLossPercent), "Stop price", price(potential.potentialStopLossPrice), DangerRed)
-                                MetricRow("Cash P/L at stop", money(potential.potentialStopLossCash, account.currency), "Account return at stop", percent(potential.accountLossPercentAtStop), DangerRed)
-                                Text("At ${potential.strategyLeverage.toInt()}x, the underlying stop is ${String.format("%.2f", potential.potentialStopLossPercent)}%. Formula: −0.5 ÷ leverage.", color = TextSecondary)
+                                SectionTitle("Potential hard stop loss", if (potential.accountLossCapApplied) "50% ACCOUNT CAP" else "")
+                                MetricRow("Stop price", price(potential.potentialStopLossPrice), "Cash P/L at stop", money(potential.potentialStopLossCash, account.currency), DangerRed)
+                                MetricRow("Account return at stop", percent(potential.accountLossPercentAtStop), "Risk cap", if (potential.accountLossCapApplied) "APPLIED" else "NOT REQUIRED", DangerRed)
+                                if (potential.accountLossCapApplied) Text("The stop was moved closer so the projected account loss does not exceed 50% of balance.", color = TextSecondary)
                             }
                         }
                         item {
@@ -120,11 +122,15 @@ fun PositionScreen(state: UiState, onRetry: () -> Unit) {
                             if (decision == null) {
                                 Text("No structured strategy decision has been published yet.", color = TextSecondary)
                             } else {
+                                val labeledTrade = snapshot.lastClosedTrade
+                                val useLabeledTrade = abs(decision.previousTradeChange) <= 1e-12 && labeledTrade != null && abs(labeledTrade.preleverageReturn) > 1e-12
+                                val previousTradeChange = if (useLabeledTrade) labeledTrade!!.preleverageReturn else decision.previousTradeChange
+                                val previousTradeSource = if (useLabeledTrade) "publisher-labeled last trade" else decision.previousTradeSource
                                 MetricRow("Selected leverage", leverage(decision.selectedLeverage), "Decision ID", decision.decisionId.take(8))
-                                MetricRow("Previous full week", percent(decision.previousFullWeekChange * 100.0), "Previous trade", percent(decision.previousTradeChange * 100.0))
+                                MetricRow("Previous full week", percent(decision.previousFullWeekChange * 100.0), "Previous trade", percent(previousTradeChange * 100.0))
                                 Text(decision.leverageReason, style = MaterialTheme.typography.bodyLarge)
                                 Text("Week source: ${decision.previousFullWeekSource}", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
-                                Text("Trade source: ${decision.previousTradeSource}", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                                Text("Trade source: $previousTradeSource", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
                                 Text("Recorded ${shortDateTime(decision.recordedAt)} · build ${decision.build}", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
                                 if (decision.error.isNotBlank()) Text(decision.error, color = DangerRed)
                             }

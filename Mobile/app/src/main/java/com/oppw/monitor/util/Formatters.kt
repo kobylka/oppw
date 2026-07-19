@@ -19,6 +19,7 @@ fun money(value: Double, currency: String): String = "${number.format(value)} $c
 fun price(value: Double): String = if (value == 0.0) "—" else String.format(Locale.US, "%,.2f", value)
 fun optionalPrice(value: Double?): String = value?.let(::price) ?: "—"
 fun percent(value: Double): String = String.format(Locale.US, "%+.2f%%", value)
+fun unsignedPercent(value: Double): String = String.format(Locale.US, "%.2f%%", value)
 fun optionalPercent(value: Double?): String = value?.let(::percent) ?: "—"
 fun leverage(value: Double): String = if (value <= 0) "—" else String.format(Locale.US, "%.2fx", value)
 fun volume(value: Double): String = String.format(Locale.US, "%.2f", value)

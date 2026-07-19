@@ -95,6 +95,7 @@ data class PotentialPosition(
     val potentialStopLossPrice: Double = 0.0,
     val potentialStopLossCash: Double = 0.0,
     val accountLossPercentAtStop: Double = 0.0,
+    val accountLossCapApplied: Boolean = false,
     val stopLossFormula: String = "",
     val minimumVolumeFloor: Boolean = false,
     val scenarios: List<WhatIfScenario> = emptyList(),

@@ -185,7 +185,8 @@ object JsonParser {
         previousTradeChange = json.optDoubleAny("previousTradeChange", "previous_trade_change"), previousTradeSource = json.optStringAny("previousTradeSource", "previous_trade_source"),
         potentialStopLossPercent = json.optDoubleAny("potentialStopLossPercent", "potential_stop_loss_percent"), potentialStopLossRatio = json.optDoubleAny("potentialStopLossRatio", "potential_stop_loss_ratio"),
         potentialStopLossPrice = json.optDoubleAny("potentialStopLossPrice", "potential_stop_loss_price"), potentialStopLossCash = json.optDoubleAny("potentialStopLossCash", "potential_stop_loss_cash"),
-        accountLossPercentAtStop = json.optDoubleAny("accountLossPercentAtStop", "account_loss_percent_at_stop"), stopLossFormula = json.optStringAny("stopLossFormula", "stop_loss_formula"),
+        accountLossPercentAtStop = json.optDoubleAny("accountLossPercentAtStop", "account_loss_percent_at_stop"),
+        accountLossCapApplied = json.optBooleanAny("accountLossCapApplied", "account_loss_cap_applied"), stopLossFormula = json.optStringAny("stopLossFormula", "stop_loss_formula"),
         minimumVolumeFloor = json.optBooleanAny("minimumVolumeFloor", "minimum_volume_floor"), scenarios = buildList {
             val values = json.optJSONArray("scenarios") ?: JSONArray()
             for (i in 0 until values.length()) values.getJSONObject(i).let { item -> add(WhatIfScenario(

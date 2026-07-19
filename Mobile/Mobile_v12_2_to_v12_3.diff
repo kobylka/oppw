@@ -1,0 +1,108 @@
+diff -ruN /tmp/oppw_mobile_v12_2_baseline/app/build.gradle.kts /mnt/data/OPPW_v12_3_v44/Mobile/app/build.gradle.kts
+--- /tmp/oppw_mobile_v12_2_baseline/app/build.gradle.kts	2026-07-19 11:58:33.384428655 +0000
++++ /mnt/data/OPPW_v12_3_v44/Mobile/app/build.gradle.kts	2026-07-19 11:58:33.228262645 +0000
+@@ -21,8 +21,8 @@
+         applicationId = "com.oppw.monitor"
+         minSdk = 26
+         targetSdk = 37
+-        versionCode = 20
+-        versionName = "12.0.0"
++        versionCode = 21
++        versionName = "12.3.0"
+ 
+         buildConfigField("String", "API_BASE_URL", quoted(local("OPPW_API_BASE_URL", "https://example.com/oppw-api/")))
+         buildConfigField("long", "POLL_INTERVAL_MS", "5000L")
+diff -ruN /tmp/oppw_mobile_v12_2_baseline/app/src/main/java/com/oppw/monitor/data/JsonParser.kt /mnt/data/OPPW_v12_3_v44/Mobile/app/src/main/java/com/oppw/monitor/data/JsonParser.kt
+--- /tmp/oppw_mobile_v12_2_baseline/app/src/main/java/com/oppw/monitor/data/JsonParser.kt	2026-07-19 11:58:33.330594805 +0000
++++ /mnt/data/OPPW_v12_3_v44/Mobile/app/src/main/java/com/oppw/monitor/data/JsonParser.kt	2026-07-19 11:58:33.166118384 +0000
+@@ -185,7 +185,8 @@
+         previousTradeChange = json.optDoubleAny("previousTradeChange", "previous_trade_change"), previousTradeSource = json.optStringAny("previousTradeSource", "previous_trade_source"),
+         potentialStopLossPercent = json.optDoubleAny("potentialStopLossPercent", "potential_stop_loss_percent"), potentialStopLossRatio = json.optDoubleAny("potentialStopLossRatio", "potential_stop_loss_ratio"),
+         potentialStopLossPrice = json.optDoubleAny("potentialStopLossPrice", "potential_stop_loss_price"), potentialStopLossCash = json.optDoubleAny("potentialStopLossCash", "potential_stop_loss_cash"),
+-        accountLossPercentAtStop = json.optDoubleAny("accountLossPercentAtStop", "account_loss_percent_at_stop"), stopLossFormula = json.optStringAny("stopLossFormula", "stop_loss_formula"),
++        accountLossPercentAtStop = json.optDoubleAny("accountLossPercentAtStop", "account_loss_percent_at_stop"),
++        accountLossCapApplied = json.optBooleanAny("accountLossCapApplied", "account_loss_cap_applied"), stopLossFormula = json.optStringAny("stopLossFormula", "stop_loss_formula"),
+         minimumVolumeFloor = json.optBooleanAny("minimumVolumeFloor", "minimum_volume_floor"), scenarios = buildList {
+             val values = json.optJSONArray("scenarios") ?: JSONArray()
+             for (i in 0 until values.length()) values.getJSONObject(i).let { item -> add(WhatIfScenario(
+diff -ruN /tmp/oppw_mobile_v12_2_baseline/app/src/main/java/com/oppw/monitor/data/Models.kt /mnt/data/OPPW_v12_3_v44/Mobile/app/src/main/java/com/oppw/monitor/data/Models.kt
+--- /tmp/oppw_mobile_v12_2_baseline/app/src/main/java/com/oppw/monitor/data/Models.kt	2026-07-19 11:58:33.307421947 +0000
++++ /mnt/data/OPPW_v12_3_v44/Mobile/app/src/main/java/com/oppw/monitor/data/Models.kt	2026-07-19 11:58:33.147790402 +0000
+@@ -95,6 +95,7 @@
+     val potentialStopLossPrice: Double = 0.0,
+     val potentialStopLossCash: Double = 0.0,
+     val accountLossPercentAtStop: Double = 0.0,
++    val accountLossCapApplied: Boolean = false,
+     val stopLossFormula: String = "",
+     val minimumVolumeFloor: Boolean = false,
+     val scenarios: List<WhatIfScenario> = emptyList(),
+diff -ruN /tmp/oppw_mobile_v12_2_baseline/app/src/main/java/com/oppw/monitor/ui/screens/PositionScreen.kt /mnt/data/OPPW_v12_3_v44/Mobile/app/src/main/java/com/oppw/monitor/ui/screens/PositionScreen.kt
+--- /tmp/oppw_mobile_v12_2_baseline/app/src/main/java/com/oppw/monitor/ui/screens/PositionScreen.kt	2026-07-19 11:58:33.348056985 +0000
++++ /mnt/data/OPPW_v12_3_v44/Mobile/app/src/main/java/com/oppw/monitor/ui/screens/PositionScreen.kt	2026-07-19 11:58:33.194005058 +0000
+@@ -32,6 +32,7 @@
+ import com.oppw.monitor.util.liveSourceAge
+ import com.oppw.monitor.util.money
+ import com.oppw.monitor.util.percent
++import com.oppw.monitor.util.unsignedPercent
+ import com.oppw.monitor.util.price
+ import com.oppw.monitor.util.shortDateTime
+ import com.oppw.monitor.util.timeOnly
+@@ -81,11 +82,12 @@
+                                         }
+                                         StatusChip("${potential.strategyLeverage.toInt()}x", "green")
+                                     }
++                                    val effectiveLeverage = if (potential.balance > 0.0 && potential.requiredDeposit > 0.0) 20.0 * potential.requiredDeposit / potential.balance else potential.effectiveLeverage
+                                     MetricRow("Potential volume", volume(potential.volume), "Current price", price(potential.price), BrightGreen)
+-                                    MetricRow("Required deposit", money(potential.requiredDeposit, account.currency), "Effective leverage", leverage(potential.effectiveLeverage))
++                                    MetricRow("Required deposit", money(potential.requiredDeposit, account.currency), "Effective leverage", leverage(effectiveLeverage))
+                                     MetricRow("Balance", money(potential.balance, account.currency), "Equity", money(potential.equity, account.currency))
+                                     MetricRow("Free margin now", money(potential.freeMargin, account.currency), "Free margin after", money(potential.freeMarginAfter, account.currency), if (potential.freeMarginAfter >= 0.0) BrightGreen else DangerRed)
+-                                    MetricRow("Margin usage", percent(potential.marginUsagePercent), "Margin level after", percent(potential.marginLevelAfterPercent))
++                                    MetricRow("Margin usage", unsignedPercent(potential.marginUsagePercent), "Margin level after", unsignedPercent(potential.marginLevelAfterPercent))
+                                     MetricRow("Potential notional", money(potential.positionNotional, account.currency), "Sizing units", potential.sizingUnits.toString())
+                                     Text("Margin source: ${potential.depositSource}", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                                 }
+@@ -95,10 +97,10 @@
+                     if (potential?.available == true) {
+                         item {
+                             AppCard(Modifier.fillMaxWidth()) {
+-                                SectionTitle("Potential hard stop loss", potential.stopLossFormula)
+-                                MetricRow("Underlying stop", percent(potential.potentialStopLossPercent), "Stop price", price(potential.potentialStopLossPrice), DangerRed)
+-                                MetricRow("Cash P/L at stop", money(potential.potentialStopLossCash, account.currency), "Account return at stop", percent(potential.accountLossPercentAtStop), DangerRed)
+-                                Text("At ${potential.strategyLeverage.toInt()}x, the underlying stop is ${String.format("%.2f", potential.potentialStopLossPercent)}%. Formula: −0.5 ÷ leverage.", color = TextSecondary)
++                                SectionTitle("Potential hard stop loss", if (potential.accountLossCapApplied) "50% ACCOUNT CAP" else "")
++                                MetricRow("Stop price", price(potential.potentialStopLossPrice), "Cash P/L at stop", money(potential.potentialStopLossCash, account.currency), DangerRed)
++                                MetricRow("Account return at stop", percent(potential.accountLossPercentAtStop), "Risk cap", if (potential.accountLossCapApplied) "APPLIED" else "NOT REQUIRED", DangerRed)
++                                if (potential.accountLossCapApplied) Text("The stop was moved closer so the projected account loss does not exceed 50% of balance.", color = TextSecondary)
+                             }
+                         }
+                         item {
+@@ -120,11 +122,15 @@
+                             if (decision == null) {
+                                 Text("No structured strategy decision has been published yet.", color = TextSecondary)
+                             } else {
++                                val labeledTrade = snapshot.lastClosedTrade
++                                val useLabeledTrade = abs(decision.previousTradeChange) <= 1e-12 && labeledTrade != null && abs(labeledTrade.preleverageReturn) > 1e-12
++                                val previousTradeChange = if (useLabeledTrade) labeledTrade!!.preleverageReturn else decision.previousTradeChange
++                                val previousTradeSource = if (useLabeledTrade) "publisher-labeled last trade" else decision.previousTradeSource
+                                 MetricRow("Selected leverage", leverage(decision.selectedLeverage), "Decision ID", decision.decisionId.take(8))
+-                                MetricRow("Previous full week", percent(decision.previousFullWeekChange * 100.0), "Previous trade", percent(decision.previousTradeChange * 100.0))
++                                MetricRow("Previous full week", percent(decision.previousFullWeekChange * 100.0), "Previous trade", percent(previousTradeChange * 100.0))
+                                 Text(decision.leverageReason, style = MaterialTheme.typography.bodyLarge)
+                                 Text("Week source: ${decision.previousFullWeekSource}", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+-                                Text("Trade source: ${decision.previousTradeSource}", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
++                                Text("Trade source: $previousTradeSource", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                                 Text("Recorded ${shortDateTime(decision.recordedAt)} · build ${decision.build}", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                                 if (decision.error.isNotBlank()) Text(decision.error, color = DangerRed)
+                             }
+diff -ruN /tmp/oppw_mobile_v12_2_baseline/app/src/main/java/com/oppw/monitor/util/Formatters.kt /mnt/data/OPPW_v12_3_v44/Mobile/app/src/main/java/com/oppw/monitor/util/Formatters.kt
+--- /tmp/oppw_mobile_v12_2_baseline/app/src/main/java/com/oppw/monitor/util/Formatters.kt	2026-07-19 11:58:33.365625109 +0000
++++ /mnt/data/OPPW_v12_3_v44/Mobile/app/src/main/java/com/oppw/monitor/util/Formatters.kt	2026-07-19 11:58:33.211577494 +0000
+@@ -19,6 +19,7 @@
+ fun price(value: Double): String = if (value == 0.0) "—" else String.format(Locale.US, "%,.2f", value)
+ fun optionalPrice(value: Double?): String = value?.let(::price) ?: "—"
+ fun percent(value: Double): String = String.format(Locale.US, "%+.2f%%", value)
++fun unsignedPercent(value: Double): String = String.format(Locale.US, "%.2f%%", value)
+ fun optionalPercent(value: Double?): String = value?.let(::percent) ?: "—"
+ fun leverage(value: Double): String = if (value <= 0) "—" else String.format(Locale.US, "%.2fx", value)
+ fun volume(value: Double): String = String.format(Locale.US, "%.2f", value)
