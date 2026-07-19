@@ -12,6 +12,7 @@ import com.google.firebase.FirebaseApp
 import com.google.firebase.messaging.FirebaseMessaging
 import com.oppw.monitor.BuildConfig
 import com.oppw.monitor.auth.AuthenticationRequiredException
+import com.oppw.monitor.data.AnalyticsFilters
 import com.oppw.monitor.data.AuthStatus
 import com.oppw.monitor.data.EventsPagingSource
 import com.oppw.monitor.data.MonitorAccount
@@ -109,12 +110,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val current = _uiState.value
         val key = current.selectedAccountKey ?: return
         if (!force && current.analytics != null) return
+        val filters = current.analyticsFilters
         _uiState.value = current.copy(analyticsLoading = true, analyticsError = null)
         viewModelScope.launch {
-            runCatching { repository.analytics(key) }
+            runCatching { repository.analytics(key, filters) }
                 .onSuccess { analytics -> _uiState.value = _uiState.value.copy(analytics = analytics, analyticsLoading = false, analyticsError = null) }
                 .onFailure { error -> _uiState.value = _uiState.value.copy(analyticsLoading = false, analyticsError = error.message ?: error::class.java.simpleName) }
         }
+    }
+
+    fun setAnalyticsFilters(filters: AnalyticsFilters) {
+        val current = _uiState.value
+        if (current.analyticsFilters == filters || current.selectedAccountKey == null) return
+        _uiState.value = current.copy(analyticsFilters = filters, analytics = null, analyticsLoading = true, analyticsError = null)
+        loadAnalytics(force = true)
     }
 
     fun eventPager(accountKey: String, buySellOnly: Boolean, hideRoutine: Boolean, eventName: String?): Flow<PagingData<MonitorEvent>> {
@@ -132,6 +141,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             selectedAccountKey = accountKey,
             response = null,
             analytics = null,
+            analyticsFilters = AnalyticsFilters(),
             analyticsError = null,
             error = null,
         )

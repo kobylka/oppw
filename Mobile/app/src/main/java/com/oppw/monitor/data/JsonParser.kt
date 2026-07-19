@@ -68,29 +68,43 @@ object JsonParser {
         val root = JSONObject(raw)
         requireOk(root)
         val summary = root.getJSONObject("summary")
+        val filters = root.optJSONObject("filters") ?: JSONObject()
+        val options = root.optJSONObject("filterOptions") ?: JSONObject()
         return AnalyticsResponse(
             generatedAt = root.optString("generatedAt"),
+            filters = AnalyticsFilters(
+                scope = filters.optString("scope", "SELECTED"), leverage = filters.optString("leverage"),
+                exitReason = filters.optString("exitReason"), year = filters.optString("year"), tradeClass = filters.optString("tradeClass"),
+            ),
+            filterOptions = AnalyticsFilterOptions(
+                accounts = buildList {
+                    val values = options.optJSONArray("accounts") ?: JSONArray()
+                    for (i in 0 until values.length()) values.getJSONObject(i).let { item -> add(AnalyticsAccountOption(
+                        key = item.optString("key"), label = item.optString("label", item.optString("key")), type = item.optString("type"),
+                    )) }
+                },
+                leverages = options.optJSONArray("leverages").toDoubles(), exitReasons = options.optJSONArray("exitReasons").toStrings(),
+                years = options.optJSONArray("years").toInts(), classes = options.optJSONArray("classes").toStrings().ifEmpty { listOf("A", "B", "C", "D") },
+            ),
             summary = AnalyticsSummary(
                 totalTrades = summary.optInt("totalTrades"), closedTrades = summary.optInt("closedTrades"), openTrades = summary.optInt("openTrades"),
                 wins = summary.optInt("wins"), losses = summary.optInt("losses"), winRate = summary.optDouble("winRate"), netProfit = summary.optDouble("netProfit"),
                 initialBalance = summary.optDouble("initialBalance"), topUps = summary.optDouble("topUps"), withdrawals = summary.optDouble("withdrawals"),
                 netContributions = summary.optDouble("netContributions"), capitalAdjustedReturnPercent = summary.optDouble("capitalAdjustedReturnPercent"),
                 positiveWeeksPercent = summary.optDouble("positiveWeeksPercent"), averageWeeklyProfit = summary.optDouble("averageWeeklyProfit"),
-                totalSlippagePoints = summary.optDouble("totalSlippagePoints"), grossProfit = summary.optDouble("grossProfit"), grossLoss = summary.optDouble("grossLoss"), profitFactor = summary.optDouble("profitFactor"),
-                expectancy = summary.optDouble("expectancy"), medianProfit = summary.optDouble("medianProfit"), averageWin = summary.optDouble("averageWin"),
-                averageLoss = summary.optDouble("averageLoss"), payoffRatio = summary.optDouble("payoffRatio"), averageDurationSeconds = summary.optDouble("averageDurationSeconds"),
-                averageMfePoints = summary.optDouble("averageMfePoints"), averageMaePoints = summary.optDouble("averageMaePoints"),
+                totalSlippagePoints = summary.optDouble("totalSlippagePoints"), grossProfit = summary.optDouble("grossProfit"), grossLoss = summary.optDouble("grossLoss"),
+                profitFactor = summary.optDouble("profitFactor"), expectancy = summary.optDouble("expectancy"), medianProfit = summary.optDouble("medianProfit"),
+                averageWin = summary.optDouble("averageWin"), averageLoss = summary.optDouble("averageLoss"), payoffRatio = summary.optDouble("payoffRatio"),
+                averageDurationSeconds = summary.optDouble("averageDurationSeconds"), averageMfePoints = summary.optDouble("averageMfePoints"), averageMaePoints = summary.optDouble("averageMaePoints"),
                 averageEntrySlippagePoints = summary.optDouble("averageEntrySlippagePoints"), averageExitSlippagePoints = summary.optDouble("averageExitSlippagePoints"),
                 captureEfficiencyPercent = summary.optDouble("captureEfficiencyPercent"), edgeRatio = summary.optDouble("edgeRatio"), maxDrawdown = summary.optDouble("maxDrawdown"),
                 recoveryFactor = summary.optDouble("recoveryFactor"), consistencyScore = summary.optDouble("consistencyScore"), maxWinStreak = summary.optInt("maxWinStreak"),
                 maxLossStreak = summary.optInt("maxLossStreak"), timeInMarketPercent = summary.optDouble("timeInMarketPercent"), bestTrade = summary.optDouble("bestTrade"),
                 worstTrade = summary.optDouble("worstTrade"), sharpeRatio = summary.optDouble("sharpeRatio"), sortinoRatio = summary.optDouble("sortinoRatio"),
-                sharpeAvailable = summary.optBoolean("sharpeAvailable"), sortinoAvailable = summary.optBoolean("sortinoAvailable"),
-                sortinoInfinite = summary.optBoolean("sortinoInfinite"), ratiosAnnualized = summary.optBoolean("ratiosAnnualized"),
-                periodsPerYear = summary.optInt("periodsPerYear", 52), ratioSampleTrades = summary.optInt("ratioSampleTrades"),
+                sharpeAvailable = summary.optBoolean("sharpeAvailable"), sortinoAvailable = summary.optBoolean("sortinoAvailable"), sortinoInfinite = summary.optBoolean("sortinoInfinite"),
+                ratiosAnnualized = summary.optBoolean("ratiosAnnualized"), periodsPerYear = summary.optInt("periodsPerYear", 52), ratioSampleTrades = summary.optInt("ratioSampleTrades"),
                 calmarRatio = summary.optDouble("calmarRatio"), omegaRatio = summary.optDouble("omegaRatio"), ulcerIndexPercent = summary.optDouble("ulcerIndexPercent"),
-                valueAtRisk95Percent = summary.optDouble("valueAtRisk95Percent"), expectedShortfall95Percent = summary.optDouble("expectedShortfall95Percent"),
-                riskSampleDays = summary.optInt("riskSampleDays"),
+                valueAtRisk95Percent = summary.optDouble("valueAtRisk95Percent"), expectedShortfall95Percent = summary.optDouble("expectedShortfall95Percent"), riskSampleDays = summary.optInt("riskSampleDays"),
             ),
             exitReasons = buildList {
                 val values = root.optJSONArray("exitReasons") ?: JSONArray()
@@ -106,39 +120,152 @@ object JsonParser {
                     bestTrade = item.optDouble("bestTrade"), worstTrade = item.optDouble("worstTrade"), averageDurationSeconds = item.optDouble("averageDurationSeconds"),
                 )) }
             },
-            recentTrades = buildList {
-                val values = root.optJSONArray("recentTrades") ?: JSONArray()
-                for (i in 0 until values.length()) values.getJSONObject(i).let { item -> add(TradeAnalytics(
-                    ticket = item.optLong("ticket"), symbol = item.optString("symbol"), side = item.optString("side"), volume = item.optDouble("volume"),
-                    openedAt = item.optString("openedAt"), closedAt = item.optString("closedAt"), openPrice = item.optDouble("openPrice"), closePrice = item.optDouble("closePrice"),
-                    profit = item.optDouble("profit"), profitPercent = item.optDouble("profitPercent", item.optDouble("profit_percent")),
-                    balanceBefore = item.optDouble("balanceBefore", item.optDouble("balance_before")), tradeReturn = parseExplicitTradeReturn(item),
-                    exitReason = item.optString("exitReason", item.optString("exit_reason")),
-                    durationSeconds = item.optLong("durationSeconds"), mfePoints = item.optDouble("mfePoints"), maePoints = item.optDouble("maePoints"),
-                    entrySlippagePoints = item.optDouble("entrySlippagePoints"), exitSlippagePoints = item.optDouble("exitSlippagePoints"),
-                    maxProfit = item.optDouble("maxProfit"), maxDrawdown = item.optDouble("maxDrawdown"), closed = item.optBoolean("closed"),
-                        preleverageReturnPercent = item.optDouble("preleverageReturnPercent"), tradeClass = item.optString("tradeClass"),
-                )) }
-            },
-                    tradeClasses = buildList {
-                val values = root.optJSONArray("tradeClasses") ?: JSONArray()
-                for (i in 0 until values.length()) values.getJSONObject(i).let { item -> add(TradeClassAnalytics(
-                    tradeClass = item.optString("class", item.optString("tradeClass")), trades = item.optInt("trades"), profit = item.optDouble("profit"),
-                    averagePreleverageReturnPercent = item.optDouble("averagePreleverageReturnPercent"), winRate = item.optDouble("winRate"),
-                )) }
-            },
+            recentTrades = parseTrades(root.optJSONArray("recentTrades") ?: JSONArray()),
+            tradeClasses = parseTradeClasses(root.optJSONArray("tradeClasses") ?: JSONArray()),
             tradeDistribution = (root.optJSONObject("tradeDistribution") ?: JSONObject()).let { distribution -> TradeDistribution(
                 sortOrder = distribution.optString("sortOrder", "BEST_TO_WORST"), meanReturnPercent = distribution.optDouble("meanReturnPercent"),
                 trades = buildList {
                     val values = distribution.optJSONArray("trades") ?: JSONArray()
                     for (i in 0 until values.length()) values.getJSONObject(i).let { item -> add(TradeDistributionPoint(
-                        rank = item.optInt("rank"), ticket = item.optLong("ticket"), returnPercent = item.optDouble("returnPercent"),
-                        tradeClass = item.optString("tradeClass"), exitReason = item.optString("exitReason"), closedAt = item.optString("closedAt"), profit = item.optDouble("profit"),
+                        rank = item.optInt("rank"), ticket = item.optLong("ticket"), strategyKey = item.optString("strategyKey"),
+                        returnPercent = item.optDouble("returnPercent"), tradeClass = item.optString("tradeClass"), exitReason = item.optString("exitReason"),
+                        closedAt = item.optString("closedAt"), profit = item.optDouble("profit"),
                     )) }
                 },
             ) },
-)
+            rolling20 = buildList {
+                val values = root.optJSONArray("rolling20") ?: JSONArray()
+                for (i in 0 until values.length()) values.getJSONObject(i).let { item -> add(RollingRatioPoint(
+                    endingTradeKey = item.optString("endingTradeKey"), closedAt = item.optString("closedAt"), sampleCount = item.optInt("sampleCount"),
+                    sharpe = item.optNullableFiniteDouble("sharpe"), sortino = item.optNullableFiniteDouble("sortino"), sortinoInfinite = item.optBoolean("sortinoInfinite"),
+                    tradeKeys = item.optJSONArray("tradeKeys").toStrings(),
+                )) }
+            },
+            confidenceIntervals = buildList {
+                val values = root.optJSONArray("confidenceIntervals") ?: JSONArray()
+                for (i in 0 until values.length()) values.getJSONObject(i).let { item -> add(ConfidenceInterval(
+                    key = item.optString("key"), label = item.optString("label"), estimate = item.optDouble("estimate"), lower95 = item.optDouble("lower95"),
+                    upper95 = item.optDouble("upper95"), unit = item.optString("unit"), sampleCount = item.optInt("sampleCount"), tradeKeys = item.optJSONArray("tradeKeys").toStrings(),
+                )) }
+            },
+            classProfitContribution = parseTradeClasses(root.optJSONArray("classProfitContribution") ?: JSONArray()),
+            classDistribution = buildList {
+                val values = root.optJSONArray("classDistribution") ?: JSONArray()
+                for (i in 0 until values.length()) values.getJSONObject(i).let { item -> add(ClassDistributionPoint(
+                    year = item.optInt("year"), leverage = item.optDouble("leverage"), tradeClass = item.optString("tradeClass"), trades = item.optInt("trades"),
+                    profit = item.optDouble("profit"), tradeKeys = item.optJSONArray("tradeKeys").toStrings(),
+                )) }
+            },
+            drawdown = (root.optJSONObject("drawdown") ?: JSONObject()).let { value -> DrawdownAnalytics(
+                maxDrawdownPercent = value.optDouble("maxDrawdownPercent"), averageMaePercent = value.optDouble("averageMaePercent"),
+                series = buildList {
+                    val values = value.optJSONArray("series") ?: JSONArray()
+                    for (i in 0 until values.length()) values.getJSONObject(i).let { item -> add(DrawdownPoint(
+                        index = item.optInt("index"), tradeKey = item.optString("tradeKey"), closedAt = item.optString("closedAt"),
+                        equityIndex = item.optDouble("equityIndex"), drawdownPercent = item.optDouble("drawdownPercent"), maePercent = item.optDouble("maePercent"),
+                    )) }
+                }, tradeKeys = value.optJSONArray("tradeKeys").toStrings(),
+            ) },
+            parameterComparison = buildList {
+                val values = root.optJSONArray("parameterComparison") ?: JSONArray()
+                for (i in 0 until values.length()) values.getJSONObject(i).let { item -> add(ParameterComparison(
+                    build = item.optString("build"), parameterHash = item.optString("parameterHash"), firstClosedAt = item.optString("firstClosedAt"), lastClosedAt = item.optString("lastClosedAt"),
+                    trades = item.optInt("trades"), netProfit = item.optDouble("netProfit"),
+                    meanAccountReturnPercent = item.optDouble("meanAccountReturnPercent"), winRate = item.optDouble("winRate"),
+                    sharpe = item.optNullableFiniteDouble("sharpe"), sortino = item.optNullableFiniteDouble("sortino"), tradeKeys = item.optJSONArray("tradeKeys").toStrings(),
+                )) }
+            },
+            benchmark = (root.optJSONObject("benchmark") ?: JSONObject()).let { value -> BenchmarkComparison(
+                label = value.optString("label"), strategyReturnPercent = value.optDouble("strategyReturnPercent"), benchmarkReturnPercent = value.optDouble("benchmarkReturnPercent"),
+                excessReturnPercent = value.optDouble("excessReturnPercent"), sampleCount = value.optInt("sampleCount"),
+                series = buildList {
+                    val values = value.optJSONArray("series") ?: JSONArray()
+                    for (i in 0 until values.length()) values.getJSONObject(i).let { item -> add(BenchmarkPoint(
+                        tradeKey = item.optString("tradeKey"), closedAt = item.optString("closedAt"), strategyIndex = item.optDouble("strategyIndex"), benchmarkIndex = item.optDouble("benchmarkIndex"),
+                    )) }
+                }, tradeKeys = value.optJSONArray("tradeKeys").toStrings(),
+            ) },
+            executionQuality = parseExecutionQuality(root.optJSONObject("executionQuality") ?: JSONObject()),
+            metricSamples = parseStringListMap(root.optJSONObject("metricSamples") ?: JSONObject()),
+        )
     }
+
+    private fun parseTrades(values: JSONArray): List<TradeAnalytics> = buildList {
+        for (i in 0 until values.length()) values.getJSONObject(i).let { item -> add(TradeAnalytics(
+            ticket = item.optLong("ticket"), strategyKey = item.optString("strategyKey"), accountType = item.optString("accountType"),
+            decisionId = item.optString("decisionId"), strategyBuild = item.optString("strategyBuild"), parameterHash = item.optString("parameterHash"),
+            entryLeverage = item.optDouble("entryLeverage"), symbol = item.optString("symbol"), side = item.optString("side"), volume = item.optDouble("volume"),
+            openedAt = item.optString("openedAt"), closedAt = item.optString("closedAt"), openPrice = item.optDouble("openPrice"), closePrice = item.optDouble("closePrice"),
+            profit = item.optDouble("profit"), profitPercent = item.optDouble("profitPercent", item.optDouble("profit_percent")),
+            balanceBefore = item.optDouble("balanceBefore", item.optDouble("balance_before")), tradeReturn = parseExplicitTradeReturn(item),
+            exitReason = item.optString("exitReason", item.optString("exit_reason")), durationSeconds = item.optLong("durationSeconds"),
+            mfePoints = item.optDouble("mfePoints"), mfePercent = item.optDouble("mfePercent"), maePoints = item.optDouble("maePoints"), maePercent = item.optDouble("maePercent"),
+            entrySlippagePoints = item.optDouble("entrySlippagePoints"), exitSlippagePoints = item.optDouble("exitSlippagePoints"),
+            maxProfit = item.optDouble("maxProfit"), maxDrawdown = item.optDouble("maxDrawdown"), closed = item.optBoolean("closed"),
+            preleverageReturnPercent = item.optDouble("preleverageReturnPercent"), tradeClass = item.optString("tradeClass"),
+        )) }
+    }
+
+    private fun parseTradeClasses(values: JSONArray): List<TradeClassAnalytics> = buildList {
+        for (i in 0 until values.length()) values.getJSONObject(i).let { item -> add(TradeClassAnalytics(
+            tradeClass = item.optString("tradeClass", item.optString("class")), trades = item.optInt("trades"), profit = item.optDouble("profit"),
+            averagePreleverageReturnPercent = item.optDouble("averagePreleverageReturnPercent"), winRate = item.optDouble("winRate"),
+            profitContributionPercent = item.optDouble("profitContributionPercent"), cumulativeProfit = item.optDouble("cumulativeProfit"),
+            tradeKeys = item.optJSONArray("tradeKeys").toStrings(),
+        )) }
+    }
+
+    private fun parseExecutionQuality(value: JSONObject): ExecutionQuality = ExecutionQuality(
+        lifecycles = buildList {
+            val values = value.optJSONArray("lifecycles") ?: JSONArray()
+            for (i in 0 until values.length()) values.getJSONObject(i).let { item -> add(ExecutionLifecycle(
+                executionId = item.optString("executionId"), strategyKey = item.optString("strategyKey"), decisionId = item.optString("decisionId"),
+                positionTicket = item.optLong("positionTicket"), stages = buildList {
+                    val stages = item.optJSONArray("stages") ?: JSONArray()
+                    for (stageIndex in 0 until stages.length()) stages.getJSONObject(stageIndex).let { stage -> add(ExecutionStage(
+                        stage = stage.optString("stage"), eventAt = stage.optString("eventAt"),
+                        result = if (stage.has("result") && !stage.isNull("result")) stage.optBoolean("result") else null,
+                        retcode = if (!stage.has("retcode") || stage.isNull("retcode")) "" else stage.opt("retcode").toString(),
+                        fillingMode = stage.optString("fillingMode"), referencePrice = stage.optDouble("referencePrice"), actualPrice = stage.optDouble("actualPrice"),
+                        latencyMs = stage.optNullableFiniteDouble("latencyMs"), reason = stage.optString("reason"),
+                    )) }
+                },
+                decisionToSendMs = item.optNullableFiniteDouble("decisionToSendMs"), brokerAcknowledgementMs = item.optNullableFiniteDouble("brokerAcknowledgementMs"),
+                fillMs = item.optNullableFiniteDouble("fillMs"), protectionAttachmentMs = item.optNullableFiniteDouble("protectionAttachmentMs"),
+                backendPublicationMs = item.optNullableFiniteDouble("backendPublicationMs"), executorToMobileMs = item.optNullableFiniteDouble("executorToMobileMs"),
+                entrySlippagePoints = item.optNullableFiniteDouble("entrySlippagePoints"), exitSlippagePoints = item.optNullableFiniteDouble("exitSlippagePoints"),
+            )) }
+        },
+        decisionToSend = parseLatencySummary(value.optJSONObject("decisionToSend")), brokerAcknowledgement = parseLatencySummary(value.optJSONObject("brokerAcknowledgement")),
+        fill = parseLatencySummary(value.optJSONObject("fill")), protectionAttachment = parseLatencySummary(value.optJSONObject("protectionAttachment")),
+        backendPublication = parseLatencySummary(value.optJSONObject("backendPublication")), executorToMobile = parseLatencySummary(value.optJSONObject("executorToMobile")),
+        rejectionRatePercent = value.optDouble("rejectionRatePercent"), rejections = value.optInt("rejections"), orderAttempts = value.optInt("orderAttempts"), sentOrders = value.optInt("sentOrders"),
+        missedExecutionWindows = value.optInt("missedExecutionWindows"), retcodes = parseIntMap(value.optJSONObject("retcodes")), fillingModes = parseIntMap(value.optJSONObject("fillingModes")),
+        tradeKeys = value.optJSONArray("tradeKeys").toStrings(), rejectionTradeKeys = value.optJSONArray("rejectionTradeKeys").toStrings(),
+        sentTradeKeys = value.optJSONArray("sentTradeKeys").toStrings(), missedWindowTradeKeys = value.optJSONArray("missedWindowTradeKeys").toStrings(),
+        retcodeTradeKeys = parseStringListMap(value.optJSONObject("retcodeTradeKeys") ?: JSONObject()),
+        fillingModeTradeKeys = parseStringListMap(value.optJSONObject("fillingModeTradeKeys") ?: JSONObject()),
+    )
+
+    private fun parseLatencySummary(value: JSONObject?): LatencySummary = LatencySummary(
+        sampleCount = value?.optInt("sampleCount") ?: 0, medianMs = value?.optNullableFiniteDouble("medianMs"), p95Ms = value?.optNullableFiniteDouble("p95Ms"),
+        tradeKeys = value?.optJSONArray("tradeKeys").toStrings(),
+    )
+
+    private fun parseIntMap(value: JSONObject?): Map<String, Int> = buildMap {
+        val names = value?.names() ?: JSONArray()
+        for (i in 0 until names.length()) names.optString(i).takeIf { it.isNotBlank() }?.let { name -> put(name, value?.optInt(name) ?: 0) }
+    }
+
+    private fun parseStringListMap(value: JSONObject): Map<String, List<String>> = buildMap {
+        val names = value.names() ?: JSONArray()
+        for (i in 0 until names.length()) names.optString(i).takeIf { it.isNotBlank() }?.let { name -> put(name, value.optJSONArray(name).toStrings()) }
+    }
+
+    private fun parseExecutionSnapshot(json: JSONObject) = ExecutionSnapshot(
+        executionId = json.optString("executionId"), decisionId = json.optString("decisionId"), positionTicket = json.optLong("positionTicket"),
+        scheduledAt = json.optString("scheduledAt"), startedAt = json.optString("startedAt"),
+    )
 
     private fun parseSnapshot(json: JSONObject): MonitorSnapshot {
         val closest = json.optJSONObject("closestCondition")?.let(::parseCondition)
@@ -149,6 +276,7 @@ object JsonParser {
             potentialPosition = (json.optJSONObject("potentialPosition") ?: json.optJSONObject("potential_position"))?.let(::parsePotentialPosition),
             strategyDecision = (json.optJSONObject("strategyDecision") ?: json.optJSONObject("strategy_decision"))?.let(::parseStrategyDecision),
             lastClosedTrade = (json.optJSONObject("lastClosedTrade") ?: json.optJSONObject("last_closed_trade"))?.let(::parseLastClosedTrade),
+            execution = json.optJSONObject("execution")?.let(::parseExecutionSnapshot),
             closestCondition = closest, conditions = conditions, marketStats = parseMarketStats(json.optJSONObject("marketStats")),
             equityCurves = parseEquityCurves(json.optJSONObject("equityCurves")), equityHistory = parseEquity(json.optJSONArray("equityHistory") ?: JSONArray()),
         )
@@ -199,7 +327,8 @@ object JsonParser {
     private fun parseStrategyDecision(json: JSONObject): StrategyDecision {
         val inputs = json.optJSONObject("inputs") ?: JSONObject()
         return StrategyDecision(
-            decisionId = json.optString("decisionId"), recordedAt = json.optString("recordedAt"), build = json.optString("build"), outcome = json.optString("outcome"),
+            decisionId = json.optString("decisionId"), decisionWeek = json.optString("decisionWeek"), recordedAt = json.optString("recordedAt"), build = json.optString("build"),
+            parameterHash = json.optString("parameterHash"), outcome = json.optString("outcome"),
             selectedLeverage = json.optDouble("selectedLeverage"), leverageReason = json.optString("leverageReason"),
             previousFullWeekChange = inputs.optDouble("previousFullWeekChange"), previousFullWeekSource = inputs.optString("previousFullWeekSource"),
             previousTradeChange = inputs.optDouble("previousTradeChange"), previousTradeSource = inputs.optString("previousTradeSource"), error = json.optString("error"),
@@ -273,5 +402,8 @@ object JsonParser {
     private fun JSONObject.optDoubleAny(vararg names: String): Double = names.firstNotNullOfOrNull { name -> if (has(name) && !isNull(name)) optDouble(name).takeIf { it.isFinite() } else null } ?: 0.0
     private fun JSONObject.optIntAny(vararg names: String): Int = names.firstNotNullOfOrNull { name -> if (has(name) && !isNull(name)) optInt(name) else null } ?: 0
     private fun JSONObject.optStringAny(vararg names: String): String = names.firstNotNullOfOrNull { name -> if (has(name) && !isNull(name)) optString(name).takeIf { it.isNotBlank() } else null } ?: ""
+    private fun JSONObject.optNullableFiniteDouble(name: String): Double? = if (!has(name) || isNull(name)) null else optDouble(name).takeIf { it.isFinite() }
+    private fun JSONArray?.toDoubles(): List<Double> = if (this == null) emptyList() else buildList { for (i in 0 until length()) optDouble(i).takeIf { it.isFinite() }?.let(::add) }
+    private fun JSONArray?.toInts(): List<Int> = if (this == null) emptyList() else buildList { for (i in 0 until length()) add(optInt(i)) }
     private fun JSONArray?.toStrings(): List<String> = if (this == null) emptyList() else buildList { for (i in 0 until length()) add(optString(i)) }
 }

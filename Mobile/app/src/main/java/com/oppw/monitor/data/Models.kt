@@ -33,6 +33,7 @@ data class MonitorSnapshot(
     val equityHistory: List<EquityPoint>,
     val strategyDecision: StrategyDecision? = null,
     val lastClosedTrade: LastClosedTrade? = null,
+    val execution: ExecutionSnapshot? = null,
 )
 
 data class ConnectionStatus(
@@ -112,8 +113,10 @@ data class WhatIfScenario(
 
 data class StrategyDecision(
     val decisionId: String,
+    val decisionWeek: String = "",
     val recordedAt: String,
     val build: String,
+    val parameterHash: String = "",
     val outcome: String,
     val selectedLeverage: Double,
     val leverageReason: String,
@@ -122,6 +125,14 @@ data class StrategyDecision(
     val previousTradeChange: Double,
     val previousTradeSource: String,
     val error: String,
+)
+
+data class ExecutionSnapshot(
+    val executionId: String,
+    val decisionId: String,
+    val positionTicket: Long,
+    val scheduledAt: String,
+    val startedAt: String,
 )
 
 data class LastClosedTrade(
@@ -307,6 +318,14 @@ data class TradeAnalytics(
     val closed: Boolean,
     val preleverageReturnPercent: Double = 0.0,
     val tradeClass: String = "",
+    val strategyKey: String = "",
+    val accountType: String = "",
+    val decisionId: String = "",
+    val strategyBuild: String = "",
+    val parameterHash: String = "",
+    val entryLeverage: Double = 0.0,
+    val mfePercent: Double = 0.0,
+    val maePercent: Double = 0.0,
 )
 
 data class TradeClassAnalytics(
@@ -315,11 +334,15 @@ data class TradeClassAnalytics(
     val profit: Double,
     val averagePreleverageReturnPercent: Double,
     val winRate: Double,
+    val profitContributionPercent: Double = 0.0,
+    val cumulativeProfit: Double = 0.0,
+    val tradeKeys: List<String> = emptyList(),
 )
 
 data class TradeDistributionPoint(
     val rank: Int,
     val ticket: Long,
+    val strategyKey: String = "",
     val returnPercent: Double,
     val tradeClass: String,
     val exitReason: String,
@@ -333,14 +356,177 @@ data class TradeDistribution(
     val trades: List<TradeDistributionPoint> = emptyList(),
 )
 
+data class AnalyticsFilters(
+    val scope: String = "SELECTED",
+    val leverage: String = "",
+    val exitReason: String = "",
+    val year: String = "",
+    val tradeClass: String = "",
+)
+
+data class AnalyticsAccountOption(val key: String, val label: String, val type: String)
+data class AnalyticsFilterOptions(
+    val accounts: List<AnalyticsAccountOption> = emptyList(),
+    val leverages: List<Double> = emptyList(),
+    val exitReasons: List<String> = emptyList(),
+    val years: List<Int> = emptyList(),
+    val classes: List<String> = listOf("A", "B", "C", "D"),
+)
+
+data class RollingRatioPoint(
+    val endingTradeKey: String,
+    val closedAt: String,
+    val sampleCount: Int,
+    val sharpe: Double?,
+    val sortino: Double?,
+    val sortinoInfinite: Boolean,
+    val tradeKeys: List<String>,
+)
+
+data class ConfidenceInterval(
+    val key: String,
+    val label: String,
+    val estimate: Double,
+    val lower95: Double,
+    val upper95: Double,
+    val unit: String,
+    val sampleCount: Int,
+    val tradeKeys: List<String>,
+)
+
+data class ClassDistributionPoint(
+    val year: Int,
+    val leverage: Double,
+    val tradeClass: String,
+    val trades: Int,
+    val profit: Double,
+    val tradeKeys: List<String>,
+)
+
+data class DrawdownPoint(
+    val index: Int,
+    val tradeKey: String,
+    val closedAt: String,
+    val equityIndex: Double,
+    val drawdownPercent: Double,
+    val maePercent: Double,
+)
+
+data class DrawdownAnalytics(
+    val maxDrawdownPercent: Double = 0.0,
+    val averageMaePercent: Double = 0.0,
+    val series: List<DrawdownPoint> = emptyList(),
+    val tradeKeys: List<String> = emptyList(),
+)
+
+data class ParameterComparison(
+    val build: String,
+    val parameterHash: String,
+    val firstClosedAt: String,
+    val lastClosedAt: String,
+    val trades: Int,
+    val netProfit: Double,
+    val meanAccountReturnPercent: Double,
+    val winRate: Double,
+    val sharpe: Double?,
+    val sortino: Double?,
+    val tradeKeys: List<String>,
+)
+
+data class BenchmarkPoint(
+    val tradeKey: String,
+    val closedAt: String,
+    val strategyIndex: Double,
+    val benchmarkIndex: Double,
+)
+
+data class BenchmarkComparison(
+    val label: String = "",
+    val strategyReturnPercent: Double = 0.0,
+    val benchmarkReturnPercent: Double = 0.0,
+    val excessReturnPercent: Double = 0.0,
+    val sampleCount: Int = 0,
+    val series: List<BenchmarkPoint> = emptyList(),
+    val tradeKeys: List<String> = emptyList(),
+)
+
+data class LatencySummary(
+    val sampleCount: Int = 0,
+    val medianMs: Double? = null,
+    val p95Ms: Double? = null,
+    val tradeKeys: List<String> = emptyList(),
+)
+
+data class ExecutionStage(
+    val stage: String,
+    val eventAt: String,
+    val result: Boolean?,
+    val retcode: String,
+    val fillingMode: String,
+    val referencePrice: Double,
+    val actualPrice: Double,
+    val latencyMs: Double?,
+    val reason: String,
+)
+
+data class ExecutionLifecycle(
+    val executionId: String,
+    val strategyKey: String,
+    val decisionId: String,
+    val positionTicket: Long,
+    val stages: List<ExecutionStage>,
+    val decisionToSendMs: Double?,
+    val brokerAcknowledgementMs: Double?,
+    val fillMs: Double?,
+    val protectionAttachmentMs: Double?,
+    val backendPublicationMs: Double?,
+    val executorToMobileMs: Double?,
+    val entrySlippagePoints: Double?,
+    val exitSlippagePoints: Double?,
+)
+
+data class ExecutionQuality(
+    val lifecycles: List<ExecutionLifecycle> = emptyList(),
+    val decisionToSend: LatencySummary = LatencySummary(),
+    val brokerAcknowledgement: LatencySummary = LatencySummary(),
+    val fill: LatencySummary = LatencySummary(),
+    val protectionAttachment: LatencySummary = LatencySummary(),
+    val backendPublication: LatencySummary = LatencySummary(),
+    val executorToMobile: LatencySummary = LatencySummary(),
+    val rejectionRatePercent: Double = 0.0,
+    val rejections: Int = 0,
+    val orderAttempts: Int = 0,
+    val sentOrders: Int = 0,
+    val missedExecutionWindows: Int = 0,
+    val retcodes: Map<String, Int> = emptyMap(),
+    val fillingModes: Map<String, Int> = emptyMap(),
+    val tradeKeys: List<String> = emptyList(),
+    val rejectionTradeKeys: List<String> = emptyList(),
+    val sentTradeKeys: List<String> = emptyList(),
+    val missedWindowTradeKeys: List<String> = emptyList(),
+    val retcodeTradeKeys: Map<String, List<String>> = emptyMap(),
+    val fillingModeTradeKeys: Map<String, List<String>> = emptyMap(),
+)
+
 data class AnalyticsResponse(
     val generatedAt: String,
+    val filters: AnalyticsFilters = AnalyticsFilters(),
+    val filterOptions: AnalyticsFilterOptions = AnalyticsFilterOptions(),
     val summary: AnalyticsSummary,
     val exitReasons: List<ExitReasonAnalytics>,
     val weekly: List<WeeklyAnalytics>,
     val recentTrades: List<TradeAnalytics>,
     val tradeClasses: List<TradeClassAnalytics> = emptyList(),
     val tradeDistribution: TradeDistribution = TradeDistribution(),
+    val rolling20: List<RollingRatioPoint> = emptyList(),
+    val confidenceIntervals: List<ConfidenceInterval> = emptyList(),
+    val classProfitContribution: List<TradeClassAnalytics> = emptyList(),
+    val classDistribution: List<ClassDistributionPoint> = emptyList(),
+    val drawdown: DrawdownAnalytics = DrawdownAnalytics(),
+    val parameterComparison: List<ParameterComparison> = emptyList(),
+    val benchmark: BenchmarkComparison = BenchmarkComparison(),
+    val executionQuality: ExecutionQuality = ExecutionQuality(),
+    val metricSamples: Map<String, List<String>> = emptyMap(),
 )
 
 data class UiState(
@@ -354,6 +540,7 @@ data class UiState(
     val selectedAccountKey: String? = null,
     val response: MonitorResponse? = null,
     val analytics: AnalyticsResponse? = null,
+    val analyticsFilters: AnalyticsFilters = AnalyticsFilters(),
     val analyticsLoading: Boolean = false,
     val analyticsError: String? = null,
     val error: String? = null,

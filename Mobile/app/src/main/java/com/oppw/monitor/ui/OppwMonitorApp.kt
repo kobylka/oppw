@@ -124,7 +124,7 @@ private fun MonitorScaffold(viewModel: MainViewModel) {
             when (page) {
                 0 -> OverviewScreen(state, viewModel::refresh)
                 1 -> PositionScreen(state, viewModel::refresh)
-                2 -> AnalyticsScreen(state, { viewModel.loadAnalytics(true) })
+                2 -> AnalyticsScreen(state, { viewModel.loadAnalytics(true) }, viewModel::setAnalyticsFilters)
                 3 -> LogsScreen(state, viewModel, viewModel::refresh)
                 else -> SettingsScreen(state, viewModel::refresh, viewModel::unpairDevice)
             }

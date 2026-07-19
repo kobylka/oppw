@@ -1,3 +1,38 @@
+# OPPW MT5 secrets and account-specific configuration
+mt5/**/oppw-mt5-config.py
+mt5/**/oppw_mt5_config.py
+mt5/**/real-mt5-config.py
+mt5/**/real_mt5_config.py
+mt5/**/*_mt5_config.py
+mt5/**/*-mt5-config.py
+!mt5/**/*.example.py
+
+# MT5 runtime state, coordination and event spools
+mt5/**/log/
+mt5/**/*.log
+mt5/**/*.lock
+mt5/**/*.pid
+mt5/**/*.jsonl
+mt5/**/*.jsonl.*
+mt5/**/*state*.json
+mt5/**/*history*.json
+mt5/**/*heartbeat*.json
+mt5/**/*presence*.json
+mt5/**/*.tmp
+mt5/**/*.bak
+mt5/**/__pycache__/
+
+# Local Android/backend secrets and generated output
+Mobile/local.properties
+Mobile/**/google-services.json
+Mobile/app/build/
+Mobile/.gradle/
+Mobile/backend/config.local.php
+Mobile/backend/.env
+.env
+*.keystore
+*.jks
+
 .env
 .venv/
 __pycache__/

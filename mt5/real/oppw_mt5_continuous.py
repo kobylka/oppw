@@ -27,6 +27,7 @@ unless LIVE_ENABLED=True in the selected account configuration or OPPW_LIVE=1 is
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import logging
@@ -50,7 +51,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-BUILD_ID = "2026-07-19-always-weekend-startup-v45.4"
+BUILD_ID = "2026-07-19-decision-history-execution-audit-v46"
 SCHEDULED_ACTION_LEAD_SECONDS = 3.0
 AUTOTRADING_REMINDER_SECONDS = 60.0
 STALE_TICK_REMINDER_SECONDS = 60.0
@@ -153,7 +154,7 @@ def migrate_legacy_demo_runtime_files(original, scoped, account: str) -> None:
 
 @dataclass
 class StrategyState:
-    version: int = 5
+    version: int = 6
 
     last_trading_date: str = ""
     last_close_processed_date: str = ""
@@ -192,6 +193,15 @@ class StrategyState:
     last_exit_trade_class: str = ""
     last_exit_preleverage_return: float = 0.0
     last_exit_position_identifier: int = 0
+
+    active_execution_id: str = ""
+    active_decision_id: str = ""
+    execution_scheduled_at: str = ""
+    execution_started_at: str = ""
+    execution_fill_confirmed: bool = False
+    execution_position_visible: bool = False
+    first_protection_confirmed: bool = False
+    last_missed_entry_week: str = ""
 
     @classmethod
     def load(cls, path: Path) -> "StrategyState":
@@ -626,6 +636,7 @@ class MobileMonitorPublisher:
         self.equity_history = self.load_equity_history()
         self.last_publish_permission: Optional[bool] = None
         self.weekend_idle = False
+        self.published_execution_ids: set[str] = set()
 
         if self.enabled and not self.ready:
             self.local_log(logging.WARNING, "EVENT MONITOR_DISABLED reason=missing_configuration required=OPPW_MONITOR_INGEST_URL,OPPW_MONITOR_WRITE_TOKEN,OPPW_MONITOR_ACCOUNT_KEY")
@@ -760,11 +771,24 @@ class MobileMonitorPublisher:
         public_events = [{key: value for key, value in event.items() if not key.startswith("_spool") and key != "_sourcePid"} for event in events]
         payload = {"accountKey": self.cfg.monitor_account_key, "capturedAt": captured_at, "snapshot": snapshot_copy, "events": public_events}
         body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-        request = urllib.request.Request(self.cfg.monitor_ingest_url, data=body, method="POST", headers={"Authorization": f"Bearer {self.cfg.monitor_write_token}", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "OPPW-MT5-Publisher/45.4"})
+        request = urllib.request.Request(self.cfg.monitor_ingest_url, data=body, method="POST", headers={"Authorization": f"Bearer {self.cfg.monitor_write_token}", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "OPPW-MT5-Publisher/46"})
         try:
             with urllib.request.urlopen(request, timeout=self.cfg.monitor_timeout_seconds) as response:
                 if int(response.status) not in (200, 201):
                     raise RuntimeError(f"HTTP {response.status}")
+            execution = snapshot_copy.get("execution") if isinstance(snapshot_copy.get("execution"), dict) else {}
+            execution_id = str(execution.get("executionId", ""))
+            if execution_id and execution_id not in self.published_execution_ids:
+                self.published_execution_ids.add(execution_id)
+                self.event_spool.append({
+                    "time": datetime.now(UTC).isoformat(), "level": "INFO", "name": "EXECUTION_STAGE", "result": True,
+                    "message": f"EVENT EXECUTION_STAGE execution_id={execution_id} stage=PUBLISHED",
+                    "details": {
+                        "execution_id": execution_id, "decision_id": str(execution.get("decisionId", "")),
+                        "position_ticket": int(execution.get("positionTicket", 0) or 0), "stage": "PUBLISHED",
+                        "event_at": datetime.now(UTC).isoformat(), "snapshot_generated_at": str(snapshot_copy.get("statusUpdate", {}).get("generatedAt", "")),
+                    },
+                })
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")[:300]
             raise RuntimeError(f"HTTP {exc.code}: {detail}") from exc
@@ -1446,6 +1470,15 @@ class OPPWContinuousStrategy:
             position.ticket, identifier, getattr(position, "magic", 0), opened.isoformat(), float(position.price_open),
             position.volume, leverage, leverage_source, float(signal_open), signal_pending, recovered_break_even,
         )
+        actual_price = float(getattr(position, "price_current", 0.0) or position.price_open)
+        if self.state.active_execution_id and not self.state.execution_fill_confirmed:
+            self.execution_stage("FILLED", position_ticket=int(position.ticket), reference_price=float(position.price_open), actual_price=actual_price, reason="position_reconciliation")
+            self.state.execution_fill_confirmed = True
+        if self.state.active_execution_id and not self.state.execution_position_visible:
+            self.execution_stage("POSITION_VISIBLE", position_ticket=int(position.ticket), reference_price=float(position.price_open), actual_price=actual_price)
+            self.state.execution_position_visible = True
+        if self.is_executor:
+            self.state.save(self.cfg.state_file)
         return True
 
     def capture_entry_signal_open(self, position, now: datetime) -> bool:
@@ -1501,6 +1534,7 @@ class OPPWContinuousStrategy:
         flat snapshot transition lets ingest.php close the existing DB trade.
         """
         identifier = int(self.state.active_position_identifier or self.state.active_position_ticket or 0)
+        position_ticket = int(self.state.active_position_ticket or identifier)
         if not identifier:
             return
 
@@ -1511,6 +1545,7 @@ class OPPWContinuousStrategy:
         self.state.last_exit_reason = reason
         # Do not invent a return, close price or class. Keep the previous known
         # values until MySQL confirms the newly closed trade.
+        self.execution_stage("CLOSED", position_ticket=position_ticket, reference_price=float(self.state.entry_price or 0.0), reason=reason)
         self.log.info(
             "EVENT POSITION_CLOSED reason=%s source=mysql_pending position_identifier=%s entry=%.5f "
             "preleverage_return=pending trade_class=pending",
@@ -1994,17 +2029,33 @@ class OPPWContinuousStrategy:
             result["error"] = str(exc)
         return result
 
+    def strategy_parameter_hash(self) -> str:
+        values = {
+            "baseLeverage": self.cfg.base_leverage, "lossLeverage": self.cfg.loss_leverage,
+            "breakEvenRatio": self.cfg.break_even_ratio, "tslStop": self.cfg.tsl_stop,
+            "leverageStopPoints": self.cfg.leverage_stop_points, "tpps": list(self.cfg.tpps),
+            "sizingMultiplier": self.cfg.sizing_multiplier,
+        }
+        return hashlib.sha256(json.dumps(values, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+    def strategy_decision_week_key(self, now: Optional[datetime] = None) -> str:
+        now = now or datetime.now(self.tz)
+        if not self.is_weekend(now):
+            return iso_week_key(now.date())
+        sessions = self.trading_sessions_for_week(now.date() + timedelta(days=7))
+        return iso_week_key(sessions[0] if sessions else now.date() + timedelta(days=1))
+
     def strategy_decision_payload(self, preview: Optional[dict[str, Any]] = None) -> dict[str, Any]:
         preview = preview or self.potential_position_preview()
         decision_id_source = "|".join(str(value) for value in (
-            self.account, iso_week_key(datetime.now(self.tz).date()), BUILD_ID, preview.get("symbol", ""),
+            self.account, self.strategy_decision_week_key(), BUILD_ID, preview.get("symbol", ""),
             preview.get("strategyLeverage", 0.0), preview.get("previousFullWeekChange", 0.0),
             preview.get("previousTradeChange", 0.0), preview.get("volume", 0.0), preview.get("available", False),
         ))
         decision_id = uuid.uuid5(uuid.NAMESPACE_URL, decision_id_source).hex
         return {
-            "decisionId": decision_id, "recordedAt": datetime.now(self.tz).isoformat(), "build": BUILD_ID,
-            "account": self.account, "decision": "NEXT_WEEK_LONG_ENTRY",
+            "decisionId": decision_id, "decisionWeek": self.strategy_decision_week_key(), "recordedAt": datetime.now(self.tz).isoformat(), "build": BUILD_ID,
+            "parameterHash": self.strategy_parameter_hash(), "account": self.account, "decision": "NEXT_WEEK_LONG_ENTRY",
             "outcome": "READY" if bool(preview.get("available")) else "UNAVAILABLE",
             "selectedLeverage": float(preview.get("strategyLeverage", 0.0)), "leverageReason": str(preview.get("leverageReason", "")),
             "inputs": {
@@ -2027,29 +2078,32 @@ class OPPWContinuousStrategy:
             "error": str(preview.get("error", "")),
         }
 
-    def record_strategy_decision_if_changed(self, force: bool = False) -> dict[str, Any]:
+    def record_strategy_decision_if_changed(self, force: bool = False, preview: Optional[dict[str, Any]] = None) -> dict[str, Any]:
         # Weekends suppress recurring decision checks, but a forced call is
         # permitted once during weekend startup to create the fresh What-if
         # ticket requested by the operator.
         if self.is_weekend(datetime.now(self.tz)) and not force:
             return {}
-        preview = self.potential_position_preview()
+        preview = preview or self.potential_position_preview()
         payload = self.strategy_decision_payload(preview)
         signature = (
-            iso_week_key(datetime.now(self.tz).date()), payload["outcome"], round(float(payload["selectedLeverage"]), 6),
+            self.strategy_decision_week_key(), payload["outcome"], round(float(payload["selectedLeverage"]), 6),
             round(float(payload["inputs"]["previousFullWeekChange"]), 8), round(float(payload["inputs"]["previousTradeChange"]), 8),
             str(payload["inputs"].get("previousFullWeekSource", "")), str(payload["inputs"].get("previousTradeSource", "")),
             round(float(payload["sizing"].get("volume") or 0.0), 8), bool(payload["sizing"].get("minimumVolumeFloor")),
             payload["error"].split(":", 1)[0],
         )
         self.last_strategy_decision_payload = payload
+        self.state.active_decision_id = str(payload.get("decisionId", ""))
+        if self.is_executor:
+            self.state.save(self.cfg.state_file)
         if force or signature != self.last_strategy_decision_signature:
             self.last_strategy_decision_signature = signature
             self.log.info(
-                "EVENT STRATEGY_DECISION_RECORDED decision_id=%s outcome=%s leverage=%.0f "
+                "EVENT STRATEGY_DECISION_RECORDED decision_id=%s parameter_hash=%s outcome=%s leverage=%.0f "
                 "previous_full_week=%.8f full_week_source=%s previous_trade=%.8f trade_source=%s volume=%.8f required_deposit=%.2f "
                 "effective_leverage=%.6f stop_loss_percent=%.4f stop_loss_price=%.5f stop_loss_cash=%.2f error=%s",
-                payload["decisionId"], payload["outcome"], payload["selectedLeverage"],
+                payload["decisionId"], payload["parameterHash"], payload["outcome"], payload["selectedLeverage"],
                 payload["inputs"]["previousFullWeekChange"], str(payload["inputs"].get("previousFullWeekSource", "")).replace(" ", "_"),
                 payload["inputs"]["previousTradeChange"], str(payload["inputs"].get("previousTradeSource", "")).replace(" ", "_"),
                 float(payload["sizing"].get("volume") or 0.0), float(payload["sizing"].get("requiredDeposit") or 0.0),
@@ -2463,6 +2517,7 @@ class OPPWContinuousStrategy:
             "potentialPosition": (preview := self.potential_position_preview()) if position is None else None,
             "strategyDecision": self.strategy_decision_payload(preview) if position is None else self.last_strategy_decision_payload,
             "lastClosedTrade": self.last_closed_trade_payload(),
+            "execution": self.execution_snapshot(),
             "conditions": conditions,
             "closestCondition": closest,
             "equityHistory": [],
@@ -2524,6 +2579,36 @@ class OPPWContinuousStrategy:
         except Exception as exc:
             self.log.warning("EVENT MONITOR_SHUTDOWN_FAILED error=%s", exc, extra={"skip_mobile_publish": True})
 
+
+    def execution_stage(self, stage: str, *, result: Optional[bool] = True, position_ticket: int = 0, reference_price: float = 0.0,
+                        actual_price: float = 0.0, retcode: Optional[int] = None, filling_mode: str = "", reason: str = "",
+                        scheduled_at: str = "", latency_ms: Optional[float] = None) -> None:
+        execution_id = self.state.active_execution_id
+        if not execution_id:
+            execution_id = uuid.uuid4().hex
+            self.state.active_execution_id = execution_id
+        decision_id = self.state.active_decision_id or str((self.last_strategy_decision_payload or {}).get("decisionId", ""))
+        now = datetime.now(UTC).isoformat()
+        fields = {
+            "execution_id": execution_id, "decision_id": decision_id, "position_ticket": int(position_ticket or self.state.active_position_ticket or 0),
+            "stage": stage, "event_at": now, "scheduled_at": scheduled_at or self.state.execution_scheduled_at,
+            "reference_price": float(reference_price or 0.0), "actual_price": float(actual_price or 0.0),
+            "retcode": retcode, "filling_mode": filling_mode, "reason": reason, "latency_ms": latency_ms, "result": result,
+        }
+        result_token = "none" if result is None else str(bool(result)).lower()
+        tokens = [f"execution_id={execution_id}", f"decision_id={decision_id or 'none'}", f"stage={stage}", f"result={result_token}", f"position_ticket={fields['position_ticket']}",
+                  f"event_at={now}", f"scheduled_at={fields['scheduled_at'] or 'none'}", f"reference_price={fields['reference_price']:.8f}",
+                  f"actual_price={fields['actual_price']:.8f}", f"retcode={retcode if retcode is not None else 'none'}",
+                  f"filling_mode={filling_mode or 'none'}", f"reason={reason or 'none'}", f"latency_ms={latency_ms if latency_ms is not None else 'none'}"]
+        level = logging.INFO if result is not False else logging.ERROR
+        self.log.log(level, "EVENT EXECUTION_STAGE " + " ".join(tokens))
+
+    def execution_snapshot(self) -> dict[str, Any]:
+        return {
+            "executionId": self.state.active_execution_id, "decisionId": self.state.active_decision_id,
+            "positionTicket": int(self.state.active_position_ticket or 0), "scheduledAt": self.state.execution_scheduled_at,
+            "startedAt": self.state.execution_started_at,
+        }
 
     # ----- Calculations and order sizing -------------------------------------
 
@@ -2699,7 +2784,6 @@ class OPPWContinuousStrategy:
             "comment": f"{self.cfg.comment_prefix} L{leverage}"[:31], "type_time": mt5.ORDER_TIME_GTC,
         }
         scheduled = self.session_times(current_day).open_action
-
         if not self.cfg.live_enabled:
             request = dict(request_base)
             request["type_filling"] = self.order_filling_modes(info)[0]
@@ -2715,7 +2799,21 @@ class OPPWContinuousStrategy:
         if not self.request_allowed_now():
             return False
 
+        self.state.active_execution_id = uuid.uuid4().hex
+        self.state.active_decision_id = self.state.active_decision_id or str((self.last_strategy_decision_payload or {}).get("decisionId", ""))
+        self.state.execution_scheduled_at = scheduled.isoformat()
+        self.state.execution_started_at = datetime.now(UTC).isoformat()
+        self.state.execution_fill_confirmed = False
+        self.state.execution_position_visible = False
+        self.state.first_protection_confirmed = False
+        self.state.save(self.cfg.state_file)
+        self.execution_stage("SIGNAL", reference_price=ask, scheduled_at=scheduled.isoformat())
+        self.execution_stage("DECISION", reference_price=ask, scheduled_at=scheduled.isoformat())
+
         request, check = self.checked_deal_request(request_base, info, "BUY")
+        check_ok = check is not None and int(check.retcode) in (0, getattr(mt5, "TRADE_RETCODE_DONE", 10009))
+        self.execution_stage("CHECKED", result=check_ok, reference_price=ask, retcode=int(getattr(check, "retcode", -1)) if check is not None else None,
+                             filling_mode=self.filling_mode_name(request.get("type_filling", -1)), scheduled_at=scheduled.isoformat())
         self.log.info(
             "EVENT BUY_REQUEST day=%s scheduled=%s leverage=%s volume=%s minimum_volume=%.8f minimum_volume_notional=%.2f sizing_quantum=%.2f sizing_units=%s target_notional=%.2f position_notional=%.2f ask=%.5f sl=%.5f sl_cash=%.2f account_loss_cap=%s filling=%s",
             current_day, scheduled.isoformat(), leverage, volume, float(info.volume_min), minimum_volume_notional,
@@ -2728,11 +2826,16 @@ class OPPWContinuousStrategy:
             self.log.error("EVENT BUY_CHECK_REJECTED retcode=%s comment=%s", getattr(check, "retcode", None), getattr(check, "comment", mt5.last_error()))
             return False
 
+        self.execution_stage("SENT", reference_price=ask, filling_mode=self.filling_mode_name(request.get("type_filling", -1)), scheduled_at=scheduled.isoformat())
+        sent_monotonic = time_module.monotonic()
         result = mt5.order_send(request)
+        acknowledgement_ms = (time_module.monotonic() - sent_monotonic) * 1000.0
         accepted = {getattr(mt5, "TRADE_RETCODE_DONE", 10009), getattr(mt5, "TRADE_RETCODE_PLACED", 10008), getattr(mt5, "TRADE_RETCODE_DONE_PARTIAL", 10010)}
         if result is None or int(result.retcode) not in accepted:
             if int(getattr(result, "retcode", -1)) == int(getattr(mt5, "TRADE_RETCODE_CLIENT_DISABLES_AT", 10027)):
                 self.ensure_autotrading_enabled("BUY_RETCODE_10027", force_log=True)
+            self.execution_stage("ACCEPTED", result=False, reference_price=ask, retcode=int(getattr(result, "retcode", -1)) if result is not None else None,
+                                 filling_mode=self.filling_mode_name(request.get("type_filling", -1)), latency_ms=acknowledgement_ms)
             self.log.error("EVENT BUY_REJECTED retcode=%s comment=%s", getattr(result, "retcode", None), getattr(result, "comment", mt5.last_error()))
             return False
 
@@ -2749,6 +2852,14 @@ class OPPWContinuousStrategy:
         self.state.active_sl_reason = "SL"
         self.state.active_sl_price = sl
         self.state.save(self.cfg.state_file)
+        actual_price = float(getattr(result, "price", 0.0) or ask)
+        self.execution_stage("ACCEPTED", reference_price=ask, actual_price=actual_price, retcode=int(result.retcode),
+                             filling_mode=self.filling_mode_name(request.get("type_filling", -1)), latency_ms=acknowledgement_ms)
+        if int(getattr(result, "deal", 0) or 0) > 0:
+            self.execution_stage("FILLED", reference_price=ask, actual_price=actual_price, retcode=int(result.retcode),
+                                 filling_mode=self.filling_mode_name(request.get("type_filling", -1)), latency_ms=acknowledgement_ms)
+            self.state.execution_fill_confirmed = True
+            self.state.save(self.cfg.state_file)
         self.log.info("EVENT BUY_ACCEPTED retcode=%s order=%s deal=%s", result.retcode, getattr(result, "order", 0), getattr(result, "deal", 0))
         return True
 
@@ -2767,6 +2878,10 @@ class OPPWContinuousStrategy:
 
         if not price_changed(float(position.sl), desired_sl, tolerance) and not price_changed(float(position.tp), desired_tp, tolerance):
             self.record_active_protection(position, desired_sl, desired_tp, sl_reason, tp_reason)
+            if desired_sl > 0 and not self.state.first_protection_confirmed:
+                self.state.first_protection_confirmed = True
+                self.state.save(self.cfg.state_file)
+                self.execution_stage("PROTECTED", position_ticket=int(position.ticket), actual_price=desired_sl, reason=f"{reason}:confirmed_existing")
             return True
 
         if not self.cfg.live_enabled:
@@ -2796,7 +2911,12 @@ class OPPWContinuousStrategy:
             self.log.error("EVENT SLTP_REJECTED reason=%s retcode=%s comment=%s", reason, getattr(result, "retcode", None), getattr(result, "comment", mt5.last_error()))
             return False
 
+        was_protected = self.state.first_protection_confirmed
         self.record_active_protection(position, desired_sl, desired_tp, sl_reason, tp_reason)
+        self.state.first_protection_confirmed = True
+        self.state.save(self.cfg.state_file)
+        self.execution_stage("MODIFIED" if was_protected else "PROTECTED", position_ticket=int(position.ticket), actual_price=desired_sl,
+                             retcode=int(result.retcode), reason=reason)
         self.log.info("EVENT SLTP_ACCEPTED reason=%s retcode=%s", reason, result.retcode)
         return True
 
@@ -2824,7 +2944,11 @@ class OPPWContinuousStrategy:
             return False
 
         request, check = self.checked_deal_request(request_base, info, f"SELL_{reason}")
-        if check is None or int(check.retcode) not in (0, getattr(mt5, "TRADE_RETCODE_DONE", 10009)):
+        exit_check_ok = check is not None and int(check.retcode) in (0, getattr(mt5, "TRADE_RETCODE_DONE", 10009))
+        self.execution_stage("EXIT_CHECKED", result=exit_check_ok, position_ticket=int(position.ticket), reference_price=bid,
+                             retcode=int(getattr(check, "retcode", -1)) if check is not None else None,
+                             filling_mode=self.filling_mode_name(request.get("type_filling", -1)), reason=reason)
+        if not exit_check_ok:
             if int(getattr(check, "retcode", -1)) == int(getattr(mt5, "TRADE_RETCODE_CLIENT_DISABLES_AT", 10027)):
                 self.ensure_autotrading_enabled(f"SELL_{reason}_CHECK_RETCODE_10027", force_log=True)
             self.log.error("EVENT SELL_CHECK_REJECTED reason=%s retcode=%s comment=%s", reason, getattr(check, "retcode", None), getattr(check, "comment", mt5.last_error()))
@@ -2834,13 +2958,21 @@ class OPPWContinuousStrategy:
         self.state.exit_latched_at = now.isoformat()
         self.state.save(self.cfg.state_file)
         self.log.info("EVENT SELL_REQUEST reason=%s ticket=%s volume=%s bid=%.5f", reason, position.ticket, position.volume, bid)
+        self.execution_stage("EXIT_SENT", position_ticket=int(position.ticket), reference_price=bid, reason=reason)
+        exit_sent_monotonic = time_module.monotonic()
         result = mt5.order_send(request)
+        exit_ack_ms = (time_module.monotonic() - exit_sent_monotonic) * 1000.0
         accepted = {getattr(mt5, "TRADE_RETCODE_DONE", 10009), getattr(mt5, "TRADE_RETCODE_PLACED", 10008), getattr(mt5, "TRADE_RETCODE_DONE_PARTIAL", 10010)}
         if result is None or int(result.retcode) not in accepted:
             if int(getattr(result, "retcode", -1)) == int(getattr(mt5, "TRADE_RETCODE_CLIENT_DISABLES_AT", 10027)):
                 self.ensure_autotrading_enabled(f"SELL_{reason}_RETCODE_10027", force_log=True)
+            self.execution_stage("EXIT_ACCEPTED", result=False, position_ticket=int(position.ticket), reference_price=bid,
+                                 retcode=int(getattr(result, "retcode", -1)) if result is not None else None,
+                                 filling_mode=self.filling_mode_name(request.get("type_filling", -1)), reason=reason, latency_ms=exit_ack_ms)
             self.log.error("EVENT SELL_REJECTED reason=%s retcode=%s comment=%s", reason, getattr(result, "retcode", None), getattr(result, "comment", mt5.last_error()))
             return False
+        self.execution_stage("EXIT_ACCEPTED", position_ticket=int(position.ticket), reference_price=bid,
+                             actual_price=float(getattr(result, "price", 0.0) or bid), retcode=int(result.retcode), reason=reason, latency_ms=exit_ack_ms)
         self.log.info("EVENT SELL_ACCEPTED reason=%s retcode=%s", reason, result.retcode)
         return True
 
@@ -2998,7 +3130,19 @@ class OPPWContinuousStrategy:
             return
         session = self.session_times(current_day)
         latest_entry = session.cash_open + timedelta(seconds=self.cfg.entry_window_seconds)
-        if now < session.open_action or now > latest_entry:
+        if now < session.open_action:
+            return
+        if now > latest_entry:
+            week = iso_week_key(current_day)
+            if self.state.last_missed_entry_week != week:
+                self.state.active_execution_id = uuid.uuid4().hex
+                self.state.active_decision_id = self.state.active_decision_id or str((self.last_strategy_decision_payload or {}).get("decisionId", ""))
+                self.state.execution_scheduled_at = session.open_action.isoformat()
+                self.state.execution_started_at = datetime.now(UTC).isoformat()
+                self.state.last_missed_entry_week = week
+                self.state.save(self.cfg.state_file)
+                self.execution_stage("MISSED_WINDOW", result=False, scheduled_at=session.open_action.isoformat(), reason="entry_window_elapsed")
+                self.log.error("EVENT ENTRY_WINDOW_MISSED week=%s scheduled=%s latest_entry=%s now=%s", week, session.open_action.isoformat(), latest_entry.isoformat(), now.isoformat())
             return
         if int(datetime.now(UTC).timestamp()) < self.state.entry_pending_until_utc:
             return
@@ -3213,7 +3357,7 @@ class OPPWContinuousStrategy:
             "position": position_payload,
             "potentialPosition": potential_position,
             "strategyDecision": strategy_decision,
-            "lastClosedTrade": last_closed_trade, "conditions": [], "closestCondition": None,
+            "lastClosedTrade": last_closed_trade, "execution": self.execution_snapshot(), "conditions": [], "closestCondition": None,
             "equityHistory": [],
         }
 
@@ -3231,9 +3375,7 @@ class OPPWContinuousStrategy:
         # remains completely idle after the snapshot has been queued.
         self.latest_closed_trade_record(force=True)
         potential_position = self.potential_position_preview()
-        strategy_decision = self.strategy_decision_payload(potential_position)
-        self.last_strategy_decision_payload = strategy_decision
-        self.last_strategy_decision_signature = None
+        strategy_decision = self.record_strategy_decision_if_changed(force=True, preview=potential_position)
         last_closed_trade = self.last_closed_trade_payload(refresh=False)
 
         self.log.info(

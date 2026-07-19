@@ -37,8 +37,33 @@ class StatusApiClient(context: Context, private val baseUrl: String = BuildConfi
     fun clearSession() = sessionStore.clear()
     suspend fun fetchAccounts(): List<MonitorAccount> = JsonParser.parseAccounts(authenticatedRequest("GET", "accounts.php").body)
 
-    suspend fun fetchStatus(accountKey: String): MonitorResponse = JsonParser.parseResponse(authenticatedRequest("GET", "status.php?account=${encode(accountKey)}").body)
-    suspend fun fetchAnalytics(accountKey: String): AnalyticsResponse = JsonParser.parseAnalytics(authenticatedRequest("GET", "analytics.php?account=${encode(accountKey)}").body)
+    suspend fun fetchStatus(accountKey: String): MonitorResponse {
+        val response = JsonParser.parseResponse(authenticatedRequest("GET", "status.php?account=${encode(accountKey)}").body)
+        val execution = response.snapshot.execution
+        if (execution != null && execution.executionId.isNotBlank()) runCatching {
+            authenticatedRequest("POST", "mobile-receipt.php", JSONObject()
+                .put("accountKey", accountKey)
+                .put("executionId", execution.executionId)
+                .put("decisionId", execution.decisionId)
+                .put("positionTicket", execution.positionTicket)
+                .put("snapshotGeneratedAt", response.generatedAt)
+                .put("receivedAt", OffsetDateTime.now().toString())
+                .toString())
+        }
+        return response
+    }
+
+    suspend fun fetchAnalytics(accountKey: String, filters: AnalyticsFilters): AnalyticsResponse {
+        val query = buildString {
+            append("analytics.php?account=").append(encode(accountKey))
+            append("&scope=").append(encode(filters.scope))
+            if (filters.leverage.isNotBlank()) append("&leverage=").append(encode(filters.leverage))
+            if (filters.exitReason.isNotBlank()) append("&exit_reason=").append(encode(filters.exitReason))
+            if (filters.year.isNotBlank()) append("&year=").append(encode(filters.year))
+            if (filters.tradeClass.isNotBlank()) append("&class=").append(encode(filters.tradeClass))
+        }
+        return JsonParser.parseAnalytics(authenticatedRequest("GET", query).body)
+    }
 
     suspend fun fetchEvents(accountKey: String, beforeId: Long?, limit: Int, buySellOnly: Boolean, hideRoutine: Boolean, eventName: String?): EventPage {
         val query = buildString {
