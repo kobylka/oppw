@@ -15,7 +15,8 @@ Key execution rules
 * EXECUTOR mode is the only role permitted to submit or modify trades.
 * PUBLISHER mode is read-only and owns backend publishing while active.
 * EXECUTOR automatically publishes when no PUBLISHER heartbeat is active.
-* Flat status reports the next potential volume, required margin deposit and leverage decision.
+* Flat status publishes an institutional-style pre-trade what-if ticket and a structured strategy decision record.
+* Every completed trade is assigned a Guy Fleury A/B/C/D class and the publisher includes the label.
 
 Run with `--mode executor|publisher` and `--account demo|real`. DEMO loads
 oppw-mt5-config.py and REAL loads real-mt5-config.py. Live trading is disabled
@@ -47,14 +48,12 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-BUILD_ID = "2026-07-18-position-margin-current-price-v42.3"
+BUILD_ID = "2026-07-19-what-if-decision-trade-class-v43"
 SCHEDULED_ACTION_LEAD_SECONDS = 3.0
 AUTOTRADING_REMINDER_SECONDS = 60.0
 STALE_TICK_REMINDER_SECONDS = 60.0
 PUBLISHER_HEARTBEAT_INTERVAL_SECONDS = 1.0
 PUBLISHER_HEARTBEAT_STALE_SECONDS = 8.0
-EVENT_SPOOL_LOCK_TIMEOUT_SECONDS = 5.0
-EVENT_SPOOL_LOCK_RETRY_SECONDS = 0.02
 INSTANCE_MODE_EXECUTOR = "EXECUTOR"
 INSTANCE_MODE_PUBLISHER = "PUBLISHER"
 ACCOUNT_DEMO = "DEMO"
@@ -151,7 +150,7 @@ def migrate_legacy_demo_runtime_files(original, scoped, account: str) -> None:
 
 @dataclass
 class StrategyState:
-    version: int = 4
+    version: int = 5
 
     last_trading_date: str = ""
     last_close_processed_date: str = ""
@@ -187,6 +186,9 @@ class StrategyState:
     last_exit_price: float = 0.0
     last_exit_time: str = ""
     last_exit_reason: str = ""
+    last_exit_trade_class: str = ""
+    last_exit_preleverage_return: float = 0.0
+    last_exit_position_identifier: int = 0
 
     @classmethod
     def load(cls, path: Path) -> "StrategyState":
@@ -390,21 +392,14 @@ class InterProcessFileLock:
             pass
         return True
 
-    def acquire(self, timeout_seconds: float = 0.0, retry_seconds: float = 0.05) -> None:
-        timeout_seconds = max(0.0, float(timeout_seconds))
-        retry_seconds = max(0.001, float(retry_seconds))
-        deadline = time_module.monotonic() + timeout_seconds
-        while True:
-            if self.try_acquire():
-                return
-            if time_module.monotonic() >= deadline:
-                owner = ""
-                try:
-                    owner = self.path.read_text(encoding="utf-8", errors="replace")[:500]
-                except OSError:
-                    pass
-                raise RuntimeError(f"Instance lock is already held: {self.path} owner={owner or 'unknown'}")
-            time_module.sleep(min(retry_seconds, max(0.001, deadline - time_module.monotonic())))
+    def acquire(self) -> None:
+        if not self.try_acquire():
+            owner = ""
+            try:
+                owner = self.path.read_text(encoding="utf-8", errors="replace")[:500]
+            except OSError:
+                pass
+            raise RuntimeError(f"Instance lock is already held: {self.path} owner={owner or 'unknown'}")
 
     def release(self) -> None:
         if not self.acquired or self.handle is None:
@@ -491,7 +486,6 @@ class SharedEventSpool:
         self.path = path
         self.limit = max(1, limit)
         self.lock_path = path.with_suffix(path.suffix + ".lock")
-        self.thread_lock = threading.RLock()
 
     def _read_unlocked(self) -> list[dict[str, Any]]:
         if not self.path.exists():
@@ -510,63 +504,45 @@ class SharedEventSpool:
 
     def _write_unlocked(self, events: list[dict[str, Any]]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.path.with_name(f"{self.path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+        temporary = self.path.with_suffix(self.path.suffix + ".tmp")
         text = "".join(json.dumps(item, separators=(",", ":"), ensure_ascii=False) + "\n" for item in events)
         temporary.write_text(text, encoding="utf-8")
         os.replace(temporary, self.path)
 
-    def _acquire_file_lock(self, operation: str) -> InterProcessFileLock:
-        lock = InterProcessFileLock(self.lock_path, {
-            "purpose": "monitor-event-spool",
-            "operation": operation,
-            "thread": threading.current_thread().name,
-        })
-        lock.acquire(EVENT_SPOOL_LOCK_TIMEOUT_SECONDS, EVENT_SPOOL_LOCK_RETRY_SECONDS)
-        return lock
-
     def append(self, event: dict[str, Any]) -> None:
-        with self.thread_lock:
-            lock = self._acquire_file_lock("append")
-            try:
-                events = self._read_unlocked()
-                item = dict(event)
-                item.setdefault("_spoolId", uuid.uuid4().hex)
-                item.setdefault("_sourcePid", os.getpid())
-                events.append(item)
-                self._write_unlocked(events[-self.limit:])
-            finally:
-                lock.release()
+        lock = InterProcessFileLock(self.lock_path, {"purpose": "monitor-event-spool"})
+        with lock:
+            events = self._read_unlocked()
+            item = dict(event)
+            item.setdefault("_spoolId", uuid.uuid4().hex)
+            item.setdefault("_sourcePid", os.getpid())
+            events.append(item)
+            self._write_unlocked(events[-self.limit:])
 
     def claim(self, maximum: int) -> list[dict[str, Any]]:
-        with self.thread_lock:
-            lock = self._acquire_file_lock("claim")
-            try:
-                events = self._read_unlocked()
-                claimed = events[:max(0, maximum)]
-                self._write_unlocked(events[len(claimed):])
-                return claimed
-            finally:
-                lock.release()
+        lock = InterProcessFileLock(self.lock_path, {"purpose": "monitor-event-spool"})
+        with lock:
+            events = self._read_unlocked()
+            claimed = events[:max(0, maximum)]
+            self._write_unlocked(events[len(claimed):])
+            return claimed
 
     def requeue_front(self, events: list[dict[str, Any]]) -> None:
         if not events:
             return
-        with self.thread_lock:
-            lock = self._acquire_file_lock("requeue")
-            try:
-                current = self._read_unlocked()
-                seen: set[str] = set()
-                merged: list[dict[str, Any]] = []
-                for item in [*events, *current]:
-                    key = str(item.get("_spoolId", ""))
-                    if key and key in seen:
-                        continue
-                    if key:
-                        seen.add(key)
-                    merged.append(item)
-                self._write_unlocked(merged[:self.limit])
-            finally:
-                lock.release()
+        lock = InterProcessFileLock(self.lock_path, {"purpose": "monitor-event-spool"})
+        with lock:
+            current = self._read_unlocked()
+            seen: set[str] = set()
+            merged: list[dict[str, Any]] = []
+            for item in [*events, *current]:
+                key = str(item.get("_spoolId", ""))
+                if key and key in seen:
+                    continue
+                if key:
+                    seen.add(key)
+                merged.append(item)
+            self._write_unlocked(merged[:self.limit])
 
 class MobileMonitorPublisher:
     """Asynchronous monitor publisher with cross-process role coordination."""
@@ -709,7 +685,7 @@ class MobileMonitorPublisher:
         public_events = [{key: value for key, value in event.items() if not key.startswith("_spool") and key != "_sourcePid"} for event in events]
         payload = {"accountKey": self.cfg.monitor_account_key, "capturedAt": captured_at, "snapshot": snapshot_copy, "events": public_events}
         body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-        request = urllib.request.Request(self.cfg.monitor_ingest_url, data=body, method="POST", headers={"Authorization": f"Bearer {self.cfg.monitor_write_token}", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "OPPW-MT5-Publisher/41"})
+        request = urllib.request.Request(self.cfg.monitor_ingest_url, data=body, method="POST", headers={"Authorization": f"Bearer {self.cfg.monitor_write_token}", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "OPPW-MT5-Publisher/43"})
         try:
             with urllib.request.urlopen(request, timeout=self.cfg.monitor_timeout_seconds) as response:
                 if int(response.status) not in (200, 201):
@@ -897,11 +873,13 @@ class OPPWContinuousStrategy:
         self._session_times_cache: dict[date, SessionTimes] = {}
         self.last_monitor_publish_monotonic = 0.0
         self.last_monitor_minute_key = ""
+        self.last_strategy_decision_signature: Optional[tuple[Any, ...]] = None
+        self.last_strategy_decision_payload: Optional[dict[str, Any]] = None
         self.last_leverage_inputs_refresh_monotonic = 0.0
         self.cached_previous_full_week_change = float(self.state.prev_full_week_change)
         self.cached_previous_trade_change = float(self.state.prev_change)
-        self.cached_previous_full_week_source = "state"
-        self.cached_previous_trade_source = "state"
+        self.cached_previous_full_week_source = "state fallback"
+        self.cached_previous_trade_source = "state fallback"
         self.monitor_publisher = MobileMonitorPublisher(config, self.log, self.tz, role, publisher_presence, event_spool, publish_lock_path)
         self.monitor_event_handler = MobileEventHandler(self.monitor_publisher)
         if self.monitor_publisher.ready:
@@ -1418,6 +1396,25 @@ class OPPWContinuousStrategy:
             raise RuntimeError(f"No usable live price for {self.cfg.signal_symbol}")
         return price
 
+    @staticmethod
+    def trade_class(preleverage_return: float, exit_reason: str) -> str:
+        """Classify in priority order A, B, C, D.
+
+        A and B are return classes and therefore take priority over the exit
+        mechanism. A positive TSL/BE trade remains A or B. C is reserved for
+        negative break-even/TSL outcomes. Everything else is D.
+        """
+        value = float(preleverage_return)
+        reason = str(exit_reason or "").strip().upper().replace("-", "_")
+        if value >= 0.007:
+            return "A"
+        if value >= 0.0:
+            return "B"
+        c_reasons = {"BE", "BH", "BEO", "BEPRE", "BREAK_EVEN", "BREAK_EVEN_EXIT"}
+        if reason in c_reasons or reason.startswith("TSL") or "BREAK_EVEN" in reason:
+            return "C"
+        return "D"
+
     def finalize_closed_position(self) -> None:
         identifier = self.state.active_position_identifier
         if not identifier:
@@ -1432,22 +1429,33 @@ class OPPWContinuousStrategy:
                 exit_deal = max(candidates, key=lambda deal: int(getattr(deal, "time_msc", 0) or deal.time * 1000))
 
         reason, broker_reason = self.resolve_closed_position_reason(exit_deal)
+        self.state.last_exit_position_identifier = int(identifier)
         if exit_deal is not None and self.state.entry_price > 0:
             exit_price = float(exit_deal.price)
             change = truncate_four_decimals(exit_price / self.state.entry_price - 1.0)
+            trade_class = self.trade_class(change, reason)
             self.state.prev_change = change
             self.state.last_exit_price = exit_price
+            self.state.last_exit_preleverage_return = change
+            self.state.last_exit_trade_class = trade_class
             exit_timestamp = getattr(exit_deal, "time_msc", 0) / 1000.0 if getattr(exit_deal, "time_msc", 0) else exit_deal.time
             self.state.last_exit_time = self.mt5_timestamp_to_local(exit_timestamp).isoformat()
             self.state.last_exit_reason = reason
             self.log.info(
-                "EVENT POSITION_CLOSED reason=%s broker_reason=%s deal_ticket=%s entry=%.5f exit=%.5f change=%.4f active_sl_reason=%s active_tp_reason=%s",
-                reason, broker_reason, getattr(exit_deal, "ticket", 0), self.state.entry_price, exit_price, change,
-                self.state.active_sl_reason or "-", self.state.active_tp_reason or "-",
+                "EVENT POSITION_CLOSED reason=%s broker_reason=%s deal_ticket=%s position_identifier=%s entry=%.5f exit=%.5f "
+                "change=%.8f preleverage_return=%.8f trade_class=%s classification=return_priority_A_B_then_BE_TSL_C_else_D "
+                "active_sl_reason=%s active_tp_reason=%s",
+                reason, broker_reason, getattr(exit_deal, "ticket", 0), identifier, self.state.entry_price, exit_price, change, change,
+                trade_class, self.state.active_sl_reason or "-", self.state.active_tp_reason or "-",
             )
         else:
             self.state.last_exit_reason = reason
-            self.log.warning("EVENT POSITION_DISAPPEARED identifier=%s reason=%s broker_reason=%s", identifier, reason, broker_reason)
+            self.state.last_exit_trade_class = "D"
+            self.state.last_exit_preleverage_return = 0.0
+            self.log.warning(
+                "EVENT POSITION_DISAPPEARED identifier=%s reason=%s broker_reason=%s trade_class=D classification=unresolved",
+                identifier, reason, broker_reason,
+            )
 
         self.state.active_position_identifier = 0
         self.state.active_position_ticket = 0
@@ -1541,12 +1549,7 @@ class OPPWContinuousStrategy:
         target_local = datetime.combine(local_day, target_time, self.tz)
         start_local = target_local - timedelta(minutes=max(0, before_minutes))
         end_local = target_local + timedelta(minutes=max(0, after_minutes), seconds=59)
-        rates = mt5.copy_rates_range(
-            symbol,
-            mt5.TIMEFRAME_M1,
-            self.local_to_mt5_bar_query_time(start_local),
-            self.local_to_mt5_bar_query_time(end_local),
-        )
+        rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M1, self.local_to_mt5_bar_query_time(start_local), self.local_to_mt5_bar_query_time(end_local))
         if rates is None or len(rates) == 0:
             return None
         candidates: list[M1Bar] = []
@@ -1564,41 +1567,32 @@ class OPPWContinuousStrategy:
     def latest_completed_week_change(self, now: Optional[datetime] = None) -> Optional[float]:
         now = now or datetime.now(self.tz)
         current_monday = now.date() - timedelta(days=now.date().weekday())
-        candidate_mondays = (current_monday, current_monday - timedelta(days=7))
-        for monday in candidate_mondays:
+        for monday in (current_monday, current_monday - timedelta(days=7)):
             friday = monday + timedelta(days=4)
             sessions = self.calendar.sessions_in_range(monday.isoformat(), friday.isoformat())
             session_days = [session.date() for session in sessions]
             if not session_days:
                 continue
             first_day, last_day = session_days[0], session_days[-1]
-            completion = self.session_times(last_day).close_processing
-            if now < completion:
+            if now < self.session_times(last_day).close_processing:
                 continue
             open_time = self.session_times(first_day).cash_open.time().replace(second=0, microsecond=0)
             close_time = self.session_times(last_day).close_bar_open.time().replace(second=0, microsecond=0)
-            open_bar = self.m1_bar_near(self.cfg.trade_symbol, first_day, open_time, before_minutes=5, after_minutes=0)
-            close_bar = self.m1_bar_near(self.cfg.trade_symbol, last_day, close_time, before_minutes=5, after_minutes=0)
-            if open_bar is None or close_bar is None or open_bar.open <= 0:
-                continue
-            return close_bar.close / open_bar.open - 1.0
+            open_bar = self.m1_bar_near(self.cfg.trade_symbol, first_day, open_time, before_minutes=5)
+            close_bar = self.m1_bar_near(self.cfg.trade_symbol, last_day, close_time, before_minutes=5)
+            if open_bar is not None and close_bar is not None and open_bar.open > 0:
+                return close_bar.close / open_bar.open - 1.0
         return None
 
     def latest_closed_trade_change(self, now: Optional[datetime] = None) -> Optional[float]:
         now = now or datetime.now(self.tz)
-        start = now.astimezone(UTC) - timedelta(days=730)
-        end = now.astimezone(UTC) + timedelta(days=1)
-        deals = mt5.history_deals_get(start, end)
+        deals = mt5.history_deals_get(now.astimezone(UTC) - timedelta(days=730), now.astimezone(UTC) + timedelta(days=1))
         if deals is None:
             return None
         in_values = {getattr(mt5, "DEAL_ENTRY_IN", 0), getattr(mt5, "DEAL_ENTRY_INOUT", 2)}
         out_values = {getattr(mt5, "DEAL_ENTRY_OUT", 1), getattr(mt5, "DEAL_ENTRY_OUT_BY", 3)}
         symbol_deals = [deal for deal in deals if str(getattr(deal, "symbol", "")) == self.cfg.trade_symbol]
-        exits = sorted(
-            [deal for deal in symbol_deals if int(getattr(deal, "entry", -1)) in out_values],
-            key=lambda deal: int(getattr(deal, "time_msc", 0) or int(getattr(deal, "time", 0)) * 1000),
-            reverse=True,
-        )
+        exits = sorted([deal for deal in symbol_deals if int(getattr(deal, "entry", -1)) in out_values], key=lambda deal: int(getattr(deal, "time_msc", 0) or int(getattr(deal, "time", 0)) * 1000), reverse=True)
         for exit_deal in exits:
             position_id = int(getattr(exit_deal, "position_id", 0) or 0)
             if position_id <= 0:
@@ -1608,11 +1602,7 @@ class OPPWContinuousStrategy:
             position_exits = [deal for deal in position_deals if int(getattr(deal, "entry", -1)) in out_values]
             if not entries or not position_exits:
                 continue
-            strategy_entry = any(
-                int(getattr(deal, "magic", 0) or 0) == int(self.cfg.magic)
-                or str(getattr(deal, "comment", "")).startswith(str(self.cfg.comment_prefix))
-                for deal in entries
-            )
+            strategy_entry = any(int(getattr(deal, "magic", 0) or 0) == int(self.cfg.magic) or str(getattr(deal, "comment", "")).startswith(str(self.cfg.comment_prefix)) for deal in entries)
             if not strategy_entry:
                 continue
             entry_volume = sum(abs(float(getattr(deal, "volume", 0.0) or 0.0)) for deal in entries)
@@ -1628,49 +1618,22 @@ class OPPWContinuousStrategy:
     def resolved_leverage_inputs(self, force: bool = False) -> tuple[float, float, str, str]:
         now_monotonic = time_module.monotonic()
         if not force and now_monotonic - self.last_leverage_inputs_refresh_monotonic < 60.0:
-            return (
-                self.cached_previous_full_week_change,
-                self.cached_previous_trade_change,
-                self.cached_previous_full_week_source,
-                self.cached_previous_trade_source,
-            )
+            return self.cached_previous_full_week_change, self.cached_previous_trade_change, self.cached_previous_full_week_source, self.cached_previous_trade_source
         self.last_leverage_inputs_refresh_monotonic = now_monotonic
         full_week = self.latest_completed_week_change()
         previous_trade = self.latest_closed_trade_change()
-        if full_week is not None:
-            self.cached_previous_full_week_change = float(full_week)
-            self.cached_previous_full_week_source = "market history"
-        else:
-            self.cached_previous_full_week_change = float(self.state.prev_full_week_change)
-            self.cached_previous_full_week_source = "state fallback"
-        if previous_trade is not None:
-            self.cached_previous_trade_change = float(previous_trade)
-            self.cached_previous_trade_source = "MT5 deal history"
-        else:
-            self.cached_previous_trade_change = float(self.state.prev_change)
-            self.cached_previous_trade_source = "state fallback"
+        self.cached_previous_full_week_change = float(full_week) if full_week is not None else float(self.state.prev_full_week_change)
+        self.cached_previous_trade_change = float(previous_trade) if previous_trade is not None else float(self.state.prev_change)
+        self.cached_previous_full_week_source = "market history" if full_week is not None else "state fallback"
+        self.cached_previous_trade_source = "MT5 deal history" if previous_trade is not None else "state fallback"
         if self.is_executor:
-            changed = (
-                abs(self.state.prev_full_week_change - self.cached_previous_full_week_change) > 1e-12
-                or abs(self.state.prev_change - self.cached_previous_trade_change) > 1e-12
-            )
+            changed = abs(self.state.prev_full_week_change - self.cached_previous_full_week_change) > 1e-12 or abs(self.state.prev_change - self.cached_previous_trade_change) > 1e-12
             self.state.prev_full_week_change = self.cached_previous_full_week_change
             self.state.prev_change = self.cached_previous_trade_change
             if changed:
                 self.state.save(self.cfg.state_file)
-                self.log.info(
-                    "EVENT LEVERAGE_INPUTS_RECOVERED previous_full_week_change=%.6f full_week_source=%s previous_trade_change=%.6f trade_source=%s",
-                    self.cached_previous_full_week_change,
-                    self.cached_previous_full_week_source.replace(" ", "_"),
-                    self.cached_previous_trade_change,
-                    self.cached_previous_trade_source.replace(" ", "_"),
-                )
-        return (
-            self.cached_previous_full_week_change,
-            self.cached_previous_trade_change,
-            self.cached_previous_full_week_source,
-            self.cached_previous_trade_source,
-        )
+                self.log.info("EVENT LEVERAGE_INPUTS_RECOVERED previous_full_week_change=%.6f full_week_source=%s previous_trade_change=%.6f trade_source=%s", self.cached_previous_full_week_change, self.cached_previous_full_week_source.replace(" ", "_"), self.cached_previous_trade_change, self.cached_previous_trade_source.replace(" ", "_"))
+        return self.cached_previous_full_week_change, self.cached_previous_trade_change, self.cached_previous_full_week_source, self.cached_previous_trade_source
 
     def leverage_decision(self) -> tuple[int, str]:
         previous_full_week, previous_trade, full_week_source, trade_source = self.resolved_leverage_inputs()
@@ -1682,10 +1645,7 @@ class OPPWContinuousStrategy:
                 triggers.append(f"previous trade change {previous_trade:.4%} ({trade_source}) < -0.7000%")
             if triggers:
                 return self.cfg.loss_leverage, f"{self.cfg.loss_leverage}x because " + " and ".join(triggers)
-            return self.cfg.base_leverage, (
-                f"{self.cfg.base_leverage}x because previous full-week change {previous_full_week:.4%} ({full_week_source}) >= -2.5000% "
-                f"and previous trade change {previous_trade:.4%} ({trade_source}) >= -0.7000%"
-            )
+            return self.cfg.base_leverage, f"{self.cfg.base_leverage}x because previous full-week change {previous_full_week:.4%} ({full_week_source}) >= -2.5000% and previous trade change {previous_trade:.4%} ({trade_source}) >= -0.7000%"
         return self.cfg.base_leverage, f"{self.cfg.base_leverage}x because base leverage is configured as {self.cfg.base_leverage}x"
 
     @staticmethod
@@ -1708,31 +1668,43 @@ class OPPWContinuousStrategy:
             raise RuntimeError(f"order_calc_margin failed for open position: {mt5.last_error()}")
         return float(margin)
 
+    def what_if_scenarios(self, volume: float, entry_price: float, balance: float, stop_return: float) -> list[dict[str, Any]]:
+        scenarios = [("-0.5%", -0.005), ("-1.0%", -0.01), ("HARD SL", stop_return), ("-3.0%", -0.03), ("-5.0%", -0.05)]
+        result: list[dict[str, Any]] = []
+        seen: set[int] = set()
+        for label, change in scenarios:
+            key = round(change * 1_000_000)
+            if key in seen:
+                continue
+            seen.add(key)
+            scenario_price = entry_price * (1.0 + change)
+            raw_profit = mt5.order_calc_profit(mt5.ORDER_TYPE_BUY, self.cfg.trade_symbol, volume, entry_price, scenario_price)
+            profit = float(raw_profit) if raw_profit is not None else 0.0
+            result.append({
+                "label": label, "underlyingReturnPercent": change * 100.0, "price": scenario_price, "profit": profit,
+                "balanceAfter": balance + profit, "accountReturnPercent": profit / balance * 100.0 if balance > 0 else 0.0,
+            })
+        return result
+
     def potential_position_preview(self) -> dict[str, Any]:
-        leverage, leverage_reason = self.leverage_decision()
         previous_full_week, previous_trade, full_week_source, trade_source = self.resolved_leverage_inputs()
+        leverage, leverage_reason = self.leverage_decision()
+        now = datetime.now(self.tz)
         result: dict[str, Any] = {
-            "available": False,
-            "symbol": self.cfg.trade_symbol,
-            "side": "BUY",
-            "price": 0.0,
-            "volume": 0.0,
-            "requiredDeposit": 0.0,
-            "balance": 0.0,
-            "effectiveLeverage": 0.0,
-            "strategyLeverage": float(leverage),
-            "leverageReason": leverage_reason,
-            "previousFullWeekChange": previous_full_week,
-            "previousTradeChange": previous_trade,
-            "previousFullWeekSource": full_week_source,
-            "previousTradeSource": trade_source,
-            "positionNotional": 0.0,
-            "sizingUnits": 0,
-            "minimumVolumeFloor": False,
-            "brokerMarginLeverage": 0.0,
-            "depositPrice": 0.0,
-            "depositSource": "",
-            "error": "",
+            "available": False, "generatedAt": now.isoformat(), "build": BUILD_ID, "account": self.account,
+            "symbol": self.cfg.trade_symbol, "side": "BUY", "price": 0.0, "priceSource": "MT5 current BUY price",
+            "volume": 0.0, "requiredDeposit": 0.0, "brokerMarginLeverage": 0.0, "depositSource": "",
+            "balance": 0.0, "equity": 0.0, "freeMargin": 0.0, "freeMarginAfter": 0.0,
+            "marginUsagePercent": 0.0, "marginLevelAfterPercent": 0.0, "effectiveLeverage": 0.0,
+            "strategyLeverage": float(leverage), "leverageReason": leverage_reason,
+            "previousFullWeekChange": float(previous_full_week), "previousFullWeekSource": full_week_source,
+            "previousTradeChange": float(previous_trade), "previousTradeSource": trade_source,
+            "fullWeekTriggerPercent": -2.5, "previousTradeTriggerPercent": -0.7,
+            "potentialStopLossPercent": -0.5 / float(leverage) * 100.0 if leverage > 0 else 0.0,
+            "potentialStopLossRatio": 1.0 - 0.5 / float(leverage) if leverage > 0 else 0.0,
+            "potentialStopLossPrice": 0.0, "potentialStopLossCash": 0.0, "accountLossPercentAtStop": 0.0,
+            "stopLossFormula": "underlying stop = -0.5 / strategy leverage",
+            "positionNotional": 0.0, "sizingUnits": 0, "minimumVolumeFloor": False, "scenarios": [], "error": "",
         }
         try:
             account = mt5.account_info()
@@ -1740,44 +1712,128 @@ class OPPWContinuousStrategy:
             tick = self.latest_tick(self.cfg.trade_symbol)
             if account is None or info is None:
                 raise RuntimeError(f"Cannot obtain account/symbol data: {mt5.last_error()}")
+
             balance = float(getattr(account, "balance", 0.0) or 0.0)
+            equity = float(getattr(account, "equity", 0.0) or 0.0)
+            free_margin = float(getattr(account, "margin_free", 0.0) or 0.0)
             ask = float(getattr(tick, "ask", 0.0) or 0.0)
             bid = float(getattr(tick, "bid", 0.0) or 0.0)
             last = float(getattr(tick, "last", 0.0) or 0.0)
             price = ask if ask > 0 else last if last > 0 else bid
             if price <= 0:
                 raise RuntimeError(f"No usable current price for {self.cfg.trade_symbol}")
-            sizing = self.calculate_position_sizing(balance, leverage, info, price)
-            if float(sizing["volume"]) <= 0:
-                minimum_margin = float(sizing.get("minimumMargin", 0.0) or 0.0)
-                raise RuntimeError(
-                    f"Broker minimum {float(info.volume_min):.2f} lot requires {minimum_margin:.2f}, available balance is {balance:.2f}"
-                )
-            required_deposit = float(sizing["requiredMargin"])
+
+            minimum_volume_notional = self.minimum_volume_notional(info, price)
+            _, _, sizing_units = self.target_notional(balance, leverage, minimum_volume_notional)
+            minimum_volume_floor = False
+            volume = self.normalized_volume(sizing_units, info)
+            if volume <= 0:
+                minimum_volume = float(info.volume_min)
+                minimum_margin = mt5.order_calc_margin(mt5.ORDER_TYPE_BUY, self.cfg.trade_symbol, minimum_volume, price)
+                if minimum_margin is not None and float(minimum_margin) <= max(0.0, free_margin):
+                    volume = minimum_volume
+                    sizing_units = 1
+                    minimum_volume_floor = True
+                else:
+                    raise RuntimeError("Calculated potential volume is below the broker minimum and minimum volume is not affordable")
+
+            required_raw = mt5.order_calc_margin(mt5.ORDER_TYPE_BUY, self.cfg.trade_symbol, volume, price)
+            if required_raw is None:
+                raise RuntimeError(f"order_calc_margin failed: {mt5.last_error()}")
+            required_deposit = float(required_raw)
             broker_leverage = self.broker_margin_leverage(account)
+            effective_leverage = required_deposit * broker_leverage / balance if balance > 0 else 0.0
+            stop_ratio = 1.0 - 0.5 / float(leverage)
+            tick_size = float(getattr(info, "trade_tick_size", 0.0) or getattr(info, "point", 0.0) or 0.01)
+            stop_price = floor_step(price * stop_ratio, tick_size)
+            stop_profit_raw = mt5.order_calc_profit(mt5.ORDER_TYPE_BUY, self.cfg.trade_symbol, volume, price, stop_price)
+            stop_profit = float(stop_profit_raw) if stop_profit_raw is not None else 0.0
+            existing_margin = float(getattr(account, "margin", 0.0) or 0.0)
+            margin_after = existing_margin + required_deposit
+
             result.update({
-                "available": True,
-                "price": price,
-                "volume": float(sizing["volume"]),
-                "requiredDeposit": required_deposit,
-                "balance": balance,
-                "effectiveLeverage": (required_deposit * broker_leverage) / balance if balance > 0 else 0.0,
-                "positionNotional": float(sizing["positionNotional"]),
-                "sizingUnits": int(sizing["sizingUnits"]),
-                "minimumVolumeFloor": bool(sizing["minimumVolumeFloor"]),
-                "brokerMarginLeverage": broker_leverage,
-                "depositPrice": price,
-                "depositSource": "MT5 order_calc_margin(proposed volume, current BUY price)",
+                "available": True, "price": price, "volume": float(volume), "requiredDeposit": required_deposit,
+                "brokerMarginLeverage": broker_leverage, "depositSource": "MT5 order_calc_margin(proposed volume, current BUY price)",
+                "balance": balance, "equity": equity, "freeMargin": free_margin, "freeMarginAfter": free_margin - required_deposit,
+                "marginUsagePercent": required_deposit / balance * 100.0 if balance > 0 else 0.0,
+                "marginLevelAfterPercent": equity / margin_after * 100.0 if margin_after > 0 else 0.0,
+                "effectiveLeverage": effective_leverage, "potentialStopLossPrice": stop_price,
+                "potentialStopLossCash": stop_profit, "accountLossPercentAtStop": stop_profit / balance * 100.0 if balance > 0 else 0.0,
+                "positionNotional": sizing_units * minimum_volume_notional, "sizingUnits": int(sizing_units),
+                "minimumVolumeFloor": minimum_volume_floor,
+                "scenarios": self.what_if_scenarios(float(volume), price, balance, -0.5 / float(leverage)),
             })
         except Exception as exc:
             result["error"] = str(exc)
         return result
 
+    def strategy_decision_payload(self, preview: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+        preview = preview or self.potential_position_preview()
+        decision_id_source = "|".join(str(value) for value in (
+            self.account, iso_week_key(datetime.now(self.tz).date()), BUILD_ID, preview.get("symbol", ""),
+            preview.get("strategyLeverage", 0.0), preview.get("previousFullWeekChange", 0.0),
+            preview.get("previousTradeChange", 0.0), preview.get("volume", 0.0), preview.get("available", False),
+        ))
+        decision_id = uuid.uuid5(uuid.NAMESPACE_URL, decision_id_source).hex
+        return {
+            "decisionId": decision_id, "recordedAt": datetime.now(self.tz).isoformat(), "build": BUILD_ID,
+            "account": self.account, "decision": "NEXT_WEEK_LONG_ENTRY",
+            "outcome": "READY" if bool(preview.get("available")) else "UNAVAILABLE",
+            "selectedLeverage": float(preview.get("strategyLeverage", 0.0)), "leverageReason": str(preview.get("leverageReason", "")),
+            "inputs": {
+                "previousFullWeekChange": float(preview.get("previousFullWeekChange", 0.0)),
+                "previousFullWeekSource": str(preview.get("previousFullWeekSource", "")),
+                "previousTradeChange": float(preview.get("previousTradeChange", 0.0)),
+                "previousTradeSource": str(preview.get("previousTradeSource", "")),
+                "fullWeekTriggerPercent": float(preview.get("fullWeekTriggerPercent", -2.5)),
+                "previousTradeTriggerPercent": float(preview.get("previousTradeTriggerPercent", -0.7)),
+            },
+            "sizing": {key: preview.get(key) for key in (
+                "symbol", "side", "price", "priceSource", "volume", "requiredDeposit", "depositSource",
+                "brokerMarginLeverage", "effectiveLeverage", "positionNotional", "sizingUnits", "minimumVolumeFloor",
+                "balance", "equity", "freeMargin", "freeMarginAfter", "marginUsagePercent", "marginLevelAfterPercent",
+            )},
+            "risk": {key: preview.get(key) for key in (
+                "potentialStopLossPercent", "potentialStopLossRatio", "potentialStopLossPrice",
+                "potentialStopLossCash", "accountLossPercentAtStop", "stopLossFormula", "scenarios",
+            )},
+            "error": str(preview.get("error", "")),
+        }
+
+    def record_strategy_decision_if_changed(self, force: bool = False) -> dict[str, Any]:
+        preview = self.potential_position_preview()
+        payload = self.strategy_decision_payload(preview)
+        signature = (
+            iso_week_key(datetime.now(self.tz).date()), payload["outcome"], round(float(payload["selectedLeverage"]), 6),
+            round(float(payload["inputs"]["previousFullWeekChange"]), 8), round(float(payload["inputs"]["previousTradeChange"]), 8),
+            str(payload["inputs"].get("previousFullWeekSource", "")), str(payload["inputs"].get("previousTradeSource", "")),
+            round(float(payload["sizing"].get("volume") or 0.0), 8), bool(payload["sizing"].get("minimumVolumeFloor")),
+            payload["error"].split(":", 1)[0],
+        )
+        self.last_strategy_decision_payload = payload
+        if force or signature != self.last_strategy_decision_signature:
+            self.last_strategy_decision_signature = signature
+            self.log.info(
+                "EVENT STRATEGY_DECISION_RECORDED decision_id=%s outcome=%s leverage=%.0f "
+                "previous_full_week=%.8f full_week_source=%s previous_trade=%.8f trade_source=%s volume=%.8f required_deposit=%.2f "
+                "effective_leverage=%.6f stop_loss_percent=%.4f stop_loss_price=%.5f stop_loss_cash=%.2f error=%s",
+                payload["decisionId"], payload["outcome"], payload["selectedLeverage"],
+                payload["inputs"]["previousFullWeekChange"], str(payload["inputs"].get("previousFullWeekSource", "")).replace(" ", "_"),
+                payload["inputs"]["previousTradeChange"], str(payload["inputs"].get("previousTradeSource", "")).replace(" ", "_"),
+                float(payload["sizing"].get("volume") or 0.0), float(payload["sizing"].get("requiredDeposit") or 0.0),
+                float(payload["sizing"].get("effectiveLeverage") or 0.0),
+                float(payload["risk"].get("potentialStopLossPercent") or 0.0),
+                float(payload["risk"].get("potentialStopLossPrice") or 0.0),
+                float(payload["risk"].get("potentialStopLossCash") or 0.0),
+                shlex.quote(str(payload["error"] or "none")),
+            )
+        return payload
+
     def format_status(self, reason: str, position, now: datetime, current_bar: Optional[M1Bar] = None) -> str:
         due, due_reason, final_day = self.weekly_exit_status(position, now)
         account = mt5.account_info()
         equity = float(getattr(account, "equity", 0.0)) if account is not None else 0.0
-        deposit = 0.0
+        deposit = float(getattr(account, "margin", 0.0)) if account is not None else 0.0
         currency = str(getattr(account, "currency", "")).strip() if account is not None else ""
         currency_suffix = f" {currency}" if currency else ""
         phase = self.phase(now)
@@ -1792,7 +1848,9 @@ class OPPWContinuousStrategy:
                     f"next potential position: BUY {float(preview['volume']):.2f} lot {preview['symbol']} @ {float(preview['price']):.5f}",
                     f"required deposit: {float(preview['requiredDeposit']):.2f}{currency_suffix}",
                     f"effective leverage: {float(preview['effectiveLeverage']):.4f}x ({float(preview['brokerMarginLeverage']):.0f} × required deposit / balance)",
-                    f"deposit source: MT5 order_calc_margin at current price {float(preview['depositPrice']):.5f}",
+                    f"potential hard SL: {float(preview['potentialStopLossPrice']):.5f} ({float(preview['potentialStopLossPercent']):.4f}%)",
+                    f"potential SL cash P/L: {float(preview['potentialStopLossCash']):.2f}{currency_suffix}",
+                    f"free margin after: {float(preview['freeMarginAfter']):.2f}{currency_suffix}",
                     f"potential notional: {float(preview['positionNotional']):.2f}{currency_suffix}",
                 ]
             else:
@@ -1828,15 +1886,6 @@ class OPPWContinuousStrategy:
         except Exception:
             bid = float(getattr(position, "price_current", 0.0))
             ask = 0.0
-
-        current_position_price = float(getattr(position, "price_current", 0.0) or 0.0)
-        if current_position_price <= 0:
-            current_position_price = bid if bid > 0 else ask
-        try:
-            deposit = self.position_required_deposit(position, current_position_price)
-        except Exception as exc:
-            self.log.warning("EVENT POSITION_MARGIN_CALC_FAILED ticket=%s price=%.5f error=%s", position.ticket, current_position_price, exc)
-            deposit = 0.0
 
         entry = float(position.price_open)
         raw_pnl_pct = bid / entry - 1.0 if bid > 0 and entry > 0 else 0.0
@@ -1876,7 +1925,6 @@ class OPPWContinuousStrategy:
             f"current P/L %: {raw_pnl_pct:.4%}",
             f"current P/L % leveraged: {leveraged_pnl_pct:.4%}",
             f"equity: {equity:.2f}{currency_suffix} deposit: {deposit:.2f}{currency_suffix}",
-            f"deposit source: MT5 order_calc_margin({float(position.volume):.2f} lot, current position price {current_position_price:.5f})",
             f"SL: {float(position.sl):.5f} ({self.state.active_sl_reason or '-'})",
             f"TP: {float(position.tp):.5f} ({self.state.active_tp_reason or '-'})",
             f"break-even armed: {self.state.break_even}",
@@ -2006,9 +2054,8 @@ class OPPWContinuousStrategy:
     def monitor_closest_condition(conditions: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
         return conditions[0] if conditions else None
 
-    @staticmethod
-    def monitor_position_exposure(position, deposit: float) -> float:
-        return deposit * 20.0 if position is not None and deposit > 0 else 0.0
+    def monitor_position_exposure(self, position, deposit: float, account=None) -> float:
+        return deposit * self.broker_margin_leverage(account) if position is not None and deposit > 0 else 0.0
 
     def build_mobile_snapshot(self, position, now: datetime, current_bar: Optional[M1Bar]) -> dict[str, Any]:
         account = mt5.account_info()
@@ -2053,7 +2100,7 @@ class OPPWContinuousStrategy:
             profit = float(getattr(position, "profit", 0.0)) + float(getattr(position, "swap", 0.0))
             timestamp = getattr(position, "time_msc", 0) / 1000.0 if getattr(position, "time_msc", 0) else float(position.time)
             opened = self.mt5_timestamp_to_local(timestamp)
-            exposure = self.monitor_position_exposure(position, deposit)
+            exposure = self.monitor_position_exposure(position, deposit, account)
             info = mt5.symbol_info(position.symbol)
             tick_size = float(getattr(info, "trade_tick_size", 0.0) or getattr(info, "point", 0.0) or 0.01) if info is not None else 0.01
             weekday_index = now.weekday() if now.weekday() < 5 else 4
@@ -2081,7 +2128,7 @@ class OPPWContinuousStrategy:
                 "depositPrice": current_position_price,
                 "depositSource": "MT5 order_calc_margin(position volume, current position price)",
                 "brokerMarginLeverage": broker_leverage,
-                "effectiveLeverage": (deposit * broker_leverage) / balance if balance > 0 else 0.0,
+                "effectiveLeverage": exposure / balance if balance > 0 else 0.0,
                 "stopLoss": float(position.sl),
                 "takeProfit": float(position.tp),
                 "potentialTakeProfit": potential_take_profit,
@@ -2153,7 +2200,16 @@ class OPPWContinuousStrategy:
                 "currency": currency,
             },
             "position": position_payload,
-            "potentialPosition": self.potential_position_preview() if position is None else None,
+            "potentialPosition": (preview := self.potential_position_preview()) if position is None else None,
+            "strategyDecision": self.strategy_decision_payload(preview) if position is None else self.last_strategy_decision_payload,
+            "lastClosedTrade": {
+                "positionIdentifier": int(self.state.last_exit_position_identifier),
+                "closedAt": self.state.last_exit_time,
+                "exitReason": self.state.last_exit_reason,
+                "preleverageReturn": float(self.state.last_exit_preleverage_return),
+                "preleverageReturnPercent": float(self.state.last_exit_preleverage_return) * 100.0,
+                "tradeClass": self.state.last_exit_trade_class,
+            } if self.state.last_exit_time or self.state.last_exit_trade_class else None,
             "conditions": conditions,
             "closestCondition": closest,
             "equityHistory": [],
@@ -2275,53 +2331,6 @@ class OPPWContinuousStrategy:
             return 0.0
         return round(volume, 8)
 
-    def calculate_position_sizing(self, balance: float, leverage: int, info, price: float) -> dict[str, Any]:
-        minimum_volume = float(info.volume_min)
-        volume_step = float(info.volume_step)
-        minimum_volume_notional = self.minimum_volume_notional(info, price)
-        target_notional, sizing_quantum, target_units = self.target_notional(balance, leverage, minimum_volume_notional)
-        target_volume = self.normalized_volume(target_units, info)
-        minimum_margin_raw = mt5.order_calc_margin(mt5.ORDER_TYPE_BUY, self.cfg.trade_symbol, minimum_volume, price)
-        if minimum_margin_raw is None:
-            raise RuntimeError(f"order_calc_margin failed for broker minimum: {mt5.last_error()}")
-        minimum_margin = float(minimum_margin_raw)
-        minimum_floor = target_volume <= 0
-        candidate = minimum_volume if minimum_floor else target_volume
-        candidate = min(candidate, float(info.volume_max))
-        required_margin = 0.0
-        while candidate + 1e-12 >= minimum_volume:
-            margin_raw = mt5.order_calc_margin(mt5.ORDER_TYPE_BUY, self.cfg.trade_symbol, candidate, price)
-            if margin_raw is None:
-                raise RuntimeError(f"order_calc_margin failed: {mt5.last_error()}")
-            required_margin = float(margin_raw)
-            if required_margin <= balance + 1e-8:
-                units = max(1, int(round(candidate / minimum_volume)))
-                return {
-                    "volume": round(candidate, 8),
-                    "requiredMargin": required_margin,
-                    "minimumMargin": minimum_margin,
-                    "minimumVolumeFloor": minimum_floor,
-                    "minimumVolumeNotional": minimum_volume_notional,
-                    "targetNotional": target_notional,
-                    "sizingQuantum": sizing_quantum,
-                    "targetUnits": target_units,
-                    "sizingUnits": units,
-                    "positionNotional": minimum_volume_notional * (candidate / minimum_volume),
-                }
-            candidate = floor_step(candidate - volume_step, volume_step)
-        return {
-            "volume": 0.0,
-            "requiredMargin": 0.0,
-            "minimumMargin": minimum_margin,
-            "minimumVolumeFloor": minimum_floor,
-            "minimumVolumeNotional": minimum_volume_notional,
-            "targetNotional": target_notional,
-            "sizingQuantum": sizing_quantum,
-            "targetUnits": target_units,
-            "sizingUnits": 0,
-            "positionNotional": 0.0,
-        }
-
     @staticmethod
     def filling_mode_name(mode: int) -> str:
         names = {mt5.ORDER_FILLING_FOK: "FOK", mt5.ORDER_FILLING_IOC: "IOC", mt5.ORDER_FILLING_RETURN: "RETURN"}
@@ -2398,23 +2407,21 @@ class OPPWContinuousStrategy:
 
         leverage = self.choose_leverage()
         ask = float(tick.ask)
-        balance = float(account.balance)
-        sizing = self.calculate_position_sizing(balance, leverage, info, ask)
-        volume = float(sizing["volume"])
-        if volume <= 0:
+        minimum_volume_notional = self.minimum_volume_notional(info, ask)
+        target_notional, sizing_quantum, sizing_units = self.target_notional(float(account.balance), leverage, minimum_volume_notional)
+        if sizing_units <= 0:
             self.log.error(
-                "EVENT BUY_SKIPPED reason=broker_minimum_margin_unaffordable balance=%.2f minimum_volume=%.8f minimum_margin=%.2f target_units=%s",
-                balance, float(info.volume_min), float(sizing["minimumMargin"]), int(sizing["targetUnits"]),
+                "EVENT BUY_SKIPPED reason=zero_sizing_units minimum_volume=%.8f minimum_volume_notional=%.2f sizing_quantum=%.2f sizing_units=%s",
+                float(info.volume_min), minimum_volume_notional, sizing_quantum, sizing_units,
             )
             return False
 
-        minimum_volume_notional = float(sizing["minimumVolumeNotional"])
-        sizing_quantum = float(sizing["sizingQuantum"])
-        sizing_units = int(sizing["sizingUnits"])
-        target_notional = float(sizing["targetNotional"])
-        position_notional = float(sizing["positionNotional"])
-        required_margin = float(sizing["requiredMargin"])
-        minimum_volume_floor = bool(sizing["minimumVolumeFloor"])
+        volume = self.normalized_volume(sizing_units, info)
+        if volume <= 0:
+            self.log.error("EVENT BUY_SKIPPED reason=volume_below_minimum sizing_units=%s minimum_volume=%.8f", sizing_units, float(info.volume_min))
+            return False
+
+        position_notional = sizing_units * target_notional
         tick_size = float(getattr(info, "trade_tick_size", 0.0) or info.point)
         sl = floor_step(ask * self.hard_sl_ratio(leverage), tick_size)
         request_base = {
@@ -2429,9 +2436,9 @@ class OPPWContinuousStrategy:
             request = dict(request_base)
             request["type_filling"] = self.order_filling_modes(info)[0]
             self.log.info(
-                "EVENT BUY_DRY_RUN day=%s scheduled=%s leverage=%s volume=%s minimum_volume=%.8f minimum_volume_floor=%s required_margin=%.2f minimum_volume_notional=%.2f sizing_quantum=%.2f sizing_units=%s target_notional=%.2f position_notional=%.2f ask=%.5f sl=%.5f filling=%s",
-                current_day, scheduled.isoformat(), leverage, volume, float(info.volume_min), minimum_volume_floor, required_margin,
-                minimum_volume_notional, sizing_quantum, sizing_units, target_notional, position_notional, ask, sl,
+                "EVENT BUY_DRY_RUN day=%s scheduled=%s leverage=%s volume=%s minimum_volume=%.8f minimum_volume_notional=%.2f sizing_quantum=%.2f sizing_units=%s target_notional=%.2f position_notional=%.2f ask=%.5f sl=%.5f filling=%s",
+                current_day, scheduled.isoformat(), leverage, volume, float(info.volume_min), minimum_volume_notional,
+                sizing_quantum, sizing_units, target_notional, position_notional, ask, sl,
                 self.filling_mode_name(request["type_filling"]),
             )
             return False
@@ -2442,9 +2449,9 @@ class OPPWContinuousStrategy:
 
         request, check = self.checked_deal_request(request_base, info, "BUY")
         self.log.info(
-            "EVENT BUY_REQUEST day=%s scheduled=%s leverage=%s volume=%s minimum_volume=%.8f minimum_volume_floor=%s required_margin=%.2f minimum_volume_notional=%.2f sizing_quantum=%.2f sizing_units=%s target_notional=%.2f position_notional=%.2f ask=%.5f sl=%.5f filling=%s",
-            current_day, scheduled.isoformat(), leverage, volume, float(info.volume_min), minimum_volume_floor, required_margin,
-            minimum_volume_notional, sizing_quantum, sizing_units, target_notional, position_notional, ask, sl,
+            "EVENT BUY_REQUEST day=%s scheduled=%s leverage=%s volume=%s minimum_volume=%.8f minimum_volume_notional=%.2f sizing_quantum=%.2f sizing_units=%s target_notional=%.2f position_notional=%.2f ask=%.5f sl=%.5f filling=%s",
+            current_day, scheduled.isoformat(), leverage, volume, float(info.volume_min), minimum_volume_notional,
+            sizing_quantum, sizing_units, target_notional, position_notional, ask, sl,
             self.filling_mode_name(request.get("type_filling", -1)),
         )
         if check is None or int(check.retcode) not in (0, getattr(mt5, "TRADE_RETCODE_DONE", 10009)):
@@ -2853,6 +2860,8 @@ class OPPWContinuousStrategy:
             self.print_autotrading_banner(now)
             self.log_minute_condition_report(position, now, current_bar)
 
+        if position is None:
+            self.record_strategy_decision_if_changed()
         signature = self.status_signature(position, now)
         if signature != self.last_meaningful_signature:
             self.last_meaningful_signature = signature
@@ -2876,6 +2885,8 @@ class OPPWContinuousStrategy:
         self.print_autotrading_banner(now)
         self.last_minute_status = now.strftime("%Y-%m-%d %H:%M")
         self.last_meaningful_signature = self.status_signature(position, now)
+        if position is None:
+            self.record_strategy_decision_if_changed(force=True)
         self.publish_mobile_minute_status(position, now, current_bar, force=True)
 
     def cycle(self) -> None:
@@ -2918,6 +2929,8 @@ class OPPWContinuousStrategy:
             self.maybe_open_new_week(now.date(), now, current_bar, None)
 
         position = self.managed_position()
+        if position is None:
+            self.record_strategy_decision_if_changed()
         self.log_status_if_needed(position, now, current_bar)
         minute_published = self.publish_mobile_minute_status(position, now, current_bar)
         if not minute_published:
@@ -2941,6 +2954,8 @@ class OPPWContinuousStrategy:
         self.print_instance_banner(now)
         self.last_minute_status = now.strftime("%Y-%m-%d %H:%M")
         self.last_meaningful_signature = self.status_signature(position, now)
+        if position is None:
+            self.record_strategy_decision_if_changed(force=True)
         self.publish_mobile_minute_status(position, now, current_bar, force=True)
 
     def publisher_cycle(self) -> None:

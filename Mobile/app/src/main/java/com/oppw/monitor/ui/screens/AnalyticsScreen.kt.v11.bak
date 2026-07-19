@@ -1,28 +1,16 @@
 package com.oppw.monitor.ui.screens
 
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
-import com.oppw.monitor.data.TradeDistribution
 import com.oppw.monitor.data.UiState
 import com.oppw.monitor.ui.components.AppCard
 import com.oppw.monitor.ui.components.ErrorPanel
@@ -32,13 +20,12 @@ import com.oppw.monitor.ui.components.SectionTitle
 import com.oppw.monitor.ui.theme.BrightGreen
 import com.oppw.monitor.ui.theme.DangerRed
 import com.oppw.monitor.ui.theme.TextSecondary
+import com.oppw.monitor.util.closedTradeRatios
 import com.oppw.monitor.util.duration
 import com.oppw.monitor.util.money
 import com.oppw.monitor.util.percent
 import com.oppw.monitor.util.price
 import com.oppw.monitor.util.shortDateTime
-import kotlin.math.max
-import kotlin.math.min
 
 @Composable
 fun AnalyticsScreen(state: UiState, onRetry: () -> Unit) {
@@ -49,6 +36,7 @@ fun AnalyticsScreen(state: UiState, onRetry: () -> Unit) {
         else -> {
             val currency = state.response?.snapshot?.account?.currency ?: ""
             val s = analytics.summary
+            val closedTradeRisk = closedTradeRatios(analytics.recentTrades)
             LazyColumn(Modifier.fillMaxSize().padding(horizontal = 14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 item {
                     AppCard(Modifier.fillMaxWidth()) {
@@ -79,32 +67,12 @@ fun AnalyticsScreen(state: UiState, onRetry: () -> Unit) {
                 }
                 item {
                     AppCard(Modifier.fillMaxWidth()) {
-                        SectionTitle("Risk-adjusted performance", "${s.ratioSampleTrades} closed trades · annualized √${s.periodsPerYear}")
-                        MetricRow("Sharpe ratio", ratioText(s.sharpeRatio, s.sharpeAvailable), "Sortino ratio", if (s.sortinoInfinite) "∞" else ratioText(s.sortinoRatio, s.sortinoAvailable))
-                        Text("Sharpe and Sortino use closed-trade account returns only. Both are annualized using 52 strategy periods per year.", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
-                        MetricRow("Calmar ratio", String.format("%.2f", s.calmarRatio), "Omega ratio", String.format("%.2f", s.omegaRatio))
-                        MetricRow("Ulcer index", percent(s.ulcerIndexPercent), "Daily VaR 95%", percent(-s.valueAtRisk95Percent))
-                        MetricRow("Expected shortfall 95%", percent(-s.expectedShortfall95Percent), "Daily sample", "${s.riskSampleDays} days")
-                    }
-                }
-                item {
-                    AppCard(Modifier.fillMaxWidth()) {
-                        SectionTitle("Guy Fleury trade classes", "A/B/C/D")
-                        analytics.tradeClasses.forEach { value ->
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                Text("Class ${value.tradeClass}", style = MaterialTheme.typography.titleMedium, color = classColor(value.tradeClass))
-                                Text("${value.trades} · ${percent(value.winRate)} wins", color = TextSecondary)
-                            }
-                            Text("P/L ${money(value.profit, currency)} · average pre-leverage return ${percent(value.averagePreleverageReturnPercent)}", color = if (value.profit >= 0.0) BrightGreen else DangerRed)
-                        }
-                        Text("Priority: A ≥ +0.7%; otherwise B ≥ 0%; otherwise C for break-even/TSL exits; all remaining trades are D.", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
-                    }
-                }
-                item {
-                    AppCard(Modifier.fillMaxWidth()) {
-                        SectionTitle("Trade distribution", "best → worst")
-                        TradeDistributionChart(analytics.tradeDistribution, Modifier.fillMaxWidth().height(260.dp))
-                        Text("Every closed trade is sorted by pre-leverage return. The left side is the best trade and the right side is the worst trade.", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                        SectionTitle("Risk-adjusted performance", "${closedTradeRisk.sampleSize} closed-trade returns")
+                        MetricRow("Trade Sharpe ratio", ratioText(closedTradeRisk.sharpe), "Trade Sortino ratio", ratioText(closedTradeRisk.sortino))
+                        Text("Sharpe and Sortino use closed trades only and are not annualized.", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                        MetricRow("Calmar ratio", ratioText(s.calmarRatio), "Omega ratio", ratioText(s.omegaRatio))
+                        MetricRow("Ulcer index", percentText(s.ulcerIndexPercent), "Daily VaR 95%", percentText(-s.valueAtRisk95Percent))
+                        MetricRow("Expected shortfall 95%", percentText(-s.expectedShortfall95Percent), "Daily-risk sample", "${s.riskSampleDays} days")
                     }
                 }
                 item {
@@ -146,54 +114,15 @@ fun AnalyticsScreen(state: UiState, onRetry: () -> Unit) {
                         analytics.recentTrades.take(25).forEach { trade ->
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 Text("#${trade.ticket} · ${trade.exitReason.ifBlank { if (trade.closed) "Closed" else "OPEN" }}", style = MaterialTheme.typography.titleMedium)
-                                Text("${trade.tradeClass.ifBlank { "—" }} · ${money(trade.profit, currency)}", color = if (trade.profit >= 0) BrightGreen else DangerRed)
+                                Text(money(trade.profit, currency), color = if (trade.profit >= 0) BrightGreen else DangerRed)
                             }
-                            Text("Pre-leverage ${percent(trade.preleverageReturnPercent)} · ${shortDateTime(trade.openedAt)} · ${duration(trade.durationSeconds)}", color = classColor(trade.tradeClass))
-                            Text("MFE ${price(trade.mfePoints)} · MAE ${price(trade.maePoints)} pts · Entry slip ${price(trade.entrySlippagePoints)} · Exit slip ${price(trade.exitSlippagePoints)} pts", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                            Text("${shortDateTime(trade.openedAt)} · ${duration(trade.durationSeconds)} · MFE ${price(trade.mfePoints)} · MAE ${price(trade.maePoints)} pts", color = TextSecondary)
+                            Text("Entry slip ${price(trade.entrySlippagePoints)} · Exit slip ${price(trade.exitSlippagePoints)} pts · Peak P/L ${money(trade.maxProfit, currency)} · Worst P/L ${money(trade.maxDrawdown, currency)}", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
                         }
                     }
                 }
                 state.analyticsError?.let { item { ErrorPanel(it, onRetry) } }
             }
-        }
-    }
-}
-
-@Composable
-private fun TradeDistributionChart(distribution: TradeDistribution, modifier: Modifier = Modifier) {
-    val trades = distribution.trades.sortedByDescending { it.returnPercent }
-    if (trades.isEmpty()) {
-        Box(modifier.background(MaterialTheme.colorScheme.surfaceVariant), contentAlignment = Alignment.Center) { Text("No closed trades", color = TextSecondary) }
-        return
-    }
-    val values = trades.map { it.returnPercent }
-    val minValue = min(values.minOrNull() ?: 0.0, distribution.meanReturnPercent)
-    val maxValue = max(values.maxOrNull() ?: 0.0, distribution.meanReturnPercent)
-    val span = max(0.0001, maxValue - minValue)
-    Column(modifier) {
-        Canvas(Modifier.fillMaxWidth().weight(1f)) {
-            val left = 10.dp.toPx(); val right = size.width - 10.dp.toPx(); val top = 12.dp.toPx(); val bottom = size.height - 20.dp.toPx()
-            fun x(index: Int): Float = if (trades.size == 1) (left + right) / 2f else left + (right - left) * index.toFloat() / (trades.size - 1).toFloat()
-            fun y(value: Double): Float = bottom - ((value - minValue) / span).toFloat() * (bottom - top)
-            val zeroY = y(0.0)
-            if (zeroY in top..bottom) drawLine(Color.Gray.copy(alpha = 0.55f), Offset(left, zeroY), Offset(right, zeroY), 1.dp.toPx())
-            val meanY = y(distribution.meanReturnPercent)
-            drawLine(Color(0xFFE53935), Offset(left, meanY), Offset(right, meanY), 1.5.dp.toPx())
-            val path = Path()
-            trades.forEachIndexed { index, trade ->
-                val point = Offset(x(index), y(trade.returnPercent))
-                if (index == 0) path.moveTo(point.x, point.y) else path.lineTo(point.x, point.y)
-            }
-            drawPath(path, Color(0xFF3DDC84), style = Stroke(2.dp.toPx(), cap = StrokeCap.Round))
-            trades.forEachIndexed { index, trade -> drawCircle(classColorRaw(trade.tradeClass), 3.dp.toPx(), Offset(x(index), y(trade.returnPercent))) }
-        }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("Best ${String.format("%.2f%%", values.first())}", color = BrightGreen, style = MaterialTheme.typography.labelSmall)
-            Text("Mean ${String.format("%.2f%%", distribution.meanReturnPercent)}", color = Color(0xFFE53935), style = MaterialTheme.typography.labelSmall)
-            Text("Worst ${String.format("%.2f%%", values.last())}", color = DangerRed, style = MaterialTheme.typography.labelSmall)
-        }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-            listOf("A", "B", "C", "D").forEach { value -> Text("● $value", color = classColor(value), style = MaterialTheme.typography.labelSmall) }
         }
     }
 }
@@ -206,6 +135,6 @@ private fun MetricRow(firstLabel: String, firstValue: String, secondLabel: Strin
     }
 }
 
-private fun ratioText(value: Double, available: Boolean): String = if (!available || !value.isFinite()) "N/A" else String.format("%.2f", value)
-private fun classColor(value: String): Color = classColorRaw(value)
-private fun classColorRaw(value: String): Color = when (value.uppercase()) { "A" -> Color(0xFF00C853); "B" -> Color(0xFF64B5F6); "C" -> Color(0xFFFFB300); else -> Color(0xFFEF5350) }
+
+private fun ratioText(value: Double?): String = value?.takeIf { it.isFinite() }?.let { String.format("%.2f", it) } ?: "N/A"
+private fun percentText(value: Double?): String = value?.takeIf { it.isFinite() }?.let(::percent) ?: "N/A"

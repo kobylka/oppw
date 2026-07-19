@@ -1,4 +1,4 @@
-﻿package com.oppw.monitor.ui.screens
+package com.oppw.monitor.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -32,14 +32,10 @@ import com.oppw.monitor.util.leverage
 import com.oppw.monitor.util.liveSourceAge
 import com.oppw.monitor.util.money
 import com.oppw.monitor.util.percent
-import com.oppw.monitor.util.potentialEffectiveLeverage
 import com.oppw.monitor.util.price
 import com.oppw.monitor.util.shortDateTime
 import com.oppw.monitor.util.timeOnly
 import com.oppw.monitor.util.volume
-import java.time.DayOfWeek
-import java.time.Instant
-import java.time.ZoneId
 import kotlin.math.abs
 
 @Composable
@@ -53,12 +49,8 @@ fun PositionScreen(state: UiState, onRetry: () -> Unit) {
             if (position == null) {
                 val account = snapshot.account
                 val potential = snapshot.potentialPosition
-                val previewBalance = potential?.balance?.takeIf { it > 0.0 } ?: snapshot.account.balance
-                val calculatedEffectiveLeverage = potential?.let { potentialEffectiveLeverage(it.requiredDeposit, previewBalance, it.effectiveLeverage) } ?: 0.0
-                LazyColumn(
-                    Modifier.fillMaxSize().padding(horizontal = 14.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
+                val decision = snapshot.strategyDecision
+                LazyColumn(Modifier.fillMaxSize().padding(horizontal = 14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     item {
                         AppCard(Modifier.fillMaxWidth()) {
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -70,81 +62,100 @@ fun PositionScreen(state: UiState, onRetry: () -> Unit) {
                             }
                         }
                     }
-
                     item {
                         AppCard(Modifier.fillMaxWidth()) {
-                            SectionTitle("Next potential trade", if (potential?.available == true) "LIVE PREVIEW" else "UNAVAILABLE")
+                            SectionTitle("Pre-trade what-if ticket", if (potential?.available == true) "LIVE MT5" else "UNAVAILABLE")
                             when {
-                                potential == null -> {
-                                    Text("The publisher has not supplied potentialPosition data. Run MT5 loop v41 or newer and confirm the backend forwards snapshot.potentialPosition.", color = TextSecondary)
-                                }
+                                potential == null -> Text("The publisher has not supplied the v43 potentialPosition object.", color = TextSecondary)
                                 !potential.available -> {
-                                    Text("The next trade could not be calculated from the current MT5 account and price.", color = TextSecondary)
+                                    Text("MT5 could not calculate the next trade.", color = TextSecondary)
                                     if (potential.error.isNotBlank()) Text(potential.error, color = DangerRed)
-                                    if (potential.strategyLeverage > 0.0) Metric("Chosen leverage", leverage(potential.strategyLeverage))
-                                    if (potential.leverageReason.isNotBlank()) {
-                                        Text("Why ${potential.strategyLeverage.toInt()}x", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
-                                        Text(potential.leverageReason)
-                                    }
+                                    Metric("Chosen strategy leverage", leverage(potential.strategyLeverage))
+                                    if (potential.leverageReason.isNotBlank()) Text(potential.leverageReason)
                                 }
                                 else -> {
                                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                         Column {
                                             Text("${potential.side} ${potential.symbol}", style = MaterialTheme.typography.headlineMedium)
-                                            Text("Calculated at the current MT5 price", color = TextSecondary)
+                                            Text("Calculated at current MT5 BUY price", color = TextSecondary)
                                         }
                                         StatusChip("${potential.strategyLeverage.toInt()}x", "green")
                                     }
-                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                                        Metric("Potential volume", volume(potential.volume), Modifier.weight(1f), BrightGreen)
-                                        Metric("Current price", price(potential.price), Modifier.weight(1f))
-                                    }
-                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                                        Metric("Required deposit", money(potential.requiredDeposit, account.currency), Modifier.weight(1f))
-                                        Metric("Account balance", money(previewBalance, account.currency), Modifier.weight(1f))
-                                    }
-                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                                        Metric("Chosen leverage", leverage(potential.strategyLeverage), Modifier.weight(1f))
-                                        Metric("Effective leverage", leverage(calculatedEffectiveLeverage), Modifier.weight(1f))
-                                    }
-                                    Text("Effective leverage = 20 Ă— required deposit Ă· balance", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
-                                    if (potential.positionNotional > 0.0) {
-                                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                                            Metric("Potential notional", money(potential.positionNotional, account.currency), Modifier.weight(1f))
-                                            Metric("Sizing units", potential.sizingUnits.toString(), Modifier.weight(1f))
-                                        }
-                                    }
-                                    if (potential.leverageReason.isNotBlank()) {
-                                        Text("Why ${potential.strategyLeverage.toInt()}x", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
-                                        Text(potential.leverageReason)
-                                    }
+                                    MetricRow("Potential volume", volume(potential.volume), "Current price", price(potential.price), BrightGreen)
+                                    MetricRow("Required deposit", money(potential.requiredDeposit, account.currency), "Effective leverage", leverage(potential.effectiveLeverage))
+                                    MetricRow("Balance", money(potential.balance, account.currency), "Equity", money(potential.equity, account.currency))
+                                    MetricRow("Free margin now", money(potential.freeMargin, account.currency), "Free margin after", money(potential.freeMarginAfter, account.currency), if (potential.freeMarginAfter >= 0.0) BrightGreen else DangerRed)
+                                    MetricRow("Margin usage", percent(potential.marginUsagePercent), "Margin level after", percent(potential.marginLevelAfterPercent))
+                                    MetricRow("Potential notional", money(potential.positionNotional, account.currency), "Sizing units", potential.sizingUnits.toString())
+                                    Text("Margin source: ${potential.depositSource}", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
                                 }
                             }
                         }
                     }
-
+                    if (potential?.available == true) {
+                        item {
+                            AppCard(Modifier.fillMaxWidth()) {
+                                SectionTitle("Potential hard stop loss", potential.stopLossFormula)
+                                MetricRow("Underlying stop", percent(potential.potentialStopLossPercent), "Stop price", price(potential.potentialStopLossPrice), DangerRed)
+                                MetricRow("Cash P/L at stop", money(potential.potentialStopLossCash, account.currency), "Account return at stop", percent(potential.accountLossPercentAtStop), DangerRed)
+                                Text("At ${potential.strategyLeverage.toInt()}x, the underlying stop is ${String.format("%.2f", potential.potentialStopLossPercent)}%. Formula: −0.5 ÷ leverage.", color = TextSecondary)
+                            }
+                        }
+                        item {
+                            AppCard(Modifier.fillMaxWidth()) {
+                                SectionTitle("What-if scenarios", potential.scenarios.size.toString())
+                                potential.scenarios.forEach { scenario ->
+                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                        Text(scenario.label, style = MaterialTheme.typography.titleMedium)
+                                        Text(money(scenario.profit, account.currency), color = if (scenario.profit >= 0.0) BrightGreen else DangerRed)
+                                    }
+                                    Text("Price ${price(scenario.price)} · underlying ${percent(scenario.underlyingReturnPercent)} · account ${percent(scenario.accountReturnPercent)} · balance ${money(scenario.balanceAfter, account.currency)}", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                                }
+                            }
+                        }
+                    }
+                    item {
+                        AppCard(Modifier.fillMaxWidth()) {
+                            SectionTitle("Strategy decision recorder", decision?.outcome ?: "NO RECORD")
+                            if (decision == null) {
+                                Text("No structured strategy decision has been published yet.", color = TextSecondary)
+                            } else {
+                                MetricRow("Selected leverage", leverage(decision.selectedLeverage), "Decision ID", decision.decisionId.take(8))
+                                MetricRow("Previous full week", percent(decision.previousFullWeekChange * 100.0), "Previous trade", percent(decision.previousTradeChange * 100.0))
+                                Text(decision.leverageReason, style = MaterialTheme.typography.bodyLarge)
+                                Text("Week source: ${decision.previousFullWeekSource}", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                                Text("Trade source: ${decision.previousTradeSource}", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                                Text("Recorded ${shortDateTime(decision.recordedAt)} · build ${decision.build}", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                                if (decision.error.isNotBlank()) Text(decision.error, color = DangerRed)
+                            }
+                        }
+                    }
+                    snapshot.lastClosedTrade?.let { trade ->
+                        item {
+                            AppCard(Modifier.fillMaxWidth()) {
+                                SectionTitle("Last publisher-labeled trade", "Class ${trade.tradeClass}")
+                                MetricRow("Pre-leverage return", percent(trade.preleverageReturnPercent), "Exit reason", trade.exitReason)
+                                Text("Closed ${shortDateTime(trade.closedAt)} · position ${trade.positionIdentifier}", color = TextSecondary)
+                            }
+                        }
+                    }
                     state.error?.let { error -> item { ErrorPanel("Showing cached data. $error", onRetry) } }
                 }
                 return
             }
-            val account = snapshot.account
-            val weekend = isWeekend(state.nowEpochMs)
-            val ohPending = !weekend && snapshot.connection.nextAction.equals("OH", true)
-            val suppliedConditions = snapshot.conditions.filterNot { it.name.equals("OH", true) && !ohPending }.sortedBy { it.distancePoints }
-            val closest = snapshot.closestCondition?.takeUnless { it.name.equals("OH", true) && !ohPending } ?: suppliedConditions.firstOrNull()
-            val conditions = suppliedConditions.filterNot { condition -> sameCondition(condition, closest) }
-            val minimumBalance = account.deposit * 1.765
-            val exposure = account.deposit * 20.0
-            val effectiveLeverage = if (account.equity > 0.0) exposure / account.equity else 0.0
-            val potentialTakeProfit = position.potentialTakeProfit.takeIf { it > 0.0 }
-                ?: conditions.firstOrNull { it.name.equals("OH", true) || it.name.equals("CH", true) }?.targetPrice
-                ?: 0.0
-            val liveTickAge = liveSourceAge(position.tickAgeSeconds, position.priceTime.ifBlank { snapshot.connection.lastSync }, state.nowEpochMs)
 
-            LazyColumn(
-                Modifier.fillMaxSize().padding(horizontal = 14.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
+            val account = snapshot.account
+            val ohPending = snapshot.connection.nextAction.equals("OH", true)
+            val visibleConditions = snapshot.conditions.filterNot { it.name.equals("OH", true) && !ohPending }.sortedBy { it.distancePoints }
+            val rawClosest = snapshot.closestCondition?.takeUnless { it.name.equals("OH", true) && !ohPending } ?: visibleConditions.firstOrNull()
+            val conditions = visibleConditions.filterNot { sameCondition(it, rawClosest) }
+            val closest = rawClosest
+            val minimumBalance = account.deposit * 1.765
+            val exposure = position.exposure.takeIf { it > 0.0 } ?: account.deposit * 20.0
+            val effectiveLeverage = position.effectiveLeverage.takeIf { it > 0.0 } ?: if (account.balance > 0.0) exposure / account.balance else 0.0
+            val potentialTakeProfit = position.potentialTakeProfit.takeIf { it > 0.0 } ?: visibleConditions.firstOrNull { it.name.equals("OH", true) || it.name.equals("CH", true) }?.targetPrice ?: 0.0
+            val liveTickAge = liveSourceAge(position.tickAgeSeconds, position.priceTime.ifBlank { snapshot.connection.lastSync }, state.nowEpochMs)
+            LazyColumn(Modifier.fillMaxSize().padding(horizontal = 14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 item {
                     AppCard(Modifier.fillMaxWidth()) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -155,79 +166,26 @@ fun PositionScreen(state: UiState, onRetry: () -> Unit) {
                             }
                             StatusChip(position.side, "green")
                         }
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                            Metric("Volume", volume(position.volume), Modifier.weight(1f))
-                            Metric("Open price", price(position.openPrice), Modifier.weight(1f))
-                        }
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                            Metric("Current bid", price(position.bid), Modifier.weight(1f), if (position.profit >= 0) BrightGreen else DangerRed)
-                            Metric("Current ask", price(position.ask), Modifier.weight(1f))
-                        }
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                            Metric("Bid time", timeOnly(position.bidAt.ifBlank { position.priceTime }), Modifier.weight(1f))
-                            Metric("Ask time", timeOnly(position.askAt.ifBlank { position.priceTime }), Modifier.weight(1f))
-                        }
+                        MetricRow("Volume", volume(position.volume), "Open price", price(position.openPrice))
+                        MetricRow("Current bid", price(position.bid), "Current ask", price(position.ask), if (position.profit >= 0) BrightGreen else DangerRed)
+                        MetricRow("Bid time", timeOnly(position.bidAt.ifBlank { position.priceTime }), "Ask time", timeOnly(position.askAt.ifBlank { position.priceTime }))
                         Text("Price age: ${age(liveTickAge)}", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                            Metric("Stop loss", price(position.stopLoss), Modifier.weight(1f), DangerRed)
-                            Metric("Potential OH/CH target", price(potentialTakeProfit), Modifier.weight(1f), BrightGreen)
-                        }
+                        MetricRow("Stop loss", price(position.stopLoss), "Potential OH/CH target", price(potentialTakeProfit), DangerRed)
                     }
                 }
-
-                if (weekend) {
-                    item {
-                        AppCard(Modifier.fillMaxWidth()) {
-                            SectionTitle("Market closed", "Weekend")
-                            Text("The position remains open because the Friday close did not complete. No OH, CH or TO countdown is active while the market is closed.", color = DangerRed)
-                        }
-                    }
-                }
-
                 item { ConditionCard("Closest condition", closest, true) }
-
                 item { SectionTitle("All other conditions", conditions.size.toString()) }
-                if (conditions.isEmpty()) {
-                    item {
-                        AppCard(Modifier.fillMaxWidth()) {
-                            Text("No conditions supplied by the strategy publisher.", color = TextSecondary)
-                        }
-                    }
-                } else {
-                    items(conditions.size, key = { index -> "condition-${conditions[index].name}-$index" }) { index ->
-                        val condition = conditions[index]
-                        ConditionCard(condition.name, condition, false)
-                    }
-                }
-
+                if (conditions.isEmpty()) item { AppCard(Modifier.fillMaxWidth()) { Text("No other active price conditions.", color = TextSecondary) } }
+                else items(conditions.size, key = { index -> "condition-${conditions[index].name}-$index" }) { index -> ConditionCard(conditions[index].name, conditions[index], false) }
+                item { AppCard(Modifier.fillMaxWidth()) { SectionTitle("Risk to stop loss"); RiskBar(position.stopLoss, position.openPrice, position.bid) } }
                 item {
                     AppCard(Modifier.fillMaxWidth()) {
-                        SectionTitle("Risk to stop loss")
-                        RiskBar(position.stopLoss, position.openPrice, position.bid)
+                        MetricRow("Unrealized P/L", money(position.profit, account.currency), "P/L % leveraged", percent(position.leveragedProfitPercent), if (position.profit >= 0) BrightGreen else DangerRed)
+                        MetricRow("Exposure", money(exposure, account.currency), "Effective leverage", leverage(effectiveLeverage))
+                        MetricRow("Deposit", money(account.deposit, account.currency), "Minimum balance at 50% margin", money(minimumBalance, account.currency))
+                        MetricRow("Protection", humanProtection(position.protectionRegime), "Break-even", if (position.breakEvenArmed) "ARMED" else "OFF", if (position.breakEvenArmed) BrightGreen else TextSecondary)
                     }
                 }
-
-                item {
-                    AppCard(Modifier.fillMaxWidth()) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                            Metric("Unrealized P/L", money(position.profit, account.currency), Modifier.weight(1f), if (position.profit >= 0) BrightGreen else DangerRed)
-                            Metric("P/L % leveraged", percent(position.leveragedProfitPercent), Modifier.weight(1f), if (position.leveragedProfitPercent >= 0) BrightGreen else DangerRed)
-                        }
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                            Metric("Exposure", money(exposure, account.currency), Modifier.weight(1f))
-                            Metric("Effective leverage", leverage(effectiveLeverage), Modifier.weight(1f))
-                        }
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                            Metric("Deposit", money(account.deposit, account.currency), Modifier.weight(1f))
-                            Metric("Minimum balance at 50% margin", money(minimumBalance, account.currency), Modifier.weight(1f))
-                        }
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                            Metric("Protection", humanProtection(position.protectionRegime), Modifier.weight(1f))
-                            Metric("Break-even", if (position.breakEvenArmed) "ARMED" else "OFF", Modifier.weight(1f), if (position.breakEvenArmed) BrightGreen else TextSecondary)
-                        }
-                    }
-                }
-
                 state.error?.let { error -> item { ErrorPanel("Showing cached data. $error", onRetry) } }
             }
         }
@@ -235,38 +193,28 @@ fun PositionScreen(state: UiState, onRetry: () -> Unit) {
 }
 
 @Composable
+private fun MetricRow(firstLabel: String, firstValue: String, secondLabel: String, secondValue: String, valueColor: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.onSurface) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        Metric(firstLabel, firstValue, Modifier.weight(1f), valueColor)
+        Metric(secondLabel, secondValue, Modifier.weight(1f), valueColor)
+    }
+}
+
+private fun sameCondition(first: PriceCondition, second: PriceCondition?): Boolean {
+    if (second == null) return false
+    return first.name.equals(second.name, true) && first.source.equals(second.source, true) && abs(first.targetPrice - second.targetPrice) <= 1e-6
+}
+
+@Composable
 private fun ConditionCard(title: String, condition: PriceCondition?, nearest: Boolean) {
     AppCard(Modifier.fillMaxWidth()) {
         SectionTitle(title, condition?.source ?: "")
-        if (condition == null) {
-            Text("No active price condition", color = TextSecondary)
-            return@AppCard
-        }
+        if (condition == null) { Text("No active price condition", color = TextSecondary); return@AppCard }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(condition.name, color = if (nearest) PrimaryBlue else MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.headlineMedium)
             if (nearest) StatusChip("NEAREST")
         }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            Metric("Target price", price(condition.targetPrice), Modifier.weight(1f))
-            Metric("Distance", "${price(condition.distancePoints)} pts\n(${String.format("%.2f", condition.distancePercent)}%)", Modifier.weight(1f), if (nearest) PrimaryBlue else MaterialTheme.colorScheme.onSurface)
-        }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            Metric("Current price", price(condition.currentPrice), Modifier.weight(1f))
-            Metric("Direction", condition.direction.replaceFirstChar { it.uppercase() }, Modifier.weight(1f))
-        }
+        MetricRow("Target price", price(condition.targetPrice), "Distance", "${price(condition.distancePoints)} pts\n(${String.format("%.2f", condition.distancePercent)}%)", if (nearest) PrimaryBlue else MaterialTheme.colorScheme.onSurface)
+        MetricRow("Current price", price(condition.currentPrice), "Direction", condition.direction.replaceFirstChar { it.uppercase() })
     }
 }
-
-
-private fun sameCondition(first: PriceCondition, second: PriceCondition?): Boolean {
-    if (second == null) return false
-    return first.name.trim().equals(second.name.trim(), ignoreCase = true) &&
-        first.source.trim().equals(second.source.trim(), ignoreCase = true) &&
-        abs(first.targetPrice - second.targetPrice) <= 0.01
-}
-
-private fun isWeekend(nowEpochMs: Long): Boolean {
-    val day = Instant.ofEpochMilli(nowEpochMs).atZone(ZoneId.of("Europe/Warsaw")).dayOfWeek
-    return day == DayOfWeek.SATURDAY || day == DayOfWeek.SUNDAY
-}
-

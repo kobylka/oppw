@@ -31,8 +31,6 @@ data class MonitorSnapshot(
     val marketStats: MarketStats,
     val equityCurves: EquityCurves,
     val equityHistory: List<EquityPoint>,
-    val strategyDecision: StrategyDecision? = null,
-    val lastClosedTrade: LastClosedTrade? = null,
 )
 
 data class ConnectionStatus(
@@ -76,60 +74,6 @@ data class PotentialPosition(
     val positionNotional: Double,
     val sizingUnits: Int,
     val error: String,
-    val generatedAt: String = "",
-    val build: String = "",
-    val priceSource: String = "",
-    val brokerMarginLeverage: Double = 0.0,
-    val depositSource: String = "",
-    val equity: Double = 0.0,
-    val freeMargin: Double = 0.0,
-    val freeMarginAfter: Double = 0.0,
-    val marginUsagePercent: Double = 0.0,
-    val marginLevelAfterPercent: Double = 0.0,
-    val previousFullWeekChange: Double = 0.0,
-    val previousFullWeekSource: String = "",
-    val previousTradeChange: Double = 0.0,
-    val previousTradeSource: String = "",
-    val potentialStopLossPercent: Double = 0.0,
-    val potentialStopLossRatio: Double = 0.0,
-    val potentialStopLossPrice: Double = 0.0,
-    val potentialStopLossCash: Double = 0.0,
-    val accountLossPercentAtStop: Double = 0.0,
-    val stopLossFormula: String = "",
-    val minimumVolumeFloor: Boolean = false,
-    val scenarios: List<WhatIfScenario> = emptyList(),
-)
-
-data class WhatIfScenario(
-    val label: String,
-    val underlyingReturnPercent: Double,
-    val price: Double,
-    val profit: Double,
-    val balanceAfter: Double,
-    val accountReturnPercent: Double,
-)
-
-data class StrategyDecision(
-    val decisionId: String,
-    val recordedAt: String,
-    val build: String,
-    val outcome: String,
-    val selectedLeverage: Double,
-    val leverageReason: String,
-    val previousFullWeekChange: Double,
-    val previousFullWeekSource: String,
-    val previousTradeChange: Double,
-    val previousTradeSource: String,
-    val error: String,
-)
-
-data class LastClosedTrade(
-    val positionIdentifier: Long,
-    val closedAt: String,
-    val exitReason: String,
-    val preleverageReturn: Double,
-    val preleverageReturnPercent: Double,
-    val tradeClass: String  = "",
 )
 
 data class PositionStatus(
@@ -254,12 +198,6 @@ data class AnalyticsSummary(
     val valueAtRisk95Percent: Double,
     val expectedShortfall95Percent: Double,
     val riskSampleDays: Int,
-    val sharpeAvailable: Boolean = false,
-    val sortinoAvailable: Boolean = false,
-    val sortinoInfinite: Boolean = false,
-    val ratiosAnnualized: Boolean = false,
-    val periodsPerYear: Int = 52,
-    val ratioSampleTrades: Int = 0,
 )
 
 data class ExitReasonAnalytics(
@@ -304,32 +242,6 @@ data class TradeAnalytics(
     val maxProfit: Double,
     val maxDrawdown: Double,
     val closed: Boolean,
-    val preleverageReturnPercent: Double = 0.0,
-    val tradeClass: String = "",
-)
-
-data class TradeClassAnalytics(
-    val tradeClass: String = "",
-    val trades: Int,
-    val profit: Double,
-    val averagePreleverageReturnPercent: Double,
-    val winRate: Double,
-)
-
-data class TradeDistributionPoint(
-    val rank: Int,
-    val ticket: Long,
-    val returnPercent: Double,
-    val tradeClass: String,
-    val exitReason: String,
-    val closedAt: String,
-    val profit: Double,
-)
-
-data class TradeDistribution(
-    val sortOrder: String = "BEST_TO_WORST",
-    val meanReturnPercent: Double = 0.0,
-    val trades: List<TradeDistributionPoint> = emptyList(),
 )
 
 data class AnalyticsResponse(
@@ -338,8 +250,6 @@ data class AnalyticsResponse(
     val exitReasons: List<ExitReasonAnalytics>,
     val weekly: List<WeeklyAnalytics>,
     val recentTrades: List<TradeAnalytics>,
-    val tradeClasses: List<TradeClassAnalytics> = emptyList(),
-    val tradeDistribution: TradeDistribution = TradeDistribution(),
 )
 
 data class UiState(

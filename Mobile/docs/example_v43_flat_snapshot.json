@@ -1,0 +1,62 @@
+{
+  "potentialPosition": {
+    "available": true,
+    "generatedAt": "2026-07-19T10:30:00+02:00",
+    "build": "2026-07-19-what-if-decision-trade-class-v43",
+    "symbol": "US100",
+    "side": "BUY",
+    "price": 28750.0,
+    "priceSource": "MT5 current BUY price",
+    "volume": 0.01,
+    "requiredDeposit": 2180.0,
+    "depositSource": "MT5 order_calc_margin(proposed volume, current BUY price)",
+    "balance": 28200.0,
+    "equity": 28200.0,
+    "freeMargin": 28200.0,
+    "freeMarginAfter": 26020.0,
+    "marginUsagePercent": 7.730496,
+    "marginLevelAfterPercent": 1293.577982,
+    "brokerMarginLeverage": 20.0,
+    "effectiveLeverage": 1.546099,
+    "strategyLeverage": 8.0,
+    "leverageReason": "8x because previous full-week and previous-trade thresholds were not breached",
+    "potentialStopLossPercent": -6.25,
+    "potentialStopLossRatio": 0.9375,
+    "potentialStopLossPrice": 26953.12,
+    "potentialStopLossCash": -1796.88,
+    "accountLossPercentAtStop": -6.371915,
+    "stopLossFormula": "underlying stop = -0.5 / strategy leverage",
+    "scenarios": [
+      {"label": "-0.5%", "underlyingReturnPercent": -0.5, "price": 28606.25, "profit": -143.75, "balanceAfter": 28056.25, "accountReturnPercent": -0.509752},
+      {"label": "-1.0%", "underlyingReturnPercent": -1.0, "price": 28462.5, "profit": -287.5, "balanceAfter": 27912.5, "accountReturnPercent": -1.019504},
+      {"label": "HARD SL", "underlyingReturnPercent": -6.25, "price": 26953.12, "profit": -1796.88, "balanceAfter": 26403.12, "accountReturnPercent": -6.371915}
+    ]
+  },
+  "strategyDecision": {
+    "decisionId": "example-stable-decision-id",
+    "recordedAt": "2026-07-19T10:30:00+02:00",
+    "build": "2026-07-19-what-if-decision-trade-class-v43",
+    "account": "DEMO",
+    "decision": "NEXT_WEEK_LONG_ENTRY",
+    "outcome": "READY",
+    "selectedLeverage": 8.0,
+    "leverageReason": "8x because previous full-week and previous-trade thresholds were not breached",
+    "inputs": {
+      "previousFullWeekChange": -0.01,
+      "previousFullWeekSource": "market history",
+      "previousTradeChange": 0.002,
+      "previousTradeSource": "MT5 deal history",
+      "fullWeekTriggerPercent": -2.5,
+      "previousTradeTriggerPercent": -0.7
+    },
+    "error": ""
+  },
+  "lastClosedTrade": {
+    "positionIdentifier": 123456,
+    "closedAt": "2026-07-17T21:59:57+02:00",
+    "exitReason": "TO",
+    "preleverageReturn": 0.0069,
+    "preleverageReturnPercent": 0.69,
+    "tradeClass": "B"
+  }
+}

@@ -207,10 +207,7 @@ object JsonParser {
 
     private fun parseLastClosedTrade(json: JSONObject) = LastClosedTrade(
         positionIdentifier = json.optLong("positionIdentifier"), closedAt = json.optString("closedAt"), exitReason = json.optString("exitReason"),
-        preleverageReturn = json.optDoubleAny("preleverageReturn", "preleverage_return"),
-        preleverageReturnPercent = json.optDoubleAny("preleverageReturnPercent", "preleverage_return_percent").takeIf { it != 0.0 }
-            ?: json.optDoubleAny("preleverageReturn", "preleverage_return") * 100.0,
-        tradeClass = json.optStringAny("tradeClass", "trade_class"),
+        preleverageReturn = json.optDouble("preleverageReturn"), preleverageReturnPercent = json.optDouble("preleverageReturnPercent"), tradeClass = json.optString("tradeClass"),
     )
 
     private fun parsePosition(json: JSONObject) = PositionStatus(

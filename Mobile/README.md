@@ -1,94 +1,129 @@
-# OPPW Monitor Android v11
+# OPPW v12 full change set
 
-Complete Android Studio project based on v10.1.1. The application remains read-only and contains no trading controls.
+This package upgrades the uploaded OPPW MT5 continuous-loop v41, the monitor backend analytics endpoint, and the Android v11 source.
 
-## v11
+## Implemented
 
-When the selected account is flat, the Position screen now displays the next potential trade published by MT5 loop v41 or newer:
+### Pre-trade What-if ticket
 
-- side and symbol;
-- potential volume;
-- current MT5 price used for sizing;
-- required margin deposit;
-- account balance used for sizing;
-- chosen strategy leverage, normally 8x or 10x;
-- the exact reason for choosing 8x or 10x;
-- effective leverage calculated as `required deposit / balance`;
-- potential notional and sizing units when supplied.
+While the account is flat, MT5 v43 publishes a structured `potentialPosition` object containing:
 
-When MT5 cannot calculate the preview, the Position screen displays the publisher error and still shows the selected leverage and leverage reason when available. When the backend has not received a `potentialPosition` object, the screen explicitly states that MT5 v41 or newer is required.
+- proposed side, symbol, current MT5 BUY price and volume;
+- MT5 `order_calc_margin` required deposit and its source;
+- balance, equity, free margin before/after, margin usage and projected margin level;
+- strategy leverage and effective leverage;
+- proposed notional and sizing units;
+- hard-stop price, cash loss and account return at the stop;
+- scenarios for -0.5%, -1%, hard SL, -3% and -5% underlying moves.
 
-An open position continues to use the existing Position screen unchanged.
-
-## Required MT5 payload
-
-MT5 v41 publishes this object inside `snapshot` while flat:
-
-```json
-{
-  "potentialPosition": {
-    "available": true,
-    "symbol": "US100",
-    "side": "BUY",
-    "price": 28750.0,
-    "volume": 0.01,
-    "requiredDeposit": 2180.0,
-    "balance": 28200.0,
-    "effectiveLeverage": 0.0773049645,
-    "strategyLeverage": 8.0,
-    "leverageReason": "8x because previous full-week change -1.2000% >= -2.5000% and previous trade change -0.3000% >= -0.7000%",
-    "positionNotional": 28750.0,
-    "sizingUnits": 1,
-    "error": ""
-  }
-}
-```
-
-The parser accepts both camelCase and snake_case variants. The app recalculates effective leverage from required deposit and balance, using the publisher value only as a fallback.
-
-## Authentication
-
-The v9.1 authentication implementation remains unchanged:
+The requested underlying hard-stop formula is:
 
 ```text
-app/src/main/java/com/oppw/monitor/auth/AuthModels.kt
-app/src/main/java/com/oppw/monitor/auth/SecureSessionStore.kt
-app/src/main/java/com/oppw/monitor/data/StatusApiClient.kt
-app/src/main/java/com/oppw/monitor/data/StatusRepository.kt
+stop return = -0.5 / strategy leverage
+8x  = -6.25%
+10x = -5.00%
 ```
 
-Pairing continues to read the nested `session` object returned by `auth/pair.php`. Existing paired sessions remain encrypted with Android Keystore.
+### Strategy decision recorder
 
-## Existing retained behavior
+MT5 publishes `strategyDecision` and emits `STRATEGY_DECISION_RECORDED` whenever a meaningful decision input changes. It records:
 
-- Weekend action suppression for a position left open after Friday.
-- Time-scaled equity curves.
-- Closest-condition de-duplication.
-- Closed-trade Sharpe and Sortino.
-- Routine-log filtering without blank rows.
-- Existing account selection, notifications, Firebase integration, refresh-token rotation and unpairing.
+- stable decision ID;
+- selected 8x/10x leverage and exact reason;
+- previous completed-week return and source;
+- previous closed-trade return and source;
+- sizing, MT5 margin, effective leverage and hard-stop risk;
+- publisher build and any calculation error.
 
-## Configure and build
+The decision sources are recovered from MT5 market/deal history when possible and explicitly marked as state fallbacks otherwise.
 
-Preserve your existing `local.properties`, or copy `local.properties.example` and set:
+### Annualized closed-trade Sharpe and Sortino
 
-```properties
-OPPW_API_BASE_URL=https://your-domain.example/oppw-backend/
+`backend/analytics.php` now uses closed-trade account returns only and annualizes with `sqrt(52)` because the strategy normally produces one observation per week.
+
+- Minimum sample: 2 valid closed-trade returns, not 5.
+- Sharpe uses sample standard deviation.
+- Sortino uses a zero target and downside deviation across all observations.
+- If all returns are positive, Sortino is displayed as `∞` instead of `N/A`.
+- Sharpe remains mathematically undefined when all sampled returns are identical because volatility is zero.
+
+### Guy Fleury A/B/C/D trade classes
+
+Classification priority is fixed as:
+
+1. **A:** pre-leverage return `>= +0.7%`.
+2. **B:** pre-leverage return `>= 0%` and `< +0.7%`.
+3. **C:** negative break-even or TSL exit.
+4. **D:** every remaining trade, including negative TO/SL exits.
+
+MT5 v43 includes `preleverage_return` and `trade_class` in every new `POSITION_CLOSED` publisher event. The database migration adds persistent columns, backfills historical trades and installs insert/update triggers so manual and publisher-created records are classified consistently.
+
+### Best-to-worst trade graph
+
+Analytics returns every closed trade sorted by pre-leverage return descending. Android defensively sorts it again and renders:
+
+```text
+left = best trade  ->  right = worst trade
 ```
 
-Build with Android Studio/JDK 17 and Android SDK 37:
+The chart includes a zero line, mean-return line and A/B/C/D-colored points.
+
+## Package contents
+
+```text
+mt5/oppw_mt5_continuous_v43.py
+mt5/oppw_mt5_v41_to_v43.diff
+backend/analytics.php
+backend/sql/migrate_v12_trade_classes.sql
+android_patch/apply_v12_patch.py
+android_patch/AnalyticsScreen.kt
+android_patch/PositionScreen.kt
+docs/example_v43_flat_snapshot.json
+tests/
+```
+
+No account configuration, password, write token, Firebase secret or other private credential is included.
+
+## Deployment order
+
+1. Back up the OPPW database.
+2. Run `backend/sql/migrate_v12_trade_classes.sql` once.
+3. Upload `backend/analytics.php` over the existing analytics endpoint. Preserve the existing private `lib.php` and configuration.
+4. Replace the Python loop used by both roles with `mt5/oppw_mt5_continuous_v43.py`. Preserve `oppw-mt5-config.py` and `real-mt5-config.py`.
+5. Apply the Android changes to the existing v11/v11.2/v11.3 source:
+
+```powershell
+py .\android_patch\apply_v12_patch.py D:\oppw\Mobile
+```
+
+The patch creates `.v11.bak` backups of modified Kotlin/Gradle files and sets Android version `12.0.0`, code `20`.
+
+6. Build with JDK 17 and the same Android SDK/signing key used for the existing application:
 
 ```powershell
 cd D:\oppw\Mobile
 .\gradlew.bat clean assembleDebug
 ```
 
-Install over the existing app with the same signing key to preserve pairing:
+7. Install over the existing application to preserve its paired encrypted session:
 
 ```powershell
 adb install -r .\app\build\outputs\apk\debug\app-debug.apk
 ```
 
-Version name: `11.0.0`  
-Version code: `15`  
-Application ID: `com.oppw.monitor`
+## Verification
+
+With a flat account, open **Position** and verify:
+
+- required deposit states that it comes from MT5 `order_calc_margin`;
+- 8x shows a -6.25% underlying hard stop;
+- 10x shows a -5.00% underlying hard stop;
+- the scenario table and decision recorder are visible.
+
+After two non-identical closed trades, open **Analytics** and verify:
+
+- Sharpe is no longer blocked by an arbitrary five-trade minimum;
+- Sharpe/Sortino are labeled annualized;
+- all four trade-class rows are shown;
+- every recent trade has a class;
+- the distribution graph runs from best on the left to worst on the right.

@@ -85,9 +85,6 @@ object JsonParser {
                 recoveryFactor = summary.optDouble("recoveryFactor"), consistencyScore = summary.optDouble("consistencyScore"), maxWinStreak = summary.optInt("maxWinStreak"),
                 maxLossStreak = summary.optInt("maxLossStreak"), timeInMarketPercent = summary.optDouble("timeInMarketPercent"), bestTrade = summary.optDouble("bestTrade"),
                 worstTrade = summary.optDouble("worstTrade"), sharpeRatio = summary.optDouble("sharpeRatio"), sortinoRatio = summary.optDouble("sortinoRatio"),
-                sharpeAvailable = summary.optBoolean("sharpeAvailable"), sortinoAvailable = summary.optBoolean("sortinoAvailable"),
-                sortinoInfinite = summary.optBoolean("sortinoInfinite"), ratiosAnnualized = summary.optBoolean("ratiosAnnualized"),
-                periodsPerYear = summary.optInt("periodsPerYear", 52), ratioSampleTrades = summary.optInt("ratioSampleTrades"),
                 calmarRatio = summary.optDouble("calmarRatio"), omegaRatio = summary.optDouble("omegaRatio"), ulcerIndexPercent = summary.optDouble("ulcerIndexPercent"),
                 valueAtRisk95Percent = summary.optDouble("valueAtRisk95Percent"), expectedShortfall95Percent = summary.optDouble("expectedShortfall95Percent"),
                 riskSampleDays = summary.optInt("riskSampleDays"),
@@ -117,27 +114,9 @@ object JsonParser {
                     durationSeconds = item.optLong("durationSeconds"), mfePoints = item.optDouble("mfePoints"), maePoints = item.optDouble("maePoints"),
                     entrySlippagePoints = item.optDouble("entrySlippagePoints"), exitSlippagePoints = item.optDouble("exitSlippagePoints"),
                     maxProfit = item.optDouble("maxProfit"), maxDrawdown = item.optDouble("maxDrawdown"), closed = item.optBoolean("closed"),
-                        preleverageReturnPercent = item.optDouble("preleverageReturnPercent"), tradeClass = item.optString("tradeClass"),
                 )) }
             },
-                    tradeClasses = buildList {
-                val values = root.optJSONArray("tradeClasses") ?: JSONArray()
-                for (i in 0 until values.length()) values.getJSONObject(i).let { item -> add(TradeClassAnalytics(
-                    tradeClass = item.optString("class", item.optString("tradeClass")), trades = item.optInt("trades"), profit = item.optDouble("profit"),
-                    averagePreleverageReturnPercent = item.optDouble("averagePreleverageReturnPercent"), winRate = item.optDouble("winRate"),
-                )) }
-            },
-            tradeDistribution = (root.optJSONObject("tradeDistribution") ?: JSONObject()).let { distribution -> TradeDistribution(
-                sortOrder = distribution.optString("sortOrder", "BEST_TO_WORST"), meanReturnPercent = distribution.optDouble("meanReturnPercent"),
-                trades = buildList {
-                    val values = distribution.optJSONArray("trades") ?: JSONArray()
-                    for (i in 0 until values.length()) values.getJSONObject(i).let { item -> add(TradeDistributionPoint(
-                        rank = item.optInt("rank"), ticket = item.optLong("ticket"), returnPercent = item.optDouble("returnPercent"),
-                        tradeClass = item.optString("tradeClass"), exitReason = item.optString("exitReason"), closedAt = item.optString("closedAt"), profit = item.optDouble("profit"),
-                    )) }
-                },
-            ) },
-)
+        )
     }
 
     private fun parseSnapshot(json: JSONObject): MonitorSnapshot {
@@ -147,8 +126,6 @@ object JsonParser {
             connection = parseConnection(json.getJSONObject("connection")), account = parseAccount(json.getJSONObject("account")),
             position = json.optJSONObject("position")?.takeUnless { it.has("open") && !it.optBoolean("open") }?.let(::parsePosition),
             potentialPosition = (json.optJSONObject("potentialPosition") ?: json.optJSONObject("potential_position"))?.let(::parsePotentialPosition),
-            strategyDecision = (json.optJSONObject("strategyDecision") ?: json.optJSONObject("strategy_decision"))?.let(::parseStrategyDecision),
-            lastClosedTrade = (json.optJSONObject("lastClosedTrade") ?: json.optJSONObject("last_closed_trade"))?.let(::parseLastClosedTrade),
             closestCondition = closest, conditions = conditions, marketStats = parseMarketStats(json.optJSONObject("marketStats")),
             equityCurves = parseEquityCurves(json.optJSONObject("equityCurves")), equityHistory = parseEquity(json.optJSONArray("equityHistory") ?: JSONArray()),
         )
@@ -176,41 +153,7 @@ object JsonParser {
         strategyLeverage = json.optDoubleAny("strategyLeverage", "strategy_leverage", "chosenLeverage", "chosen_leverage"),
         leverageReason = json.optStringAny("leverageReason", "leverage_reason"),
         positionNotional = json.optDoubleAny("positionNotional", "position_notional"), sizingUnits = json.optIntAny("sizingUnits", "sizing_units"),
-        error = json.optStringAny("error"), generatedAt = json.optStringAny("generatedAt", "generated_at"), build = json.optStringAny("build"),
-        priceSource = json.optStringAny("priceSource", "price_source"), brokerMarginLeverage = json.optDoubleAny("brokerMarginLeverage", "broker_margin_leverage"),
-        depositSource = json.optStringAny("depositSource", "deposit_source"), equity = json.optDoubleAny("equity"),
-        freeMargin = json.optDoubleAny("freeMargin", "free_margin"), freeMarginAfter = json.optDoubleAny("freeMarginAfter", "free_margin_after"),
-        marginUsagePercent = json.optDoubleAny("marginUsagePercent", "margin_usage_percent"), marginLevelAfterPercent = json.optDoubleAny("marginLevelAfterPercent", "margin_level_after_percent"),
-        previousFullWeekChange = json.optDoubleAny("previousFullWeekChange", "previous_full_week_change"), previousFullWeekSource = json.optStringAny("previousFullWeekSource", "previous_full_week_source"),
-        previousTradeChange = json.optDoubleAny("previousTradeChange", "previous_trade_change"), previousTradeSource = json.optStringAny("previousTradeSource", "previous_trade_source"),
-        potentialStopLossPercent = json.optDoubleAny("potentialStopLossPercent", "potential_stop_loss_percent"), potentialStopLossRatio = json.optDoubleAny("potentialStopLossRatio", "potential_stop_loss_ratio"),
-        potentialStopLossPrice = json.optDoubleAny("potentialStopLossPrice", "potential_stop_loss_price"), potentialStopLossCash = json.optDoubleAny("potentialStopLossCash", "potential_stop_loss_cash"),
-        accountLossPercentAtStop = json.optDoubleAny("accountLossPercentAtStop", "account_loss_percent_at_stop"), stopLossFormula = json.optStringAny("stopLossFormula", "stop_loss_formula"),
-        minimumVolumeFloor = json.optBooleanAny("minimumVolumeFloor", "minimum_volume_floor"), scenarios = buildList {
-            val values = json.optJSONArray("scenarios") ?: JSONArray()
-            for (i in 0 until values.length()) values.getJSONObject(i).let { item -> add(WhatIfScenario(
-                label = item.optString("label"), underlyingReturnPercent = item.optDouble("underlyingReturnPercent"), price = item.optDouble("price"),
-                profit = item.optDouble("profit"), balanceAfter = item.optDouble("balanceAfter"), accountReturnPercent = item.optDouble("accountReturnPercent"),
-            )) }
-        },
-    )
-
-    private fun parseStrategyDecision(json: JSONObject): StrategyDecision {
-        val inputs = json.optJSONObject("inputs") ?: JSONObject()
-        return StrategyDecision(
-            decisionId = json.optString("decisionId"), recordedAt = json.optString("recordedAt"), build = json.optString("build"), outcome = json.optString("outcome"),
-            selectedLeverage = json.optDouble("selectedLeverage"), leverageReason = json.optString("leverageReason"),
-            previousFullWeekChange = inputs.optDouble("previousFullWeekChange"), previousFullWeekSource = inputs.optString("previousFullWeekSource"),
-            previousTradeChange = inputs.optDouble("previousTradeChange"), previousTradeSource = inputs.optString("previousTradeSource"), error = json.optString("error"),
-        )
-    }
-
-    private fun parseLastClosedTrade(json: JSONObject) = LastClosedTrade(
-        positionIdentifier = json.optLong("positionIdentifier"), closedAt = json.optString("closedAt"), exitReason = json.optString("exitReason"),
-        preleverageReturn = json.optDoubleAny("preleverageReturn", "preleverage_return"),
-        preleverageReturnPercent = json.optDoubleAny("preleverageReturnPercent", "preleverage_return_percent").takeIf { it != 0.0 }
-            ?: json.optDoubleAny("preleverageReturn", "preleverage_return") * 100.0,
-        tradeClass = json.optStringAny("tradeClass", "trade_class"),
+        error = json.optStringAny("error"),
     )
 
     private fun parsePosition(json: JSONObject) = PositionStatus(

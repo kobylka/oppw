@@ -129,7 +129,7 @@ data class LastClosedTrade(
     val exitReason: String,
     val preleverageReturn: Double,
     val preleverageReturnPercent: Double,
-    val tradeClass: String  = "",
+    val tradeClass: String,
 )
 
 data class PositionStatus(
@@ -304,12 +304,10 @@ data class TradeAnalytics(
     val maxProfit: Double,
     val maxDrawdown: Double,
     val closed: Boolean,
-    val preleverageReturnPercent: Double = 0.0,
-    val tradeClass: String = "",
 )
 
 data class TradeClassAnalytics(
-    val tradeClass: String = "",
+    val tradeClass: String,
     val trades: Int,
     val profit: Double,
     val averagePreleverageReturnPercent: Double,
