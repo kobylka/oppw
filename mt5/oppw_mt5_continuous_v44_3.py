@@ -48,7 +48,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-BUILD_ID = "2026-07-19-history-reconciliation-v44.4"
+BUILD_ID = "2026-07-19-history-reconciliation-v44.3"
 SCHEDULED_ACTION_LEAD_SECONDS = 3.0
 AUTOTRADING_REMINDER_SECONDS = 60.0
 STALE_TICK_REMINDER_SECONDS = 60.0
@@ -741,7 +741,7 @@ class MobileMonitorPublisher:
         public_events = [{key: value for key, value in event.items() if not key.startswith("_spool") and key != "_sourcePid"} for event in events]
         payload = {"accountKey": self.cfg.monitor_account_key, "capturedAt": captured_at, "snapshot": snapshot_copy, "events": public_events}
         body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-        request = urllib.request.Request(self.cfg.monitor_ingest_url, data=body, method="POST", headers={"Authorization": f"Bearer {self.cfg.monitor_write_token}", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "OPPW-MT5-Publisher/44.4"})
+        request = urllib.request.Request(self.cfg.monitor_ingest_url, data=body, method="POST", headers={"Authorization": f"Bearer {self.cfg.monitor_write_token}", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "OPPW-MT5-Publisher/44.3"})
         try:
             with urllib.request.urlopen(request, timeout=self.cfg.monitor_timeout_seconds) as response:
                 if int(response.status) not in (200, 201):
@@ -1676,9 +1676,6 @@ class OPPWContinuousStrategy:
         contain that ID, so an adopted/manual position was silently rejected and
         the recorder kept publishing 0.00%. This resolver also matches the
         persisted exit timestamp/price and ignores partially closed positions.
-        v44.4 additionally accepts the latest fully closed long symbol trade when
-        manual-position adoption is enabled and legacy state has no usable exit
-        identity. This is the normal migration path from pre-v44 state files.
         """
         now = now or datetime.now(self.tz)
         deals = mt5.history_deals_get(now.astimezone(UTC) - timedelta(days=730), now.astimezone(UTC) + timedelta(days=1))
@@ -1687,8 +1684,6 @@ class OPPWContinuousStrategy:
 
         in_values = {getattr(mt5, "DEAL_ENTRY_IN", 0), getattr(mt5, "DEAL_ENTRY_INOUT", 2)}
         out_values = {getattr(mt5, "DEAL_ENTRY_OUT", 1), getattr(mt5, "DEAL_ENTRY_OUT_BY", 3)}
-        buy_type = int(getattr(mt5, "DEAL_TYPE_BUY", 0))
-        sell_type = int(getattr(mt5, "DEAL_TYPE_SELL", 1))
         symbol_deals = [deal for deal in deals if str(getattr(deal, "symbol", "")) == self.cfg.trade_symbol]
         if not symbol_deals:
             return None
@@ -1730,15 +1725,6 @@ class OPPWContinuousStrategy:
                 or str(getattr(deal, "comment", "")).startswith(str(self.cfg.comment_prefix))
                 for deal in entries
             )
-            # An adopted/manual OPPW position normally has magic=0 and no OPPW
-            # comment. Older state files may also lack exit identity/time fields.
-            # In that case the latest fully closed long trade on the configured
-            # trade symbol is the only reliable previous-trade source. Reject
-            # short positions and incomplete/partial exits.
-            long_trade = (
-                any(int(getattr(deal, "type", buy_type)) == buy_type for deal in entries)
-                and any(int(getattr(deal, "type", sell_type)) == sell_type for deal in exits)
-            )
             exact_position = state_position_id > 0 and position_id == state_position_id
             time_distance = abs((closed_at - state_exit_time).total_seconds()) if state_exit_time is not None else float("inf")
             price_distance = abs(latest_exit_price - state_exit_price) if state_exit_price > 0 else float("inf")
@@ -1752,10 +1738,8 @@ class OPPWContinuousStrategy:
                 source, priority = "MT5 deal history (position identity)", 0
             elif strategy_entry:
                 source, priority = "MT5 deal history (strategy magic/comment)", 1
-            elif bool(getattr(self.cfg, "manage_manual_position", False)) and state_match and long_trade:
+            elif bool(getattr(self.cfg, "manage_manual_position", False)) and state_match:
                 source, priority = "MT5 deal history (adopted trade matched by exit)", 2
-            elif bool(getattr(self.cfg, "manage_manual_position", False)) and long_trade:
-                source, priority = "MT5 deal history (latest completed adopted trade)", 3
             else:
                 continue
 

@@ -48,7 +48,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-BUILD_ID = "2026-07-19-event-spool-lock-v44.2"
+BUILD_ID = "2026-07-19-history-reconciliation-v44.4"
 SCHEDULED_ACTION_LEAD_SECONDS = 3.0
 AUTOTRADING_REMINDER_SECONDS = 60.0
 STALE_TICK_REMINDER_SECONDS = 60.0
@@ -741,7 +741,7 @@ class MobileMonitorPublisher:
         public_events = [{key: value for key, value in event.items() if not key.startswith("_spool") and key != "_sourcePid"} for event in events]
         payload = {"accountKey": self.cfg.monitor_account_key, "capturedAt": captured_at, "snapshot": snapshot_copy, "events": public_events}
         body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-        request = urllib.request.Request(self.cfg.monitor_ingest_url, data=body, method="POST", headers={"Authorization": f"Bearer {self.cfg.monitor_write_token}", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "OPPW-MT5-Publisher/44.2"})
+        request = urllib.request.Request(self.cfg.monitor_ingest_url, data=body, method="POST", headers={"Authorization": f"Bearer {self.cfg.monitor_write_token}", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "OPPW-MT5-Publisher/44.4"})
         try:
             with urllib.request.urlopen(request, timeout=self.cfg.monitor_timeout_seconds) as response:
                 if int(response.status) not in (200, 201):
@@ -1651,45 +1651,133 @@ class OPPWContinuousStrategy:
                 return close_bar.close / open_bar.open - 1.0
         return None
 
-    def latest_closed_trade_change(self, now: Optional[datetime] = None) -> Optional[float]:
+    @staticmethod
+    def deal_time_milliseconds(deal) -> int:
+        return int(getattr(deal, "time_msc", 0) or int(getattr(deal, "time", 0) or 0) * 1000)
+
+    def deal_local_datetime(self, deal) -> datetime:
+        milliseconds = self.deal_time_milliseconds(deal)
+        return self.mt5_timestamp_to_local(milliseconds / 1000.0)
+
+    @staticmethod
+    def parsed_state_datetime(value: str) -> Optional[datetime]:
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+
+    def latest_closed_trade_record(self, now: Optional[datetime] = None) -> Optional[dict[str, Any]]:
+        """Return the most recent completed OPPW/adopted trade from MT5 history.
+
+        v44.1/v44.2 only accepted a non-strategy deal when its MT5 position ID
+        was already stored in the new v44 state field. Older state files do not
+        contain that ID, so an adopted/manual position was silently rejected and
+        the recorder kept publishing 0.00%. This resolver also matches the
+        persisted exit timestamp/price and ignores partially closed positions.
+        v44.4 additionally accepts the latest fully closed long symbol trade when
+        manual-position adoption is enabled and legacy state has no usable exit
+        identity. This is the normal migration path from pre-v44 state files.
+        """
         now = now or datetime.now(self.tz)
         deals = mt5.history_deals_get(now.astimezone(UTC) - timedelta(days=730), now.astimezone(UTC) + timedelta(days=1))
         if deals is None:
             return None
+
         in_values = {getattr(mt5, "DEAL_ENTRY_IN", 0), getattr(mt5, "DEAL_ENTRY_INOUT", 2)}
         out_values = {getattr(mt5, "DEAL_ENTRY_OUT", 1), getattr(mt5, "DEAL_ENTRY_OUT_BY", 3)}
+        buy_type = int(getattr(mt5, "DEAL_TYPE_BUY", 0))
+        sell_type = int(getattr(mt5, "DEAL_TYPE_SELL", 1))
         symbol_deals = [deal for deal in deals if str(getattr(deal, "symbol", "")) == self.cfg.trade_symbol]
-        exits = sorted([deal for deal in symbol_deals if int(getattr(deal, "entry", -1)) in out_values], key=lambda deal: int(getattr(deal, "time_msc", 0) or int(getattr(deal, "time", 0)) * 1000), reverse=True)
-        for exit_deal in exits:
-            position_id = int(getattr(exit_deal, "position_id", 0) or 0)
-            if position_id <= 0:
-                continue
+        if not symbol_deals:
+            return None
+
+        state_position_id = int(self.state.last_exit_position_identifier or 0)
+        state_exit_time = self.parsed_state_datetime(self.state.last_exit_time)
+        state_exit_price = float(self.state.last_exit_price or 0.0)
+        info = mt5.symbol_info(self.cfg.trade_symbol)
+        price_tolerance = float(getattr(info, "trade_tick_size", 0.0) or getattr(info, "point", 0.0) or 0.01) * 2.0 if info is not None else 0.02
+
+        position_ids = sorted(
+            {int(getattr(deal, "position_id", 0) or 0) for deal in symbol_deals if int(getattr(deal, "position_id", 0) or 0) > 0},
+            reverse=True,
+        )
+        records: list[dict[str, Any]] = []
+        for position_id in position_ids:
             position_deals = [deal for deal in symbol_deals if int(getattr(deal, "position_id", 0) or 0) == position_id]
             entries = [deal for deal in position_deals if int(getattr(deal, "entry", -1)) in in_values]
-            position_exits = [deal for deal in position_deals if int(getattr(deal, "entry", -1)) in out_values]
-            if not entries or not position_exits:
+            exits = [deal for deal in position_deals if int(getattr(deal, "entry", -1)) in out_values]
+            if not entries or not exits:
                 continue
-            known_last_position = int(self.state.last_exit_position_identifier or 0)
+
+            entry_volume = sum(abs(float(getattr(deal, "volume", 0.0) or 0.0)) for deal in entries)
+            exit_volume = sum(abs(float(getattr(deal, "volume", 0.0) or 0.0)) for deal in exits)
+            volume_tolerance = max(1e-8, entry_volume * 1e-6)
+            if entry_volume <= 0 or exit_volume + volume_tolerance < entry_volume:
+                continue
+
+            entry_price = sum(abs(float(getattr(deal, "volume", 0.0) or 0.0)) * float(getattr(deal, "price", 0.0) or 0.0) for deal in entries) / entry_volume
+            exit_price = sum(abs(float(getattr(deal, "volume", 0.0) or 0.0)) * float(getattr(deal, "price", 0.0) or 0.0) for deal in exits) / exit_volume
+            if entry_price <= 0 or exit_price <= 0:
+                continue
+
+            latest_exit = max(exits, key=self.deal_time_milliseconds)
+            closed_at = self.deal_local_datetime(latest_exit)
+            latest_exit_price = float(getattr(latest_exit, "price", 0.0) or exit_price)
             strategy_entry = any(
                 int(getattr(deal, "magic", 0) or 0) == int(self.cfg.magic)
                 or str(getattr(deal, "comment", "")).startswith(str(self.cfg.comment_prefix))
                 for deal in entries
             )
-            # v44 introduced last_exit_position_identifier after some positions
-            # had already closed. Adopted/manual positions may also lack the
-            # strategy magic/comment. A matching persisted position identifier
-            # is still authoritative for reconstructing that exact trade.
-            if not strategy_entry and position_id != known_last_position:
+            # An adopted/manual OPPW position normally has magic=0 and no OPPW
+            # comment. Older state files may also lack exit identity/time fields.
+            # In that case the latest fully closed long trade on the configured
+            # trade symbol is the only reliable previous-trade source. Reject
+            # short positions and incomplete/partial exits.
+            long_trade = (
+                any(int(getattr(deal, "type", buy_type)) == buy_type for deal in entries)
+                and any(int(getattr(deal, "type", sell_type)) == sell_type for deal in exits)
+            )
+            exact_position = state_position_id > 0 and position_id == state_position_id
+            time_distance = abs((closed_at - state_exit_time).total_seconds()) if state_exit_time is not None else float("inf")
+            price_distance = abs(latest_exit_price - state_exit_price) if state_exit_price > 0 else float("inf")
+            state_match = state_exit_time is not None and time_distance <= 300.0
+            if state_exit_time is not None and state_exit_price > 0:
+                state_match = state_match or (closed_at.date() == state_exit_time.date() and price_distance <= price_tolerance)
+
+            source = ""
+            priority = 99
+            if exact_position:
+                source, priority = "MT5 deal history (position identity)", 0
+            elif strategy_entry:
+                source, priority = "MT5 deal history (strategy magic/comment)", 1
+            elif bool(getattr(self.cfg, "manage_manual_position", False)) and state_match and long_trade:
+                source, priority = "MT5 deal history (adopted trade matched by exit)", 2
+            elif bool(getattr(self.cfg, "manage_manual_position", False)) and long_trade:
+                source, priority = "MT5 deal history (latest completed adopted trade)", 3
+            else:
                 continue
-            entry_volume = sum(abs(float(getattr(deal, "volume", 0.0) or 0.0)) for deal in entries)
-            exit_volume = sum(abs(float(getattr(deal, "volume", 0.0) or 0.0)) for deal in position_exits)
-            if entry_volume <= 0 or exit_volume <= 0:
-                continue
-            entry_price = sum(abs(float(getattr(deal, "volume", 0.0) or 0.0)) * float(getattr(deal, "price", 0.0) or 0.0) for deal in entries) / entry_volume
-            exit_price = sum(abs(float(getattr(deal, "volume", 0.0) or 0.0)) * float(getattr(deal, "price", 0.0) or 0.0) for deal in position_exits) / exit_volume
-            if entry_price > 0 and exit_price > 0:
-                return truncate_four_decimals(exit_price / entry_price - 1.0)
-        return None
+
+            records.append({
+                "change": truncate_four_decimals(exit_price / entry_price - 1.0),
+                "positionIdentifier": position_id,
+                "closedAt": closed_at.isoformat(),
+                "exitPrice": latest_exit_price,
+                "entryPrice": entry_price,
+                "source": source,
+                "priority": priority,
+                "closedEpochMs": self.deal_time_milliseconds(latest_exit),
+            })
+
+        if not records:
+            return None
+        records.sort(key=lambda item: (int(item["closedEpochMs"]), -int(item["priority"])), reverse=True)
+        return records[0]
+
+    def latest_closed_trade_change(self, now: Optional[datetime] = None) -> Optional[float]:
+        record = self.latest_closed_trade_record(now)
+        return None if record is None else float(record["change"])
 
     def resolved_leverage_inputs(self, force: bool = False) -> tuple[float, float, str, str]:
         state_signature = (
@@ -1707,34 +1795,19 @@ class OPPWContinuousStrategy:
         self.last_leverage_state_signature = state_signature
 
         full_week = self.latest_completed_week_change()
-        history_trade = self.latest_closed_trade_change()
+        history_record = self.latest_closed_trade_record()
         self.cached_previous_full_week_change = float(full_week) if full_week is not None else float(self.state.prev_full_week_change)
         self.cached_previous_full_week_source = "market history" if full_week is not None else "state fallback"
 
-        state_has_last_trade_identity = bool(self.state.last_exit_time) or int(self.state.last_exit_position_identifier) > 0
         labeled_return = float(self.state.last_exit_preleverage_return)
         legacy_return = float(self.state.prev_change)
-        recorded_return: Optional[float] = None
-        if abs(labeled_return) > 1e-12:
-            recorded_return = labeled_return
-        elif abs(legacy_return) > 1e-12:
-            recorded_return = legacy_return
-
-        # A non-zero recorded value is authoritative. A zero from a legacy
-        # state is not: v44 previously treated position identity alone as proof
-        # that 0.0 was the real return and consequently ignored MT5 history.
-        # Use MT5 reconstruction before accepting such an ambiguous zero.
-        repaired_from_history = False
-        if recorded_return is not None:
-            self.cached_previous_trade_change = recorded_return
+        history_used = history_record is not None
+        if history_record is not None:
+            self.cached_previous_trade_change = float(history_record["change"])
+            self.cached_previous_trade_source = str(history_record["source"])
+        elif abs(labeled_return) > 1e-12:
+            self.cached_previous_trade_change = labeled_return
             self.cached_previous_trade_source = "publisher-labeled strategy state"
-        elif history_trade is not None:
-            self.cached_previous_trade_change = float(history_trade)
-            repaired_from_history = state_has_last_trade_identity and abs(float(history_trade)) > 1e-12
-            self.cached_previous_trade_source = "MT5 deal history (legacy-state repair)" if repaired_from_history else "MT5 deal history"
-        elif state_has_last_trade_identity:
-            self.cached_previous_trade_change = 0.0
-            self.cached_previous_trade_source = "publisher-labeled strategy state (confirmed zero unavailable)"
         else:
             self.cached_previous_trade_change = legacy_return
             self.cached_previous_trade_source = "state fallback"
@@ -1745,22 +1818,36 @@ class OPPWContinuousStrategy:
         )
         self.state.prev_full_week_change = self.cached_previous_full_week_change
         self.state.prev_change = self.cached_previous_trade_change
-        if repaired_from_history:
-            self.state.last_exit_preleverage_return = self.cached_previous_trade_change
-            if not self.state.last_exit_trade_class:
-                self.state.last_exit_trade_class = self.trade_class(self.cached_previous_trade_change, self.state.last_exit_reason)
-            state_changed_for_save = True
 
-        # Both roles use the same account-scoped state. Persist the repair from
-        # whichever role first reconstructs it so executor and publisher stop
-        # publishing conflicting values after their next restart.
-        if state_changed_for_save:
+        if history_record is not None:
+            if int(self.state.last_exit_position_identifier or 0) != int(history_record["positionIdentifier"]):
+                self.state.last_exit_position_identifier = int(history_record["positionIdentifier"])
+                state_changed_for_save = True
+            if self.state.last_exit_time != str(history_record["closedAt"]):
+                self.state.last_exit_time = str(history_record["closedAt"])
+                state_changed_for_save = True
+            if abs(float(self.state.last_exit_price or 0.0) - float(history_record["exitPrice"])) > 1e-12:
+                self.state.last_exit_price = float(history_record["exitPrice"])
+                state_changed_for_save = True
+            if abs(float(self.state.last_exit_preleverage_return) - self.cached_previous_trade_change) > 1e-12:
+                self.state.last_exit_preleverage_return = self.cached_previous_trade_change
+                state_changed_for_save = True
+            recovered_class = self.trade_class(self.cached_previous_trade_change, self.state.last_exit_reason)
+            if self.state.last_exit_trade_class != recovered_class:
+                self.state.last_exit_trade_class = recovered_class
+                state_changed_for_save = True
+
+        # Publisher mode is contractually read-only. v44.1/v44.2 allowed it to
+        # save reconstructed inputs and race with executor state writes. It may
+        # publish the reconstructed value, but only the executor persists it.
+        if self.is_executor and state_changed_for_save:
             self.state.save(self.cfg.state_file)
-            event_name = "PREVIOUS_TRADE_STATE_REPAIRED" if repaired_from_history else "LEVERAGE_INPUTS_RECOVERED"
+            event_name = "PREVIOUS_TRADE_STATE_REPAIRED" if history_used else "LEVERAGE_INPUTS_RECOVERED"
             self.log.info(
-                "EVENT %s previous_full_week_change=%.6f full_week_source=%s previous_trade_change=%.6f trade_source=%s",
+                "EVENT %s previous_full_week_change=%.6f full_week_source=%s previous_trade_change=%.6f trade_source=%s position_identifier=%s",
                 event_name, self.cached_previous_full_week_change, self.cached_previous_full_week_source.replace(" ", "_"),
                 self.cached_previous_trade_change, self.cached_previous_trade_source.replace(" ", "_"),
+                int(history_record["positionIdentifier"]) if history_record is not None else int(self.state.last_exit_position_identifier or 0),
             )
         return self.cached_previous_full_week_change, self.cached_previous_trade_change, self.cached_previous_full_week_source, self.cached_previous_trade_source
 
@@ -2221,7 +2308,7 @@ class OPPWContinuousStrategy:
         return conditions[0] if conditions else None
 
     def monitor_position_exposure(self, position, deposit: float, account=None) -> float:
-        return deposit * self.broker_margin_leverage(account) if position is not None and deposit > 0 else 0.0
+        return deposit * float(self.cfg.sizing_multiplier) if position is not None and deposit > 0 else 0.0
 
     def last_closed_trade_payload(self) -> Optional[dict[str, Any]]:
         if not (self.state.last_exit_time or self.state.last_exit_trade_class or self.state.last_exit_position_identifier):
