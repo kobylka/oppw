@@ -1,7 +1,6 @@
 <?php
 declare(strict_types=1);
 require __DIR__ . '/lib.php';
-require_once __DIR__ . '/oppw_latest_trade.php';
 
 require_method('GET');
 $db = pdo();
@@ -42,18 +41,6 @@ try {
     $snapshot = json_decode((string)$row['payload'], true, 512, JSON_THROW_ON_ERROR);
 } catch (JsonException) {
     json_response(['ok' => false, 'error' => 'Stored snapshot is invalid'], 500);
-}
-
-// v45.3.1: last-trade enrichment is optional and must never break status JSON.
-$oppwTradeBufferLevel = ob_get_level();
-ob_start();
-try {
-    $authoritativeLastTrade = oppw_authoritative_last_trade($db, $accountKey);
-    if ($authoritativeLastTrade !== null) $snapshot['lastClosedTrade'] = $authoritativeLastTrade;
-} catch (Throwable $oppwTradeError) {
-    error_log('OPPW status last-trade enrichment failed: ' . $oppwTradeError->getMessage());
-} finally {
-    while (ob_get_level() > $oppwTradeBufferLevel) ob_end_clean();
 }
 
 $serverNowUtc = utc_now();

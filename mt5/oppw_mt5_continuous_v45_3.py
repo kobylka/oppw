@@ -50,7 +50,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-BUILD_ID = "2026-07-19-always-weekend-startup-v45.4"
+BUILD_ID = "2026-07-19-single-mysql-trade-endpoint-v45.3"
 SCHEDULED_ACTION_LEAD_SECONDS = 3.0
 AUTOTRADING_REMINDER_SECONDS = 60.0
 STALE_TICK_REMINDER_SECONDS = 60.0
@@ -760,7 +760,7 @@ class MobileMonitorPublisher:
         public_events = [{key: value for key, value in event.items() if not key.startswith("_spool") and key != "_sourcePid"} for event in events]
         payload = {"accountKey": self.cfg.monitor_account_key, "capturedAt": captured_at, "snapshot": snapshot_copy, "events": public_events}
         body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-        request = urllib.request.Request(self.cfg.monitor_ingest_url, data=body, method="POST", headers={"Authorization": f"Bearer {self.cfg.monitor_write_token}", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "OPPW-MT5-Publisher/45.4"})
+        request = urllib.request.Request(self.cfg.monitor_ingest_url, data=body, method="POST", headers={"Authorization": f"Bearer {self.cfg.monitor_write_token}", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "OPPW-MT5-Publisher/45.1"})
         try:
             with urllib.request.urlopen(request, timeout=self.cfg.monitor_timeout_seconds) as response:
                 if int(response.status) not in (200, 201):
@@ -974,6 +974,9 @@ class OPPWContinuousStrategy:
         self.last_mysql_trade_error_monotonic = 0.0
         self.weekend_idle = False
         self.started_at = datetime.now(self.tz)
+        state_path = Path(config.state_file)
+        self.weekend_snapshot_marker_path = state_path.with_name(f"{state_path.stem}.weekend-startup.json")
+        self.weekend_snapshot_lock_path = self.weekend_snapshot_marker_path.with_suffix(self.weekend_snapshot_marker_path.suffix + ".lock")
         self.monitor_publisher = MobileMonitorPublisher(config, self.log, self.tz, role, publisher_presence, event_spool, publish_lock_path)
         self.monitor_event_handler = MobileEventHandler(self.monitor_publisher)
         if self.monitor_publisher.ready:
@@ -1702,7 +1705,7 @@ class OPPWContinuousStrategy:
                 headers={
                     "Authorization": f"Bearer {token}",
                     "Accept": "application/json",
-                    "User-Agent": "OPPW-MT5-History/45.4",
+                    "User-Agent": "OPPW-MT5-History/45.3",
                 },
             )
             try:
@@ -3144,6 +3147,35 @@ class OPPWContinuousStrategy:
 
     # ----- Startup and loop ---------------------------------------------------
 
+    def claim_weekend_startup_snapshot(self, day: date) -> bool:
+        """Allow one weekend startup snapshot per account/day across both roles."""
+        if not self.monitor_publisher.ready or not self.monitor_publisher.allowed_to_publish():
+            return False
+        lock = InterProcessFileLock(self.weekend_snapshot_lock_path, {"purpose": "weekend-startup-snapshot", "account": self.account})
+        deadline = time_module.monotonic() + 5.0
+        while not lock.try_acquire():
+            if time_module.monotonic() >= deadline:
+                return False
+            time_module.sleep(0.02)
+        try:
+            marker = {}
+            try:
+                marker = json.loads(self.weekend_snapshot_marker_path.read_text(encoding="utf-8"))
+            except Exception:
+                marker = {}
+            # Include the build so installing a corrected build during the same
+            # weekend can publish its one replacement startup snapshot.
+            key = f"{self.account}:{day.isoformat()}:{BUILD_ID}"
+            if str(marker.get("key") or "") == key:
+                return False
+            payload = {"key": key, "account": self.account, "day": day.isoformat(), "claimedAt": datetime.now(UTC).isoformat(), "pid": os.getpid(), "role": self.role}
+            temporary = self.weekend_snapshot_marker_path.with_name(f"{self.weekend_snapshot_marker_path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+            temporary.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+            os.replace(temporary, self.weekend_snapshot_marker_path)
+            return True
+        finally:
+            lock.release()
+
     def weekend_position_read_only(self):
         positions = mt5.positions_get(symbol=self.cfg.trade_symbol)
         if not positions:
@@ -3211,61 +3243,67 @@ class OPPWContinuousStrategy:
                 "deposit": deposit, "strategyLeverage": float(self.state.entry_leverage or self.cfg.base_leverage), "currency": currency,
             },
             "position": position_payload,
-            "potentialPosition": potential_position,
-            "strategyDecision": strategy_decision,
+            "potentialPosition": potential_position if position is None else None,
+            "strategyDecision": strategy_decision if position is None else self.last_strategy_decision_payload,
             "lastClosedTrade": last_closed_trade, "conditions": [], "closestCondition": None,
             "equityHistory": [],
         }
 
     def weekend_startup(self, label: str) -> None:
-        """Always calculate and queue one fresh weekend startup snapshot."""
+        """Publish exactly one candle snapshot when the process starts on a weekend."""
         now = datetime.now(self.tz)
         self.weekend_idle = True
         self.monitor_publisher.set_weekend_idle(True)
         self.log_week_plan(now.date())
+        current_bar = None
+        published = self.claim_weekend_startup_snapshot(now.date())
+        if published:
+            try:
+                position = self.weekend_position_read_only()
+                current_bar = self.current_m1_bar(self.cfg.trade_symbol)
 
-        position = self.weekend_position_read_only()
-        current_bar = self.current_m1_bar(self.cfg.trade_symbol)
-
-        # Startup-only weekend work. This runs on every script start; the loop
-        # remains completely idle after the snapshot has been queued.
-        self.latest_closed_trade_record(force=True)
-        potential_position = self.potential_position_preview()
-        strategy_decision = self.strategy_decision_payload(potential_position)
-        self.last_strategy_decision_payload = strategy_decision
-        self.last_strategy_decision_signature = None
-        last_closed_trade = self.last_closed_trade_payload(refresh=False)
-
-        self.log.info(
-            "EVENT WEEKEND_WHAT_IF_CALCULATED outcome=%s leverage=%.0f previous_trade=%.8f "
-            "trade_source=%s volume=%.8f required_deposit=%.2f effective_leverage=%.6f",
-            strategy_decision["outcome"], strategy_decision["selectedLeverage"],
-            strategy_decision["inputs"]["previousTradeChange"],
-            str(strategy_decision["inputs"].get("previousTradeSource", "")).replace(" ", "_"),
-            float(strategy_decision["sizing"].get("volume") or 0.0),
-            float(strategy_decision["sizing"].get("requiredDeposit") or 0.0),
-            float(strategy_decision["sizing"].get("effectiveLeverage") or 0.0),
-        )
-
-        snapshot = self.build_weekend_startup_snapshot(
-            position, now, current_bar, potential_position, strategy_decision, last_closed_trade,
-        )
-        snapshot["statusUpdate"] = {
-            "kind": "WEEKEND_STARTUP", "minute": now.strftime("%Y-%m-%d %H:%M"),
-            "generatedAt": now.isoformat(), "build": BUILD_ID,
-        }
-        self.monitor_publisher.submit_snapshot(snapshot, guaranteed=True)
-        self.log.info(
-            "EVENT WEEKEND_STARTUP_QUEUED role=%s candle_time=%s plan_week=%s what_if_outcome=%s",
-            label, current_bar.local_datetime.isoformat() if current_bar else "none",
-            iso_week_key(self.week_plan_day(now.date())), strategy_decision["outcome"],
-            extra={"skip_mobile_publish": True},
-        )
+                # Startup-only exception to weekend idling: refresh the latest
+                # completed MySQL trade and calculate one new pre-trade What-if
+                # ticket from the latest MT5 account/symbol/Friday price data.
+                self.latest_closed_trade_record(force=True)
+                potential_position = None
+                strategy_decision = None
+                if position is None:
+                    potential_position = self.potential_position_preview()
+                    strategy_decision = self.strategy_decision_payload(potential_position)
+                    self.last_strategy_decision_payload = strategy_decision
+                    self.last_strategy_decision_signature = None
+                    self.log.info(
+                        "EVENT WEEKEND_WHAT_IF_CALCULATED outcome=%s leverage=%.0f previous_trade=%.8f "
+                        "trade_source=%s volume=%.8f required_deposit=%.2f effective_leverage=%.6f",
+                        strategy_decision["outcome"], strategy_decision["selectedLeverage"],
+                        strategy_decision["inputs"]["previousTradeChange"],
+                        str(strategy_decision["inputs"].get("previousTradeSource", "")).replace(" ", "_"),
+                        float(strategy_decision["sizing"].get("volume") or 0.0),
+                        float(strategy_decision["sizing"].get("requiredDeposit") or 0.0),
+                        float(strategy_decision["sizing"].get("effectiveLeverage") or 0.0),
+                    )
+                last_closed_trade = self.last_closed_trade_payload(refresh=False)
+                snapshot = self.build_weekend_startup_snapshot(
+                    position, now, current_bar, potential_position, strategy_decision, last_closed_trade,
+                )
+                snapshot["statusUpdate"] = {
+                    "kind": "WEEKEND_STARTUP", "minute": now.strftime("%Y-%m-%d %H:%M"),
+                    "generatedAt": now.isoformat(), "build": BUILD_ID,
+                }
+                self.monitor_publisher.submit_snapshot(snapshot, guaranteed=True)
+            except Exception:
+                try:
+                    self.weekend_snapshot_marker_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                raise
         self.print_instance_banner(now)
         self.log.info(
-            "EVENT WEEKEND_IDLE_STARTED role=%s candle_time=%s plan_week=%s minute_updates=false recurring_checks=false",
-            label, current_bar.local_datetime.isoformat() if current_bar else "none",
-            iso_week_key(self.week_plan_day(now.date())), extra={"skip_mobile_publish": True},
+            "EVENT WEEKEND_IDLE_STARTED role=%s candle_time=%s plan_week=%s startup_snapshot=%s "
+            "startup_what_if=%s startup_mysql_trade_refresh=%s minute_updates=false recurring_checks=false",
+            label, current_bar.local_datetime.isoformat() if current_bar else "none", iso_week_key(self.week_plan_day(now.date())), published,
+            published, published, extra={"skip_mobile_publish": True},
         )
 
     def enter_weekend_idle_without_publish(self, label: str) -> None:
@@ -3274,7 +3312,7 @@ class OPPWContinuousStrategy:
         self.monitor_publisher.set_weekend_idle(True)
         self.log_week_plan(now.date())
         self.log.info(
-            "EVENT WEEKEND_IDLE_ENTERED role=%s plan_week=%s minute_updates=false checks=false",
+            "EVENT WEEKEND_IDLE_ENTERED role=%s plan_week=%s startup_snapshot=false minute_updates=false checks=false",
             label, iso_week_key(self.week_plan_day(now.date())), extra={"skip_mobile_publish": True},
         )
 
