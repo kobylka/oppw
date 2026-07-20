@@ -45,7 +45,7 @@ def env_time(name: str, default: time) -> time:
 MT5_TERMINAL_PATH = r"C:\Program Files\MetaTrader 5\terminal64.exe"
 MT5_LOGIN = 0
 MT5_PASSWORD = ""
-MT5_SERVER = ""
+MT5_SERVER = "BOSSAFX-Demo"
 MONITOR_WRITE_TOKEN = ""
 
 

@@ -78,10 +78,85 @@ foreach ($events as $event) {
 $insertedCriticalEvents = [];
 $closedTradeProfit = null;
 $closedTradeReason = "closed";
+// OPPW_V47_4_DECISION_ACK_INIT_BEGIN
+$strategyDecisionStored = false;
+$strategyDecisionId = '';
+// OPPW_V47_4_DECISION_ACK_INIT_END
+
 $db->beginTransaction();
 try {
     $snapshotStmt = $db->prepare('INSERT INTO strategy_snapshots(strategy_key, captured_at, payload) VALUES (?, ?, ?)');
     $snapshotStmt->execute([$accountKey, $capturedAt, $payload]);
+  // OPPW_V47_4_STRATEGY_DECISION_PERSISTENCE_BEGIN
+  $decision = is_array($data['strategyDecision'] ?? null)
+      ? $data['strategyDecision']
+      : (is_array($snapshot['strategyDecision'] ?? null) ? $snapshot['strategyDecision'] : null);
+  if ($decision !== null && trim((string)($decision['decisionId'] ?? '')) !== '') {
+      $inputs = is_array($decision['inputs'] ?? null) ? $decision['inputs'] : [];
+      $sizing = is_array($decision['sizing'] ?? null) ? $decision['sizing'] : [];
+      $risk = is_array($decision['risk'] ?? null) ? $decision['risk'] : [];
+      $strategyDecisionId = substr(trim((string)$decision['decisionId']), 0, 32);
+      $decisionPayload = json_encode($decision, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+      $decisionRecordedAt = normalize_datetime($decision['recordedAt'] ?? $capturedAt);
+      $decisionStmt = $db->prepare(
+          'INSERT INTO strategy_decisions(
+              strategy_key, decision_id, decision_week, recorded_at, first_received_at, last_received_at,
+              strategy_build, parameter_hash, decision_type, outcome, selected_leverage, leverage_reason,
+              previous_full_week_change, previous_full_week_source, previous_trade_change, previous_trade_source,
+              symbol, side, proposed_price, proposed_volume, required_deposit, required_balance,
+              required_balance_multiplier, balance_multiplier_profile, effective_leverage,
+              position_notional, sizing_units, margin_usage_percent, margin_level_after_percent,
+              stop_loss_percent, stop_loss_price, stop_loss_cash, account_return_at_stop_percent,
+              account_loss_cap_applied, error_text, payload
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON DUPLICATE KEY UPDATE
+              last_received_at=VALUES(last_received_at), recorded_at=LEAST(recorded_at, VALUES(recorded_at)),
+              decision_week=VALUES(decision_week), strategy_build=VALUES(strategy_build), parameter_hash=VALUES(parameter_hash),
+              decision_type=VALUES(decision_type), outcome=VALUES(outcome), selected_leverage=VALUES(selected_leverage),
+              leverage_reason=VALUES(leverage_reason), previous_full_week_change=VALUES(previous_full_week_change),
+              previous_full_week_source=VALUES(previous_full_week_source), previous_trade_change=VALUES(previous_trade_change),
+              previous_trade_source=VALUES(previous_trade_source), symbol=VALUES(symbol), side=VALUES(side),
+              proposed_price=VALUES(proposed_price), proposed_volume=VALUES(proposed_volume),
+              required_deposit=VALUES(required_deposit), required_balance=VALUES(required_balance),
+              required_balance_multiplier=VALUES(required_balance_multiplier),
+              balance_multiplier_profile=VALUES(balance_multiplier_profile), effective_leverage=VALUES(effective_leverage),
+              position_notional=VALUES(position_notional), sizing_units=VALUES(sizing_units),
+              margin_usage_percent=VALUES(margin_usage_percent), margin_level_after_percent=VALUES(margin_level_after_percent),
+              stop_loss_percent=VALUES(stop_loss_percent), stop_loss_price=VALUES(stop_loss_price),
+              stop_loss_cash=VALUES(stop_loss_cash), account_return_at_stop_percent=VALUES(account_return_at_stop_percent),
+              account_loss_cap_applied=VALUES(account_loss_cap_applied), error_text=VALUES(error_text), payload=VALUES(payload)'
+      );
+      $decisionStmt->execute([
+          $accountKey, $strategyDecisionId, substr((string)($decision['decisionWeek'] ?? ''), 0, 10),
+          $decisionRecordedAt, $capturedAt, $capturedAt,
+          substr((string)($decision['build'] ?? ''), 0, 160), substr((string)($decision['parameterHash'] ?? ''), 0, 64),
+          substr((string)($decision['decision'] ?? ''), 0, 64), substr((string)($decision['outcome'] ?? ''), 0, 32),
+          $number($decision['selectedLeverage'] ?? 0), substr((string)($decision['leverageReason'] ?? ''), 0, 1000),
+          $number($inputs['previousFullWeekChange'] ?? 0), substr((string)($inputs['previousFullWeekSource'] ?? ''), 0, 100),
+          $number($inputs['previousTradeChange'] ?? 0), substr((string)($inputs['previousTradeSource'] ?? ''), 0, 100),
+          substr((string)($sizing['symbol'] ?? ''), 0, 32), substr((string)($sizing['side'] ?? ''), 0, 8),
+          is_numeric($sizing['price'] ?? null) ? (float)$sizing['price'] : null,
+          is_numeric($sizing['volume'] ?? null) ? (float)$sizing['volume'] : null,
+          is_numeric($sizing['requiredDeposit'] ?? null) ? (float)$sizing['requiredDeposit'] : null,
+          is_numeric($sizing['requiredBalance'] ?? null) ? (float)$sizing['requiredBalance'] : null,
+          is_numeric($sizing['requiredBalanceMultiplier'] ?? null) ? (float)$sizing['requiredBalanceMultiplier'] : null,
+          substr((string)($sizing['balanceMultiplierProfile'] ?? ''), 0, 40),
+          is_numeric($sizing['effectiveLeverage'] ?? null) ? (float)$sizing['effectiveLeverage'] : null,
+          is_numeric($sizing['positionNotional'] ?? null) ? (float)$sizing['positionNotional'] : null,
+          is_numeric($sizing['sizingUnits'] ?? null) ? (int)$sizing['sizingUnits'] : null,
+          is_numeric($sizing['marginUsagePercent'] ?? null) ? (float)$sizing['marginUsagePercent'] : null,
+          is_numeric($sizing['marginLevelAfterPercent'] ?? null) ? (float)$sizing['marginLevelAfterPercent'] : null,
+          is_numeric($risk['potentialStopLossPercent'] ?? null) ? (float)$risk['potentialStopLossPercent'] : null,
+          is_numeric($risk['potentialStopLossPrice'] ?? null) ? (float)$risk['potentialStopLossPrice'] : null,
+          is_numeric($risk['potentialStopLossCash'] ?? null) ? (float)$risk['potentialStopLossCash'] : null,
+          is_numeric($risk['accountLossPercentAtStop'] ?? null) ? (float)$risk['accountLossPercentAtStop'] : null,
+          !empty($risk['accountLossCapApplied']) ? 1 : 0,
+          substr((string)($decision['error'] ?? ''), 0, 1000), $decisionPayload,
+      ]);
+      $strategyDecisionStored = true;
+  }
+  // OPPW_V47_4_STRATEGY_DECISION_PERSISTENCE_END
+
 
     $equityStmt = $db->prepare(
         'INSERT INTO strategy_equity_points(strategy_key, captured_minute, balance, equity, deposit, current_profit, position_ticket)
@@ -205,7 +280,33 @@ try {
         ]);
     }
 
-    $previousAccount = is_array($previousSnapshot['account'] ?? null) ? $previousSnapshot['account'] : [];
+      // OPPW_V47_4_TRADE_DECISION_LINK_BEGIN
+  $execution = is_array($snapshot['execution'] ?? null) ? $snapshot['execution'] : [];
+  $linkedDecisionId = substr(trim((string)(($decision['decisionId'] ?? null) ?: ($execution['decisionId'] ?? ''))), 0, 32);
+  if ($linkedDecisionId !== '') {
+      $linkedBuild = substr((string)($decision['build'] ?? ''), 0, 160);
+      $linkedParameterHash = substr((string)($decision['parameterHash'] ?? ''), 0, 64);
+      $linkedLeverage = is_numeric($decision['selectedLeverage'] ?? null) ? (float)$decision['selectedLeverage'] : null;
+      if ($decision === null || $linkedBuild === '' || $linkedParameterHash === '' || $linkedLeverage === null) {
+          $linkedDecisionStmt = $db->prepare('SELECT strategy_build,parameter_hash,selected_leverage FROM strategy_decisions WHERE strategy_key=? AND decision_id=? LIMIT 1');
+          $linkedDecisionStmt->execute([$accountKey, $linkedDecisionId]);
+          $linkedDecisionRow = $linkedDecisionStmt->fetch();
+          if (is_array($linkedDecisionRow)) {
+              if ($linkedBuild === '') $linkedBuild = substr((string)($linkedDecisionRow['strategy_build'] ?? ''), 0, 160);
+              if ($linkedParameterHash === '') $linkedParameterHash = substr((string)($linkedDecisionRow['parameter_hash'] ?? ''), 0, 64);
+              if ($linkedLeverage === null && is_numeric($linkedDecisionRow['selected_leverage'] ?? null)) $linkedLeverage = (float)$linkedDecisionRow['selected_leverage'];
+          }
+      }
+      $tradePosition = $currentPosition ?? $previousPosition;
+      $tradeTicket = is_array($tradePosition) ? (int)($tradePosition['ticket'] ?? 0) : 0;
+      if ($tradeTicket > 0) {
+          $tradeDecisionStmt = $db->prepare('UPDATE strategy_trades SET decision_id=?, strategy_build=?, parameter_hash=?, entry_leverage=? WHERE strategy_key=? AND position_ticket=?');
+          $tradeDecisionStmt->execute([$linkedDecisionId, $linkedBuild, $linkedParameterHash, $linkedLeverage, $accountKey, $tradeTicket]);
+      }
+  }
+  // OPPW_V47_4_TRADE_DECISION_LINK_END
+
+$previousAccount = is_array($previousSnapshot['account'] ?? null) ? $previousSnapshot['account'] : [];
     $previousBalance = $number($previousAccount['balance'] ?? 0);
     $balanceDelta = $balance - $previousBalance;
     if ($previousSnapshot && abs($balanceDelta) >= 0.01 && !$hasTradeEvent && $previousPosition === null && $currentPosition === null) {
@@ -217,6 +318,10 @@ try {
 
     $eventStmt = $db->prepare('INSERT IGNORE INTO strategy_events(strategy_key, event_time, level, name, result, message, details, event_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
     foreach ($normalizedEvents as $event) {
+      // OPPW_V47_4_DECISION_EVENT_SKIP_BEGIN
+      if (in_array($event['name'], ['STRATEGY_DECISION_RECORDED', 'STRATEGY_DECISION_CALCULATED', 'STRATEGY_DECISION_PERSISTED'], true)) continue;
+      // OPPW_V47_4_DECISION_EVENT_SKIP_END
+
         $detailsJson = $event['details'] ? json_encode($event['details'], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR) : null;
         $eventStmt->execute([$accountKey, $event['time'], $event['level'], $event['name'], $event['result'], $event['message'], $detailsJson, $event['hash']]);
         if ($eventStmt->rowCount() > 0 && (
@@ -255,4 +360,12 @@ foreach ($insertedCriticalEvents as $event) {
     send_account_push($db, $accountKey, 'event:' . $event['hash'], "$displayName: {$event['name']}", $event['message'], ['type' => $event['name']]);
 }
 
-json_response(['ok' => true, 'accountKey' => $accountKey, 'storedEvents' => count($normalizedEvents)], 201);
+// OPPW_V47_4_DECISION_ACK_RESPONSE_BEGIN
+json_response([
+    'ok' => true,
+    'accountKey' => $accountKey,
+    'storedEvents' => count($normalizedEvents),
+    'strategyDecisionStored' => $strategyDecisionStored,
+    'strategyDecisionId' => $strategyDecisionId,
+], 201);
+// OPPW_V47_4_DECISION_ACK_RESPONSE_END

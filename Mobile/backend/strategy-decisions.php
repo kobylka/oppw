@@ -20,7 +20,7 @@ $beforeId = max(0,(int)($_GET['before_id'] ?? 0));
 $where = 'strategy_key = ?';
 $params = [$accountKey];
 if ($beforeId > 0) { $where .= ' AND id < ?'; $params[] = $beforeId; }
-$sql = "SELECT id,decision_id,decision_week,recorded_at,strategy_build,parameter_hash,decision_type,outcome,selected_leverage,leverage_reason,previous_full_week_change,previous_full_week_source,previous_trade_change,previous_trade_source,symbol,side,proposed_price,proposed_volume,required_deposit,effective_leverage,stop_loss_percent,stop_loss_price,stop_loss_cash,account_return_at_stop_percent,account_loss_cap_applied,error_text,payload FROM strategy_decisions WHERE $where ORDER BY id DESC LIMIT $limit";
+$sql = "SELECT id,decision_id,decision_week,recorded_at,strategy_build,parameter_hash,decision_type,outcome,selected_leverage,leverage_reason,previous_full_week_change,previous_full_week_source,previous_trade_change,previous_trade_source,symbol,side,proposed_price,proposed_volume,required_deposit,required_balance,required_balance_multiplier,balance_multiplier_profile,effective_leverage,stop_loss_percent,stop_loss_price,stop_loss_cash,account_return_at_stop_percent,account_loss_cap_applied,error_text,payload FROM strategy_decisions WHERE $where ORDER BY id DESC LIMIT $limit";
 $statement = $db->prepare($sql);
 $statement->execute($params);
 $rows = $statement->fetchAll();
@@ -36,6 +36,9 @@ foreach ($rows as $row) {
         'previousTradeChange'=>(float)$row['previous_trade_change'],'previousTradeSource'=>(string)$row['previous_trade_source'],
         'symbol'=>(string)$row['symbol'],'side'=>(string)$row['side'],'price'=>$row['proposed_price']!==null?(float)$row['proposed_price']:null,
         'volume'=>$row['proposed_volume']!==null?(float)$row['proposed_volume']:null,'requiredDeposit'=>$row['required_deposit']!==null?(float)$row['required_deposit']:null,
+        'requiredBalance'=>$row['required_balance']!==null?(float)$row['required_balance']:null,
+        'requiredBalanceMultiplier'=>$row['required_balance_multiplier']!==null?(float)$row['required_balance_multiplier']:null,
+        'balanceMultiplierProfile'=>(string)$row['balance_multiplier_profile'],
         'effectiveLeverage'=>$row['effective_leverage']!==null?(float)$row['effective_leverage']:null,'stopLossPercent'=>$row['stop_loss_percent']!==null?(float)$row['stop_loss_percent']:null,
         'stopLossPrice'=>$row['stop_loss_price']!==null?(float)$row['stop_loss_price']:null,'stopLossCash'=>$row['stop_loss_cash']!==null?(float)$row['stop_loss_cash']:null,
         'accountReturnAtStopPercent'=>$row['account_return_at_stop_percent']!==null?(float)$row['account_return_at_stop_percent']:null,
