@@ -16,6 +16,7 @@ Key execution rules
 * PUBLISHER mode is read-only and owns backend publishing while active.
 * EXECUTOR automatically publishes when no PUBLISHER heartbeat is active.
 * Status publishes an institutional-style next-trade What-if ticket; while a position is open it assumes the current position closes first and never resizes that live position.
+* Entry volume is the largest broker volume step whose MT5 required deposit multiplied by 1.765 does not exceed account balance; this deliberately maximizes usable leverage at low balances.
 * Every completed trade is assigned a Guy Fleury A/B/C/D class and the publisher includes the label.
 * Weekends remain market-idle after startup. A lightweight MT5 account-balance watcher runs regardless of position state and may publish a fresh next-trade What-if snapshot after a top-up or withdrawal; no recurring market checks or minute publishing follow.
 
@@ -51,7 +52,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-BUILD_ID = "2026-07-20-account-funding-refresh-v47.1"
+BUILD_ID = "2026-07-20-required-balance-sizing-v47.2"
 SCHEDULED_ACTION_LEAD_SECONDS = 3.0
 AUTOTRADING_REMINDER_SECONDS = 60.0
 STALE_TICK_REMINDER_SECONDS = 60.0
@@ -59,6 +60,7 @@ PUBLISHER_HEARTBEAT_INTERVAL_SECONDS = 1.0
 PUBLISHER_HEARTBEAT_STALE_SECONDS = 8.0
 ACCOUNT_FUNDING_CHECK_INTERVAL_SECONDS = 5.0
 MAX_ACCOUNT_STOP_LOSS_FRACTION = 0.50
+REQUIRED_BALANCE_MULTIPLIER = 1.765
 INSTANCE_MODE_EXECUTOR = "EXECUTOR"
 INSTANCE_MODE_PUBLISHER = "PUBLISHER"
 ACCOUNT_DEMO = "DEMO"
@@ -772,7 +774,7 @@ class MobileMonitorPublisher:
         public_events = [{key: value for key, value in event.items() if not key.startswith("_spool") and key != "_sourcePid"} for event in events]
         payload = {"accountKey": self.cfg.monitor_account_key, "capturedAt": captured_at, "snapshot": snapshot_copy, "events": public_events}
         body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-        request = urllib.request.Request(self.cfg.monitor_ingest_url, data=body, method="POST", headers={"Authorization": f"Bearer {self.cfg.monitor_write_token}", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "OPPW-MT5-Publisher/47.1"})
+        request = urllib.request.Request(self.cfg.monitor_ingest_url, data=body, method="POST", headers={"Authorization": f"Bearer {self.cfg.monitor_write_token}", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "OPPW-MT5-Publisher/47.2"})
         try:
             with urllib.request.urlopen(request, timeout=self.cfg.monitor_timeout_seconds) as response:
                 if int(response.status) not in (200, 201):
@@ -1740,7 +1742,7 @@ class OPPWContinuousStrategy:
                 headers={
                     "Authorization": f"Bearer {token}",
                     "Accept": "application/json",
-                    "User-Agent": "OPPW-MT5-History/47.1",
+                    "User-Agent": "OPPW-MT5-History/47.2",
                 },
             )
             try:
@@ -1956,7 +1958,12 @@ class OPPWContinuousStrategy:
         result: dict[str, Any] = {
             "available": False, "generatedAt": now.isoformat(), "build": BUILD_ID, "account": self.account,
             "symbol": self.cfg.trade_symbol, "side": "BUY", "price": 0.0, "priceSource": "MT5 current BUY price",
-            "volume": 0.0, "requiredDeposit": 0.0, "brokerMarginLeverage": 0.0, "depositSource": "",
+            "volume": 0.0, "requiredDeposit": 0.0, "requiredBalance": 0.0,
+            "requiredBalanceMultiplier": REQUIRED_BALANCE_MULTIPLIER, "requiredBalanceHeadroom": 0.0,
+            "minimumVolumeRequiredDeposit": 0.0, "minimumVolumeRequiredBalance": 0.0,
+            "nextVolumeStep": 0.0, "nextVolumeStepRequiredDeposit": 0.0,
+            "nextVolumeStepRequiredBalance": 0.0, "nextVolumeStepAffordable": False,
+            "sizingMethod": "MAX_VOLUME_BY_REQUIRED_BALANCE", "brokerMarginLeverage": 0.0, "depositSource": "",
             "balance": 0.0, "equity": 0.0, "freeMargin": 0.0, "freeMarginAfter": 0.0,
             "marginUsagePercent": 0.0, "marginLevelAfterPercent": 0.0, "effectiveLeverage": 0.0,
             "strategyLeverage": float(leverage), "leverageReason": leverage_reason,
@@ -1993,29 +2000,12 @@ class OPPWContinuousStrategy:
             if price <= 0:
                 raise RuntimeError(f"No usable current price for {self.cfg.trade_symbol}")
 
+            sizing = self.required_balance_sizing(balance, sizing_free_margin, info, price)
             minimum_volume_notional = self.minimum_volume_notional(info, price)
-            _, _, sizing_units = self.target_notional(balance, leverage, minimum_volume_notional)
-            minimum_volume_floor = False
-            volume = self.normalized_volume(sizing_units, info)
-            if volume <= 0:
-                minimum_volume = float(info.volume_min)
-                minimum_margin = mt5.order_calc_margin(mt5.ORDER_TYPE_BUY, self.cfg.trade_symbol, minimum_volume, price)
-                if minimum_margin is not None and float(minimum_margin) <= sizing_free_margin:
-                    volume = minimum_volume
-                    sizing_units = 1
-                    minimum_volume_floor = True
-                else:
-                    raise RuntimeError("Calculated potential volume is below the broker minimum and minimum volume is not affordable")
-
-            required_raw = mt5.order_calc_margin(mt5.ORDER_TYPE_BUY, self.cfg.trade_symbol, volume, price)
-            if required_raw is None:
-                raise RuntimeError(f"order_calc_margin failed: {mt5.last_error()}")
-            required_deposit = float(required_raw)
-            if required_deposit > sizing_free_margin + 0.01:
-                assumption = "assumed post-close balance" if assume_current_position_closed else "current free margin"
-                raise RuntimeError(
-                    f"Calculated potential volume requires margin {required_deposit:.2f}, above {assumption} {sizing_free_margin:.2f}"
-                )
+            sizing_units = int(sizing["sizingUnits"])
+            volume = float(sizing["volume"])
+            required_deposit = float(sizing["requiredDeposit"])
+            required_balance = float(sizing["requiredBalance"])
             broker_leverage = self.broker_margin_leverage(account)
             effective_leverage = required_deposit * float(self.cfg.sizing_multiplier) / balance if balance > 0 else 0.0
             tick_size = float(getattr(info, "trade_tick_size", 0.0) or getattr(info, "point", 0.0) or 0.01)
@@ -2031,7 +2021,17 @@ class OPPWContinuousStrategy:
 
             result.update({
                 "available": True, "price": price, "volume": float(volume), "requiredDeposit": required_deposit,
-                "brokerMarginLeverage": broker_leverage, "depositSource": "MT5 order_calc_margin(proposed volume, current BUY price)",
+                "requiredBalance": required_balance, "requiredBalanceMultiplier": REQUIRED_BALANCE_MULTIPLIER,
+                "requiredBalanceHeadroom": balance - required_balance,
+                "minimumVolumeRequiredDeposit": float(sizing["minimumVolumeRequiredDeposit"]),
+                "minimumVolumeRequiredBalance": float(sizing["minimumVolumeRequiredBalance"]),
+                "nextVolumeStep": float(sizing["nextVolumeStep"]),
+                "nextVolumeStepRequiredDeposit": float(sizing["nextVolumeStepRequiredDeposit"]),
+                "nextVolumeStepRequiredBalance": float(sizing["nextVolumeStepRequiredBalance"]),
+                "nextVolumeStepAffordable": bool(sizing["nextVolumeStepAffordable"]),
+                "sizingMethod": "MAX_VOLUME_BY_REQUIRED_BALANCE",
+                "brokerMarginLeverage": broker_leverage,
+                "depositSource": "MT5 order_calc_margin(volume, current BUY price); required balance = deposit × 1.765",
                 "balance": balance, "equity": equity, "freeMargin": free_margin, "sizingFreeMargin": sizing_free_margin,
                 "freeMarginAfter": sizing_free_margin - required_deposit,
                 "marginUsagePercent": required_deposit / balance * 100.0 if balance > 0 else 0.0,
@@ -2040,8 +2040,8 @@ class OPPWContinuousStrategy:
                 "potentialStopLossRatio": stop_ratio, "potentialStopLossPrice": stop_price,
                 "potentialStopLossCash": stop_profit, "accountLossPercentAtStop": stop_profit / balance * 100.0 if balance > 0 else 0.0,
                 "accountLossCapApplied": account_loss_cap_applied,
-                "positionNotional": sizing_units * minimum_volume_notional, "sizingUnits": int(sizing_units),
-                "minimumVolumeFloor": minimum_volume_floor,
+                "positionNotional": minimum_volume_notional * (float(volume) / float(info.volume_min)),
+                "sizingUnits": int(sizing_units), "minimumVolumeFloor": False,
                 "scenarios": self.what_if_scenarios(float(volume), price, balance, stop_return),
             })
         except Exception as exc:
@@ -2054,6 +2054,8 @@ class OPPWContinuousStrategy:
             "breakEvenRatio": self.cfg.break_even_ratio, "tslStop": self.cfg.tsl_stop,
             "leverageStopPoints": self.cfg.leverage_stop_points, "tpps": list(self.cfg.tpps),
             "sizingMultiplier": self.cfg.sizing_multiplier,
+            "requiredBalanceMultiplier": REQUIRED_BALANCE_MULTIPLIER,
+            "sizingMethod": "MAX_VOLUME_BY_REQUIRED_BALANCE",
         }
         return hashlib.sha256(json.dumps(values, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
@@ -2087,7 +2089,10 @@ class OPPWContinuousStrategy:
                 "previousTradeTriggerPercent": float(preview.get("previousTradeTriggerPercent", -0.7)),
             },
             "sizing": {key: preview.get(key) for key in (
-                "symbol", "side", "price", "priceSource", "volume", "requiredDeposit", "depositSource",
+                "symbol", "side", "price", "priceSource", "volume", "requiredDeposit", "requiredBalance",
+                "requiredBalanceMultiplier", "requiredBalanceHeadroom", "minimumVolumeRequiredDeposit",
+                "minimumVolumeRequiredBalance", "nextVolumeStep", "nextVolumeStepRequiredDeposit",
+                "nextVolumeStepRequiredBalance", "nextVolumeStepAffordable", "sizingMethod", "depositSource",
                 "brokerMarginLeverage", "effectiveLeverage", "positionNotional", "sizingUnits", "minimumVolumeFloor",
                 "balance", "equity", "freeMargin", "sizingFreeMargin", "freeMarginAfter", "marginUsagePercent", "marginLevelAfterPercent",
                 "purpose", "currentPositionOpen", "assumesCurrentPositionClosed", "sizingBalanceSource", "assumptionNote",
@@ -2124,11 +2129,14 @@ class OPPWContinuousStrategy:
             self.log.info(
                 "EVENT STRATEGY_DECISION_RECORDED decision_id=%s parameter_hash=%s outcome=%s leverage=%.0f "
                 "previous_full_week=%.8f full_week_source=%s previous_trade=%.8f trade_source=%s volume=%.8f required_deposit=%.2f "
-                "effective_leverage=%.6f stop_loss_percent=%.4f stop_loss_price=%.5f stop_loss_cash=%.2f error=%s",
+                "required_balance=%.2f required_balance_multiplier=%.3f effective_leverage=%.6f stop_loss_percent=%.4f "
+                "stop_loss_price=%.5f stop_loss_cash=%.2f error=%s",
                 payload["decisionId"], payload["parameterHash"], payload["outcome"], payload["selectedLeverage"],
                 payload["inputs"]["previousFullWeekChange"], str(payload["inputs"].get("previousFullWeekSource", "")).replace(" ", "_"),
                 payload["inputs"]["previousTradeChange"], str(payload["inputs"].get("previousTradeSource", "")).replace(" ", "_"),
                 float(payload["sizing"].get("volume") or 0.0), float(payload["sizing"].get("requiredDeposit") or 0.0),
+                float(payload["sizing"].get("requiredBalance") or 0.0),
+                float(payload["sizing"].get("requiredBalanceMultiplier") or REQUIRED_BALANCE_MULTIPLIER),
                 float(payload["sizing"].get("effectiveLeverage") or 0.0),
                 float(payload["risk"].get("potentialStopLossPercent") or 0.0),
                 float(payload["risk"].get("potentialStopLossPrice") or 0.0),
@@ -2155,6 +2163,9 @@ class OPPWContinuousStrategy:
                 potential_lines = [
                     f"next potential position: BUY {float(preview['volume']):.2f} lot {preview['symbol']} @ {float(preview['price']):.5f}",
                     f"required deposit: {float(preview['requiredDeposit']):.2f}{currency_suffix}",
+                    f"required balance: {float(preview['requiredBalance']):.2f}{currency_suffix} ({REQUIRED_BALANCE_MULTIPLIER:.3f} × deposit)",
+                    f"balance headroom: {float(preview['requiredBalanceHeadroom']):.2f}{currency_suffix}",
+                    f"next volume step: {float(preview['nextVolumeStep']):.2f} lot requires balance {float(preview['nextVolumeStepRequiredBalance']):.2f}{currency_suffix}",
                     f"effective leverage: {float(preview['effectiveLeverage']):.4f}x ({float(self.cfg.sizing_multiplier):g} × required deposit / balance)",
                     f"potential hard SL: {float(preview['potentialStopLossPrice']):.5f} ({float(preview['potentialStopLossPercent']):.4f}%)",
                     f"potential SL cash P/L: {float(preview['potentialStopLossCash']):.2f}{currency_suffix}",
@@ -2292,9 +2303,11 @@ class OPPWContinuousStrategy:
         self.log.info(
             "EVENT ACCOUNT_FUNDING_CHANGE_DETECTED role=%s old_balance=%.2f new_balance=%.2f old_credit=%.2f new_credit=%.2f "
             "position_open=%s current_position_unchanged=true next_trade_volume=%.8f next_trade_required_deposit=%.2f "
-            "actual_free_margin=%.2f sizing_free_margin=%.2f sizing_units=%s",
+            "next_trade_required_balance=%.2f required_balance_multiplier=%.3f actual_free_margin=%.2f "
+            "sizing_free_margin=%.2f sizing_units=%s",
             label, previous[0], signature[0], previous[1], signature[1], str(position_open).lower(),
             float(preview.get("volume") or 0.0), float(preview.get("requiredDeposit") or 0.0),
+            float(preview.get("requiredBalance") or 0.0), REQUIRED_BALANCE_MULTIPLIER,
             float(preview.get("freeMargin") or 0.0), float(preview.get("sizingFreeMargin") or 0.0),
             int(preview.get("sizingUnits") or 0), extra={"skip_mobile_publish": True},
         )
@@ -2738,24 +2751,93 @@ class OPPWContinuousStrategy:
             raise RuntimeError(f"Cannot derive minimum-volume notional: {mt5.last_error()}")
         return abs(float(profit_for_one_percent)) / 0.01
 
-    def target_notional(self, balance: float, leverage: int, minimum_volume_notional: float) -> tuple[float, float, int]:
-        if minimum_volume_notional <= 0:
-            raise ValueError(f"Minimum-volume notional must be positive, got {minimum_volume_notional}")
-        sizing_quantum = minimum_volume_notional / self.cfg.sizing_multiplier
-        divisor = self.cfg.sizing_multiplier / leverage
-        units = math.floor(balance / divisor / sizing_quantum)
-        return minimum_volume_notional, sizing_quantum, units
-
     @staticmethod
     def normalized_volume(sizing_units: int, info) -> float:
         if sizing_units <= 0:
             return 0.0
+        minimum = float(info.volume_min)
         step = float(info.volume_step)
-        volume = floor_step(sizing_units * float(info.volume_min), step)
-        volume = min(volume, float(info.volume_max))
-        if volume < float(info.volume_min):
+        maximum = float(info.volume_max)
+        if minimum <= 0 or step <= 0 or maximum < minimum:
+            return 0.0
+        volume = minimum + (sizing_units - 1) * step
+        volume = floor_step(volume + step * 1e-9, step)
+        volume = min(volume, maximum)
+        if volume < minimum - 1e-9:
             return 0.0
         return round(volume, 8)
+
+    @staticmethod
+    def maximum_sizing_units(info) -> int:
+        minimum = float(info.volume_min)
+        step = float(info.volume_step)
+        maximum = float(info.volume_max)
+        if minimum <= 0 or step <= 0 or maximum < minimum:
+            return 0
+        return max(1, int(math.floor((maximum - minimum) / step + 1e-9)) + 1)
+
+    def required_balance_sizing(self, balance: float, available_margin: float, info, ask: float) -> dict[str, Any]:
+        if balance <= 0:
+            raise RuntimeError(f"Account balance must be positive for sizing, got {balance:.2f}")
+        if available_margin < 0:
+            raise RuntimeError(f"Available margin must not be negative, got {available_margin:.2f}")
+        if ask <= 0:
+            raise RuntimeError(f"BUY price must be positive for sizing, got {ask}")
+
+        maximum_units = self.maximum_sizing_units(info)
+        if maximum_units <= 0:
+            raise RuntimeError(
+                f"Invalid volume limits for {self.cfg.trade_symbol}: min={getattr(info, 'volume_min', None)} "
+                f"step={getattr(info, 'volume_step', None)} max={getattr(info, 'volume_max', None)}"
+            )
+
+        def candidate(units: int) -> dict[str, Any]:
+            volume = self.normalized_volume(units, info)
+            if volume <= 0:
+                raise RuntimeError(f"Cannot normalize sizing unit {units} for {self.cfg.trade_symbol}")
+            margin_raw = mt5.order_calc_margin(mt5.ORDER_TYPE_BUY, self.cfg.trade_symbol, volume, ask)
+            if margin_raw is None:
+                raise RuntimeError(f"order_calc_margin failed for volume {volume:.8f}: {mt5.last_error()}")
+            deposit = float(margin_raw)
+            required_balance = deposit * REQUIRED_BALANCE_MULTIPLIER
+            affordable = required_balance <= balance + 0.01 and deposit <= available_margin + 0.01
+            return {
+                "sizingUnits": units, "volume": volume, "requiredDeposit": deposit,
+                "requiredBalance": required_balance, "affordable": affordable,
+            }
+
+        low = 1
+        high = maximum_units
+        best: Optional[dict[str, Any]] = None
+        while low <= high:
+            middle = (low + high) // 2
+            current = candidate(middle)
+            if bool(current["affordable"]):
+                best = current
+                low = middle + 1
+            else:
+                high = middle - 1
+
+        minimum_candidate = candidate(1)
+        if best is None:
+            raise RuntimeError(
+                f"Minimum volume {minimum_candidate['volume']:.8f} requires deposit "
+                f"{minimum_candidate['requiredDeposit']:.2f} and balance {minimum_candidate['requiredBalance']:.2f} "
+                f"(deposit × {REQUIRED_BALANCE_MULTIPLIER:.3f}); available balance={balance:.2f} "
+                f"available margin={available_margin:.2f}"
+            )
+
+        next_candidate = candidate(int(best["sizingUnits"]) + 1) if int(best["sizingUnits"]) < maximum_units else None
+        return {
+            **best,
+            "requiredBalanceMultiplier": REQUIRED_BALANCE_MULTIPLIER,
+            "minimumVolumeRequiredDeposit": float(minimum_candidate["requiredDeposit"]),
+            "minimumVolumeRequiredBalance": float(minimum_candidate["requiredBalance"]),
+            "nextVolumeStep": float(next_candidate["volume"]) if next_candidate is not None else 0.0,
+            "nextVolumeStepRequiredDeposit": float(next_candidate["requiredDeposit"]) if next_candidate is not None else 0.0,
+            "nextVolumeStepRequiredBalance": float(next_candidate["requiredBalance"]) if next_candidate is not None else 0.0,
+            "nextVolumeStepAffordable": bool(next_candidate["affordable"]) if next_candidate is not None else False,
+        }
 
     @staticmethod
     def filling_mode_name(mode: int) -> str:
@@ -2834,20 +2916,24 @@ class OPPWContinuousStrategy:
         leverage = self.choose_leverage()
         ask = float(tick.ask)
         minimum_volume_notional = self.minimum_volume_notional(info, ask)
-        target_notional, sizing_quantum, sizing_units = self.target_notional(float(account.balance), leverage, minimum_volume_notional)
-        if sizing_units <= 0:
+        try:
+            sizing = self.required_balance_sizing(
+                float(account.balance), max(0.0, float(getattr(account, "margin_free", 0.0) or 0.0)), info, ask,
+            )
+        except RuntimeError as exc:
             self.log.error(
-                "EVENT BUY_SKIPPED reason=zero_sizing_units minimum_volume=%.8f minimum_volume_notional=%.2f sizing_quantum=%.2f sizing_units=%s",
-                float(info.volume_min), minimum_volume_notional, sizing_quantum, sizing_units,
+                "EVENT BUY_SKIPPED reason=required_balance_sizing_failed balance=%.2f free_margin=%.2f "
+                "required_balance_multiplier=%.3f error=%s",
+                float(account.balance), float(getattr(account, "margin_free", 0.0) or 0.0),
+                REQUIRED_BALANCE_MULTIPLIER, shlex.quote(str(exc)),
             )
             return False
 
-        volume = self.normalized_volume(sizing_units, info)
-        if volume <= 0:
-            self.log.error("EVENT BUY_SKIPPED reason=volume_below_minimum sizing_units=%s minimum_volume=%.8f", sizing_units, float(info.volume_min))
-            return False
-
-        position_notional = sizing_units * target_notional
+        sizing_units = int(sizing["sizingUnits"])
+        volume = float(sizing["volume"])
+        required_deposit = float(sizing["requiredDeposit"])
+        required_balance = float(sizing["requiredBalance"])
+        position_notional = minimum_volume_notional * (volume / float(info.volume_min))
         tick_size = float(getattr(info, "trade_tick_size", 0.0) or info.point)
         sl, sl_profit, account_loss_cap_applied = self.capped_hard_stop(
             self.cfg.trade_symbol, volume, ask, float(account.balance), leverage, tick_size,
@@ -2863,9 +2949,14 @@ class OPPWContinuousStrategy:
             request = dict(request_base)
             request["type_filling"] = self.order_filling_modes(info)[0]
             self.log.info(
-                "EVENT BUY_DRY_RUN day=%s scheduled=%s leverage=%s volume=%s minimum_volume=%.8f minimum_volume_notional=%.2f sizing_quantum=%.2f sizing_units=%s target_notional=%.2f position_notional=%.2f ask=%.5f sl=%.5f sl_cash=%.2f account_loss_cap=%s filling=%s",
+                "EVENT BUY_DRY_RUN day=%s scheduled=%s leverage=%s volume=%s minimum_volume=%.8f minimum_volume_notional=%.2f "
+                "sizing_units=%s required_deposit=%.2f required_balance=%.2f required_balance_multiplier=%.3f "
+                "next_volume_step=%.8f next_step_required_balance=%.2f position_notional=%.2f ask=%.5f sl=%.5f "
+                "sl_cash=%.2f account_loss_cap=%s filling=%s",
                 current_day, scheduled.isoformat(), leverage, volume, float(info.volume_min), minimum_volume_notional,
-                sizing_quantum, sizing_units, target_notional, position_notional, ask, sl, sl_profit, account_loss_cap_applied,
+                sizing_units, required_deposit, required_balance, REQUIRED_BALANCE_MULTIPLIER,
+                float(sizing["nextVolumeStep"]), float(sizing["nextVolumeStepRequiredBalance"]),
+                position_notional, ask, sl, sl_profit, account_loss_cap_applied,
                 self.filling_mode_name(request["type_filling"]),
             )
             return False
@@ -2890,9 +2981,14 @@ class OPPWContinuousStrategy:
         self.execution_stage("CHECKED", result=check_ok, reference_price=ask, retcode=int(getattr(check, "retcode", -1)) if check is not None else None,
                              filling_mode=self.filling_mode_name(request.get("type_filling", -1)), scheduled_at=scheduled.isoformat())
         self.log.info(
-            "EVENT BUY_REQUEST day=%s scheduled=%s leverage=%s volume=%s minimum_volume=%.8f minimum_volume_notional=%.2f sizing_quantum=%.2f sizing_units=%s target_notional=%.2f position_notional=%.2f ask=%.5f sl=%.5f sl_cash=%.2f account_loss_cap=%s filling=%s",
+            "EVENT BUY_REQUEST day=%s scheduled=%s leverage=%s volume=%s minimum_volume=%.8f minimum_volume_notional=%.2f "
+            "sizing_units=%s required_deposit=%.2f required_balance=%.2f required_balance_multiplier=%.3f "
+            "next_volume_step=%.8f next_step_required_balance=%.2f position_notional=%.2f ask=%.5f sl=%.5f "
+            "sl_cash=%.2f account_loss_cap=%s filling=%s",
             current_day, scheduled.isoformat(), leverage, volume, float(info.volume_min), minimum_volume_notional,
-            sizing_quantum, sizing_units, target_notional, position_notional, ask, sl, sl_profit, account_loss_cap_applied,
+            sizing_units, required_deposit, required_balance, REQUIRED_BALANCE_MULTIPLIER,
+            float(sizing["nextVolumeStep"]), float(sizing["nextVolumeStepRequiredBalance"]),
+            position_notional, ask, sl, sl_profit, account_loss_cap_applied,
             self.filling_mode_name(request.get("type_filling", -1)),
         )
         if check is None or int(check.retcode) not in (0, getattr(mt5, "TRADE_RETCODE_DONE", 10009)):
@@ -3457,12 +3553,15 @@ class OPPWContinuousStrategy:
 
         self.log.info(
             "EVENT WEEKEND_WHAT_IF_CALCULATED outcome=%s leverage=%.0f previous_trade=%.8f "
-            "trade_source=%s volume=%.8f required_deposit=%.2f effective_leverage=%.6f",
+            "trade_source=%s volume=%.8f required_deposit=%.2f required_balance=%.2f "
+            "required_balance_multiplier=%.3f effective_leverage=%.6f",
             strategy_decision["outcome"], strategy_decision["selectedLeverage"],
             strategy_decision["inputs"]["previousTradeChange"],
             str(strategy_decision["inputs"].get("previousTradeSource", "")).replace(" ", "_"),
             float(strategy_decision["sizing"].get("volume") or 0.0),
             float(strategy_decision["sizing"].get("requiredDeposit") or 0.0),
+            float(strategy_decision["sizing"].get("requiredBalance") or 0.0),
+            float(strategy_decision["sizing"].get("requiredBalanceMultiplier") or REQUIRED_BALANCE_MULTIPLIER),
             float(strategy_decision["sizing"].get("effectiveLeverage") or 0.0),
         )
 
