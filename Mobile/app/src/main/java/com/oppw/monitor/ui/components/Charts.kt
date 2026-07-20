@@ -38,8 +38,8 @@ fun EquityChart(points: List<EquityPoint>, currency: String, modifier: Modifier 
     val values = plotted.map { it.point.value }
     val start = values.first()
     val end = values.last()
-    val min = 0.0
-    val max = (values.maxOrNull() ?: 0.0).coerceAtLeast(0.0)
+    val min = values.minOrNull() ?: 0.0
+    val max = values.maxOrNull() ?: min
     val range = (max - min).takeIf { it > 0.0 } ?: 1.0
 
     Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {

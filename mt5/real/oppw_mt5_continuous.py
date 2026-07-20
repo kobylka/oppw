@@ -54,7 +54,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-BUILD_ID = "2026-07-20-config-externalization-and-decision-ack-v47.4"
+BUILD_ID = "2026-07-20-growth-profile-fixed-position-stop-v47.5"
 INSTANCE_MODE_EXECUTOR = "EXECUTOR"
 INSTANCE_MODE_PUBLISHER = "PUBLISHER"
 ACCOUNT_DEMO = "DEMO"
@@ -2008,6 +2008,9 @@ class OPPWContinuousStrategy:
         if requested_profit_raw is None:
             raise RuntimeError(f"order_calc_profit failed for hard stop: {mt5.last_error()}")
         requested_profit = float(requested_profit_raw)
+        if not self.account_loss_cap_enabled():
+            return requested_price, requested_profit, False
+
         maximum_loss = -float(self.cfg.max_account_stop_loss_fraction) * max(0.0, balance)
         if balance <= 0 or requested_profit >= maximum_loss - 1e-8:
             return requested_price, requested_profit, False
@@ -2067,6 +2070,12 @@ class OPPWContinuousStrategy:
     def balance_multiplier_profile(self) -> str:
         return "LEGACY_LEVERAGE_BOUND" if bool(getattr(self.cfg, "use_legacy_balance_multiplier", False)) else "GROWTH_1_765"
 
+    def account_loss_cap_enabled(self) -> bool:
+        return bool(getattr(self.cfg, "use_legacy_balance_multiplier", False))
+
+    def account_loss_cap_policy(self) -> str:
+        return "BALANCE_50_PERCENT" if self.account_loss_cap_enabled() else "DISABLED_FOR_GROWTH_1_765"
+
     def potential_position_preview(self, assume_current_position_closed: bool = False) -> dict[str, Any]:
         previous_full_week, previous_trade, full_week_source, trade_source = self.resolved_leverage_inputs()
         leverage, leverage_reason = self.leverage_decision()
@@ -2089,7 +2098,7 @@ class OPPWContinuousStrategy:
             "fullWeekTriggerPercent": float(self.cfg.full_week_loss_trigger) * 100.0, "previousTradeTriggerPercent": float(self.cfg.previous_trade_loss_trigger) * 100.0,
             "potentialStopLossPercent": 0.0, "potentialStopLossRatio": 0.0,
             "potentialStopLossPrice": 0.0, "potentialStopLossCash": 0.0, "accountLossPercentAtStop": 0.0,
-            "accountLossCapApplied": False, "stopLossFormula": "",
+            "accountLossCapApplied": False, "accountLossCapPolicy": self.account_loss_cap_policy(), "stopLossFormula": "",
             "positionNotional": 0.0, "sizingUnits": 0, "minimumVolumeFloor": False, "scenarios": [], "error": "",
             "purpose": "NEXT_TRADE", "currentPositionOpen": bool(assume_current_position_closed),
             "assumesCurrentPositionClosed": bool(assume_current_position_closed), "sizingFreeMargin": 0.0,
@@ -2156,7 +2165,7 @@ class OPPWContinuousStrategy:
                 "effectiveLeverage": effective_leverage, "potentialStopLossPercent": stop_return * 100.0,
                 "potentialStopLossRatio": stop_ratio, "potentialStopLossPrice": stop_price,
                 "potentialStopLossCash": stop_profit, "accountLossPercentAtStop": stop_profit / balance * 100.0 if balance > 0 else 0.0,
-                "accountLossCapApplied": account_loss_cap_applied,
+                "accountLossCapApplied": account_loss_cap_applied, "accountLossCapPolicy": self.account_loss_cap_policy(),
                 "positionNotional": minimum_volume_notional * (float(volume) / float(info.volume_min)),
                 "sizingUnits": int(sizing_units), "minimumVolumeFloor": False,
                 "scenarios": self.what_if_scenarios(float(volume), price, balance, stop_return),
@@ -2173,6 +2182,9 @@ class OPPWContinuousStrategy:
             "sizingMultiplier": self.cfg.sizing_multiplier,
             "requiredBalanceMultiplier": self.required_balance_multiplier(self.leverage_decision()[0]),
             "balanceMultiplierProfile": self.balance_multiplier_profile(),
+            "accountLossCapPolicy": self.account_loss_cap_policy(),
+            "hardStopRatioL10": self.hard_sl_ratio(int(self.cfg.loss_leverage)),
+            "hardStopRatioL8": self.hard_sl_ratio(int(self.cfg.base_leverage)),
             "sizingMethod": "MAX_VOLUME_BY_REQUIRED_BALANCE",
         }
         return hashlib.sha256(json.dumps(values, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()

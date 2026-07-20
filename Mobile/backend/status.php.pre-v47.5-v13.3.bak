@@ -372,56 +372,120 @@ function market_point_price(array $row, string $field, ?float $fallback = null):
     return positive_number($row, $field) ?? $fallback;
 }
 
-
 function build_market_week_stats(array $rows, DateTimeImmutable $weekStart, DateTimeZone $localTimezone): ?array
 {
     $weekStartKey = $weekStart->format('Y-m-d');
-    $currentWeekKey = strategy_week_start(new DateTimeImmutable('now', $localTimezone))->format('Y-m-d');
-    $isCurrentWeek = $weekStartKey === $currentWeekKey;
-    $weekRows = []; $regularRows = []; $currentPrice = null;
-    foreach ($rows as $row) {
-        $local = (new DateTimeImmutable((string)$row['captured_minute'], new DateTimeZone('UTC')))->setTimezone($localTimezone);
+    $weekRows = [];
+    $regularRows = [];
+    $currentPrice = null;
+
+    foreach ($rows as $marketRow) {
+        $local = (new DateTimeImmutable((string)$marketRow['captured_minute'], new DateTimeZone('UTC')))->setTimezone($localTimezone);
         if (strategy_week_start($local)->format('Y-m-d') !== $weekStartKey) continue;
-        $weekRows[] = [$row, $local];
-        $price = positive_number($row, 'current_price') ?? positive_number($row, 'bid') ?? positive_number($row, 'ask');
+        $weekRows[] = [$marketRow, $local];
+        $price = positive_number($marketRow, 'current_price') ?? positive_number($marketRow, 'bid') ?? positive_number($marketRow, 'ask');
         if ($price !== null) $currentPrice = $price;
-        if (strtoupper(trim((string)($row['phase'] ?? ''))) === 'REGULAR') $regularRows[] = [$row, $local];
+        if (strtoupper(trim((string)($marketRow['phase'] ?? ''))) === 'REGULAR') $regularRows[] = [$marketRow, $local];
     }
+
     if (!$weekRows) return null;
-    if (!$isCurrentWeek && !$regularRows) $regularRows = $weekRows;
+
     $weekEnd = $weekStart->modify('+6 days');
-    $result = ['week'=>$weekStart->format('d M').' – '.$weekEnd->format('d M Y'),'currentPrice'=>$currentPrice,'weekOpen'=>null,'weekOpenDate'=>'','weeklyHigh'=>null,'weeklyLow'=>null,'weeklyClose'=>null,'weeklyHighPercent'=>null,'weeklyLowPercent'=>null,'weeklyClosePercent'=>null,'dailyDate'=>'','dailyOpen'=>null,'dailyHigh'=>null,'dailyLow'=>null,'dailyClose'=>null,'dailyHighPercent'=>null,'dailyLowPercent'=>null,'dailyClosePercent'=>null,'fridayOpen'=>null,'dailyLowDate'=>''];
-    if (!$regularRows) return $result;
-    usort($regularRows, static fn(array $a,array $b):int=>$a[1]->getTimestamp()<=>$b[1]->getTimestamp());
-    $days=[];
-    foreach ($regularRows as [$row,$local]) {
-        $day=$local->format('Y-m-d'); $price=positive_number($row,'current_price')??positive_number($row,'bid')??positive_number($row,'ask');
-        $open=market_point_price($row,'m1_open',$price); $high=market_point_price($row,'m1_high',$price); $low=market_point_price($row,'m1_low',$price); $close=market_point_price($row,'m1_close',$price);
-        if (!isset($days[$day])) $days[$day]=['open'=>$open,'high'=>null,'low'=>null,'close'=>null];
-        if ($days[$day]['open']===null&&$open!==null) $days[$day]['open']=$open;
-        if ($high!==null) $days[$day]['high']=$days[$day]['high']===null?$high:max((float)$days[$day]['high'],$high);
-        if ($low!==null) $days[$day]['low']=$days[$day]['low']===null?$low:min((float)$days[$day]['low'],$low);
-        if ($close!==null) $days[$day]['close']=$close;
-    }
-    ksort($days,SORT_STRING); $firstKey=(string)(array_key_first($days)??''); $lastKey=(string)(array_key_last($days)??'');
-    if ($firstKey===''||$lastKey==='') return $result; $first=$days[$firstKey]; $last=$days[$lastKey]; $weekOpen=$first['open']; if ($weekOpen===null) return $result;
-    $weeklyHigh=null; $weeklyLow=null; $weeklyClose=null;
-    foreach ($days as $day) { if ($day['high']!==null) $weeklyHigh=$weeklyHigh===null?$day['high']:max($weeklyHigh,$day['high']); if ($day['low']!==null) $weeklyLow=$weeklyLow===null?$day['low']:min($weeklyLow,$day['low']); if ($day['close']!==null) $weeklyClose=$day['close']; }
-    $relative=static fn(?float $v):?float=>$v!==null&&$weekOpen>0?($v/$weekOpen-1.0)*100.0:null;
-    return array_merge($result,['weekOpen'=>(float)$weekOpen,'weekOpenDate'=>$firstKey,'weeklyHigh'=>$weeklyHigh,'weeklyLow'=>$weeklyLow,'weeklyClose'=>$weeklyClose,'weeklyHighPercent'=>$relative($weeklyHigh),'weeklyLowPercent'=>$relative($weeklyLow),'weeklyClosePercent'=>$relative($weeklyClose),'dailyDate'=>$lastKey,'dailyOpen'=>$last['open'],'dailyHigh'=>$last['high'],'dailyLow'=>$last['low'],'dailyClose'=>$last['close'],'dailyHighPercent'=>$relative($last['high']),'dailyLowPercent'=>$relative($last['low']),'dailyClosePercent'=>$relative($last['close']),'fridayOpen'=>(float)$weekOpen,'dailyLowDate'=>$lastKey]);
-}
+    $emptyResult = static function () use ($weekStart, $weekEnd, $currentPrice): array {
+        return [
+            'week' => $weekStart->format('d M') . ' – ' . $weekEnd->format('d M Y'),
+            'currentPrice' => $currentPrice,
+            'weekOpen' => null,
+            'weekOpenDate' => '',
+            'weeklyHigh' => null,
+            'weeklyLow' => null,
+            'weeklyClose' => null,
+            'weeklyHighPercent' => null,
+            'weeklyLowPercent' => null,
+            'weeklyClosePercent' => null,
+            'dailyDate' => '',
+            'dailyOpen' => null,
+            'dailyHigh' => null,
+            'dailyLow' => null,
+            'dailyClose' => null,
+            'dailyHighPercent' => null,
+            'dailyLowPercent' => null,
+            'dailyClosePercent' => null,
+            'fridayOpen' => null,
+            'dailyLowDate' => '',
+        ];
+    };
 
-function oppw_restore_market_history_cards(array $marketStats): array
-{
-    $current=is_array($marketStats['currentWeek']??null)?$marketStats['currentWeek']:null; $previous=is_array($marketStats['previousWeek']??null)?$marketStats['previousWeek']:null;
-    if ($current===null||$previous===null) return $marketStats;
-    if (!is_numeric($current['weekOpen']??null)&&!is_numeric($current['dailyOpen']??null)&&is_numeric($previous['dailyOpen']??null)) {
-        foreach (['dailyDate','dailyOpen','dailyHigh','dailyLow','dailyClose','dailyHighPercent','dailyLowPercent','dailyClosePercent','dailyLowDate'] as $field) $current[$field]=$previous[$field]??null;
-        $current['dailySource']='PREVIOUS_COMPLETED_TRADING_DAY';
-    }
-    $marketStats['currentWeek']=$current; return $marketStats;
-}
+    // Current price may be premarket. Every O/H/L/C value below is REGULAR-only.
+    if (!$regularRows) return $emptyResult();
 
+    usort($regularRows, static fn(array $a, array $b): int => $a[1]->getTimestamp() <=> $b[1]->getTimestamp());
+    $days = [];
+    $weekOpen = null;
+    $weekOpenDate = '';
+    $weeklyHigh = null;
+    $weeklyLow = null;
+    $weeklyClose = null;
+
+    foreach ($regularRows as [$row, $local]) {
+        $dayKey = $local->format('Y-m-d');
+        $price = positive_number($row, 'current_price') ?? positive_number($row, 'bid') ?? positive_number($row, 'ask');
+        $open = market_point_price($row, 'm1_open', $price);
+        $high = market_point_price($row, 'm1_high', $price);
+        $low = market_point_price($row, 'm1_low', $price);
+        $close = market_point_price($row, 'm1_close', $price);
+
+        if (!isset($days[$dayKey])) {
+            $days[$dayKey] = ['open' => $open, 'high' => null, 'low' => null, 'close' => null];
+            if ($weekOpen === null && $open !== null) {
+                $weekOpen = $open;
+                $weekOpenDate = $dayKey;
+            }
+        }
+        if ($days[$dayKey]['open'] === null && $open !== null) $days[$dayKey]['open'] = $open;
+        if ($high !== null) {
+            $days[$dayKey]['high'] = $days[$dayKey]['high'] === null ? $high : max((float)$days[$dayKey]['high'], $high);
+            $weeklyHigh = $weeklyHigh === null ? $high : max($weeklyHigh, $high);
+        }
+        if ($low !== null) {
+            $days[$dayKey]['low'] = $days[$dayKey]['low'] === null ? $low : min((float)$days[$dayKey]['low'], $low);
+            $weeklyLow = $weeklyLow === null ? $low : min($weeklyLow, $low);
+        }
+        if ($close !== null) {
+            $days[$dayKey]['close'] = $close;
+            $weeklyClose = $close;
+        }
+    }
+
+    if (!$days || $weekOpen === null) return $emptyResult();
+    ksort($days, SORT_STRING);
+    $latestDayDate = (string)(array_key_last($days) ?? '');
+    $latestDay = $latestDayDate !== '' ? $days[$latestDayDate] : null;
+    $relative = static fn(?float $value): ?float => $weekOpen > 0 && $value !== null ? ($value / $weekOpen - 1.0) * 100.0 : null;
+
+    return [
+        'week' => $weekStart->format('d M') . ' – ' . $weekEnd->format('d M Y'),
+        'currentPrice' => $currentPrice,
+        'weekOpen' => $weekOpen,
+        'weekOpenDate' => $weekOpenDate,
+        'weeklyHigh' => $weeklyHigh,
+        'weeklyLow' => $weeklyLow,
+        'weeklyClose' => $weeklyClose,
+        'weeklyHighPercent' => $relative($weeklyHigh),
+        'weeklyLowPercent' => $relative($weeklyLow),
+        'weeklyClosePercent' => $relative($weeklyClose),
+        'dailyDate' => $latestDayDate,
+        'dailyOpen' => $latestDay !== null && $latestDay['open'] !== null ? (float)$latestDay['open'] : null,
+        'dailyHigh' => $latestDay !== null && $latestDay['high'] !== null ? (float)$latestDay['high'] : null,
+        'dailyLow' => $latestDay !== null && $latestDay['low'] !== null ? (float)$latestDay['low'] : null,
+        'dailyClose' => $latestDay !== null && $latestDay['close'] !== null ? (float)$latestDay['close'] : null,
+        'dailyHighPercent' => $latestDay !== null ? $relative($latestDay['high'] === null ? null : (float)$latestDay['high']) : null,
+        'dailyLowPercent' => $latestDay !== null ? $relative($latestDay['low'] === null ? null : (float)$latestDay['low']) : null,
+        'dailyClosePercent' => $latestDay !== null ? $relative($latestDay['close'] === null ? null : (float)$latestDay['close']) : null,
+        'fridayOpen' => $weekOpen,
+        'dailyLowDate' => $latestDayDate,
+    ];
+}
 
 $marketStmt = $db->prepare(
     'SELECT captured_minute, current_price, bid, ask, m1_open, m1_high, m1_low, m1_close, phase
@@ -433,10 +497,10 @@ $marketStmt->execute([$accountKey]);
 $marketRows = $marketStmt->fetchAll();
 $currentWeekStart = strategy_week_start($localNow);
 $previousWeekStart = $currentWeekStart->modify('-7 days');
-$snapshot['marketStats'] = oppw_restore_market_history_cards([
+$snapshot['marketStats'] = [
     'currentWeek' => build_market_week_stats($marketRows, $currentWeekStart, $warsaw),
     'previousWeek' => build_market_week_stats($marketRows, $previousWeekStart, $warsaw),
-]);
+];
 $oppwEquityPeriods = oppw_selected_equity_periods($db, $accountKey, $snapshot, $localNow, $warsaw);
 $snapshot['equityCurves'] = [
     'daily' => $oppwEquityPeriods['daily'],
