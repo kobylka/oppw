@@ -78,6 +78,7 @@ private fun AnalyticsContent(state: UiState, analytics: AnalyticsResponse, onFil
     val currency = state.response?.snapshot?.account?.currency ?: ""
     val summary = analytics.summary
     val allTradeKeys = analytics.recentTrades.filter { it.closed }.map(::tradeKey)
+    val distributionTradeKeys = analytics.tradeDistribution.trades.map { "${it.strategyKey}:${it.ticket}" }.distinct()
     var drillDown by remember(analytics.generatedAt) { mutableStateOf<DrillDown?>(null) }
     var expandedExecutions by remember { mutableStateOf(setOf<String>()) }
     val openDrillDown: (String, List<String>) -> Unit = { title, keys -> drillDown = DrillDown(title, keys.distinct()) }
@@ -94,6 +95,15 @@ private fun AnalyticsContent(state: UiState, analytics: AnalyticsResponse, onFil
                 MetricLink("Sharpe · annualized", ratioText(summary.sharpeRatio, summary.sharpeAvailable), sample(analytics, "sharpeRatio", allTradeKeys), openDrillDown)
                 MetricLink("Sortino · annualized", if (summary.sortinoInfinite) "∞" else ratioText(summary.sortinoRatio, summary.sortinoAvailable), sample(analytics, "sortinoRatio", allTradeKeys), openDrillDown)
                 Text("Each row opens the exact filtered trades used in the calculation. Ratios use closed-trade account returns and √${summary.periodsPerYear} annualization.", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+            }
+        }
+        item {
+            AppCard(Modifier.fillMaxWidth()) {
+                SectionTitle("Trade distribution", "best → worst")
+                Box(Modifier.fillMaxWidth().clickable(enabled = distributionTradeKeys.isNotEmpty()) { openDrillDown("Trade distribution", distributionTradeKeys) }) {
+                    TradeDistributionChart(analytics.tradeDistribution, Modifier.fillMaxWidth().height(260.dp))
+                }
+                Text("Every closed trade is sorted by pre-leverage return. The left side is the best trade and the right side is the worst trade. Tap the chart to inspect the exact filtered trades.", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
             }
         }
         item {
@@ -214,15 +224,6 @@ private fun AnalyticsContent(state: UiState, analytics: AnalyticsResponse, onFil
                 MetricLink("Unleveraged benchmark", percent(analytics.benchmark.benchmarkReturnPercent), analytics.benchmark.tradeKeys, openDrillDown)
                 MetricLink("Excess return", percent(analytics.benchmark.excessReturnPercent), analytics.benchmark.tradeKeys, openDrillDown)
                 Text(analytics.benchmark.label, color = TextSecondary, style = MaterialTheme.typography.labelMedium)
-            }
-        }
-        item {
-            AppCard(Modifier.fillMaxWidth()) {
-                SectionTitle("Trade distribution", "best → worst")
-                Box(Modifier.fillMaxWidth().clickable { openDrillDown("Trade distribution", allTradeKeys) }) {
-                    TradeDistributionChart(analytics.tradeDistribution, Modifier.fillMaxWidth().height(250.dp))
-                }
-                Text("Tap the chart to inspect every underlying trade.", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
             }
         }
         item {
@@ -461,23 +462,56 @@ private fun BenchmarkChart(analytics: AnalyticsResponse, modifier: Modifier) {
 }
 
 @Composable
-private fun TradeDistributionChart(distribution: TradeDistribution, modifier: Modifier) {
-    val positive = BrightGreen
-    val negative = DangerRed
-    val neutral = TextSecondary
-    Canvas(modifier) {
-        val trades = distribution.trades
-        if (trades.isEmpty()) return@Canvas
-        val minValue = min(0.0, trades.minOf { it.returnPercent })
-        val maxValue = max(0.0, trades.maxOf { it.returnPercent })
-        val range = (maxValue - minValue).takeIf { it > 1e-9 } ?: 1.0
-        val zeroY = size.height - ((0.0 - minValue) / range).toFloat() * size.height
-        drawLine(neutral.copy(alpha = 0.45f), Offset(0f, zeroY), Offset(size.width, zeroY), 1f)
-        val width = size.width / trades.size.coerceAtLeast(1)
-        trades.forEachIndexed { index, trade ->
-            val y = size.height - ((trade.returnPercent - minValue) / range).toFloat() * size.height
-            val left = index * width
-            drawRect(if (trade.returnPercent >= 0) positive else negative, Offset(left, min(y, zeroY)), androidx.compose.ui.geometry.Size(max(1f, width * 0.78f), abs(zeroY - y).coerceAtLeast(1f)))
+private fun TradeDistributionChart(distribution: TradeDistribution, modifier: Modifier = Modifier) {
+    val trades = distribution.trades.sortedByDescending { it.returnPercent }
+    if (trades.isEmpty()) {
+        Box(modifier.background(MaterialTheme.colorScheme.surfaceVariant), contentAlignment = Alignment.Center) {
+            Text("No closed trades", color = TextSecondary)
+        }
+        return
+    }
+
+    val values = trades.map { it.returnPercent }
+    val minValue = min(values.minOrNull() ?: 0.0, distribution.meanReturnPercent)
+    val maxValue = max(values.maxOrNull() ?: 0.0, distribution.meanReturnPercent)
+    val span = max(0.0001, maxValue - minValue)
+
+    Column(modifier) {
+        Canvas(Modifier.fillMaxWidth().weight(1f)) {
+            val left = 10.dp.toPx()
+            val right = size.width - 10.dp.toPx()
+            val top = 12.dp.toPx()
+            val bottom = size.height - 20.dp.toPx()
+            fun x(index: Int): Float = if (trades.size == 1) (left + right) / 2f else left + (right - left) * index.toFloat() / (trades.size - 1).toFloat()
+            fun y(value: Double): Float = bottom - ((value - minValue) / span).toFloat() * (bottom - top)
+
+            val zeroY = y(0.0)
+            if (zeroY in top..bottom) drawLine(Color.Gray.copy(alpha = 0.55f), Offset(left, zeroY), Offset(right, zeroY), 1.dp.toPx())
+
+            val meanY = y(distribution.meanReturnPercent)
+            drawLine(Color(0xFFE53935), Offset(left, meanY), Offset(right, meanY), 1.5.dp.toPx())
+
+            val path = Path()
+            trades.forEachIndexed { index, trade ->
+                val point = Offset(x(index), y(trade.returnPercent))
+                if (index == 0) path.moveTo(point.x, point.y) else path.lineTo(point.x, point.y)
+            }
+            drawPath(path, Color(0xFF3DDC84), style = Stroke(2.dp.toPx(), cap = StrokeCap.Round))
+
+            trades.forEachIndexed { index, trade ->
+                drawCircle(classColorRaw(trade.tradeClass), 3.dp.toPx(), Offset(x(index), y(trade.returnPercent)))
+            }
+        }
+
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Best ${String.format("%.2f%%", values.first())}", color = BrightGreen, style = MaterialTheme.typography.labelSmall)
+            Text("Mean ${String.format("%.2f%%", distribution.meanReturnPercent)}", color = Color(0xFFE53935), style = MaterialTheme.typography.labelSmall)
+            Text("Worst ${String.format("%.2f%%", values.last())}", color = DangerRed, style = MaterialTheme.typography.labelSmall)
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+            listOf("A", "B", "C", "D").forEach { value ->
+                Text("● $value", color = classColor(value), style = MaterialTheme.typography.labelSmall)
+            }
         }
     }
 }
@@ -490,4 +524,10 @@ private fun ratioValue(value: Double): String = if (value.isFinite()) String.for
 private fun formatNumber(value: Double): String = String.format("%.2f", value)
 private fun milliseconds(value: Double?): String = if (value == null || !value.isFinite()) "N/A" else if (value >= 1000) String.format("%.2fs", value / 1000.0) else String.format("%.0fms", value)
 private fun formatLeverage(value: Double): String = if (value <= 0) "—" else if (value % 1.0 == 0.0) "${value.toInt()}x" else String.format("%.2fx", value)
-private fun classColor(value: String): Color = when (value.uppercase()) { "A" -> BrightGreen; "D" -> DangerRed; else -> TextSecondary }
+private fun classColor(value: String): Color = classColorRaw(value)
+private fun classColorRaw(value: String): Color = when (value.uppercase()) {
+    "A" -> Color(0xFF00C853)
+    "B" -> Color(0xFF64B5F6)
+    "C" -> Color(0xFFFFB300)
+    else -> Color(0xFFEF5350)
+}
