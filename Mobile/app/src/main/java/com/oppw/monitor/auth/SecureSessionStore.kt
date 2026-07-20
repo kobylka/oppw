@@ -16,20 +16,36 @@ class SecureSessionStore(context: Context) {
     private val preferences = context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
     private val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
 
-    @Synchronized
-    fun save(session: AuthSession) {
+    fun save(session: AuthSession) = synchronized(STORE_LOCK) {
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(Cipher.ENCRYPT_MODE, getOrCreateKey())
         val plaintext = session.toJson().toString().toByteArray(Charsets.UTF_8)
         val encrypted = cipher.doFinal(plaintext)
-        preferences.edit()
+        check(preferences.edit()
             .putString(KEY_IV, Base64.encodeToString(cipher.iv, Base64.NO_WRAP))
             .putString(KEY_PAYLOAD, Base64.encodeToString(encrypted, Base64.NO_WRAP))
-            .apply()
+            .commit()) { "Could not persist the device session" }
     }
 
-    @Synchronized
-    fun load(): AuthSession? {
+    fun load(): AuthSession? = synchronized(STORE_LOCK) { loadUnlocked() }
+
+    fun clear() = synchronized(STORE_LOCK) { clearUnlocked() }
+
+    fun clearIfAccessToken(accessToken: String): Boolean = synchronized(STORE_LOCK) {
+        val current = loadUnlocked() ?: return@synchronized false
+        if (current.accessToken != accessToken) return@synchronized false
+        clearUnlocked()
+        true
+    }
+
+    fun clearIfRefreshToken(refreshToken: String): Boolean = synchronized(STORE_LOCK) {
+        val current = loadUnlocked() ?: return@synchronized false
+        if (current.refreshToken != refreshToken) return@synchronized false
+        clearUnlocked()
+        true
+    }
+
+    private fun loadUnlocked(): AuthSession? {
         val ivEncoded = preferences.getString(KEY_IV, null) ?: return null
         val payloadEncoded = preferences.getString(KEY_PAYLOAD, null) ?: return null
         return runCatching {
@@ -39,14 +55,13 @@ class SecureSessionStore(context: Context) {
             val decrypted = cipher.doFinal(Base64.decode(payloadEncoded, Base64.NO_WRAP))
             JSONObject(String(decrypted, Charsets.UTF_8)).toAuthSession()
         }.getOrElse {
-            clear()
+            clearUnlocked()
             null
         }
     }
 
-    @Synchronized
-    fun clear() {
-        preferences.edit().clear().apply()
+    private fun clearUnlocked() {
+        preferences.edit().clear().commit()
     }
 
     private fun getOrCreateKey(): SecretKey {
@@ -86,6 +101,7 @@ class SecureSessionStore(context: Context) {
     }
 
     companion object {
+        private val STORE_LOCK = Any()
         private const val ANDROID_KEYSTORE = "AndroidKeyStore"
         private const val KEY_ALIAS = "oppw_monitor_session_key_v1"
         private const val TRANSFORMATION = "AES/GCM/NoPadding"

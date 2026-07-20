@@ -19,7 +19,6 @@ import javax.net.ssl.HttpsURLConnection
 
 class StatusApiClient(context: Context, private val baseUrl: String = BuildConfig.API_BASE_URL) {
     private val sessionStore = SecureSessionStore(context.applicationContext)
-    private val refreshMutex = Mutex()
 
     fun hasSession(): Boolean = sessionStore.load() != null
     fun currentDeviceName(): String? = sessionStore.load()?.deviceName
@@ -95,28 +94,44 @@ class StatusApiClient(context: Context, private val baseUrl: String = BuildConfi
             response = execute(method, path, body, session.accessToken)
         }
         if (response.code == 401) {
-            sessionStore.clear()
-            throw AuthenticationRequiredException()
+            val latest = sessionStore.load()
+            if (latest != null && latest.accessToken != session.accessToken) {
+                session = latest
+                response = execute(method, path, body, session.accessToken)
+            }
+        }
+        if (response.code == 401) {
+            sessionStore.clearIfAccessToken(session.accessToken)
+            throw AuthenticationRequiredException("Device authorization was revoked or expired.")
         }
         requireSuccess(response)
         return response
     }
 
-    private suspend fun ensureSession(forceRefresh: Boolean, staleAccessToken: String? = null): AuthSession = refreshMutex.withLock {
+    private suspend fun ensureSession(forceRefresh: Boolean, staleAccessToken: String? = null): AuthSession = PROCESS_REFRESH_MUTEX.withLock {
         val current = sessionStore.load() ?: throw AuthenticationRequiredException()
         if (staleAccessToken != null && current.accessToken != staleAccessToken) return@withLock current
         if (!forceRefresh && !expiresSoon(current.accessTokenExpiresAt)) return@withLock current
         if (expiresAtOrBeforeNow(current.refreshTokenExpiresAt)) {
-            sessionStore.clear()
+            sessionStore.clearIfRefreshToken(current.refreshToken)
             throw AuthenticationRequiredException("Device session expired. Pair the app again.")
         }
-        val response = execute("POST", "auth/refresh.php", JSONObject().put("deviceId", current.deviceId).put("refreshToken", current.refreshToken).toString())
+
+        val attemptedRefreshToken = current.refreshToken
+        val response = execute("POST", "auth/refresh.php", JSONObject().put("deviceId", current.deviceId).put("refreshToken", attemptedRefreshToken).toString())
         if (response.code == 401) {
-            sessionStore.clear()
+            val latest = sessionStore.load()
+            if (latest != null && latest.refreshToken != attemptedRefreshToken) return@withLock latest
+            sessionStore.clearIfRefreshToken(attemptedRefreshToken)
             throw AuthenticationRequiredException("Device authorization was revoked or expired.")
         }
         requireSuccess(response)
-        JsonParser.parseAuthSession(response.body).also(sessionStore::save)
+
+        val refreshed = JsonParser.parseAuthSession(response.body)
+        val latest = sessionStore.load() ?: throw AuthenticationRequiredException("Device was unpaired while its session was refreshing.")
+        if (latest.deviceId != current.deviceId || latest.refreshToken != attemptedRefreshToken) return@withLock latest
+        sessionStore.save(refreshed)
+        refreshed
     }
 
     private fun expiresSoon(value: String): Boolean = runCatching { OffsetDateTime.parse(value).toInstant().epochSecond <= java.time.Instant.now().epochSecond + 30 }.getOrDefault(true)
@@ -151,4 +166,8 @@ class StatusApiClient(context: Context, private val baseUrl: String = BuildConfi
     }
 
     private data class HttpResponse(val code: Int, val body: String)
+
+    companion object {
+        private val PROCESS_REFRESH_MUTEX = Mutex()
+    }
 }
