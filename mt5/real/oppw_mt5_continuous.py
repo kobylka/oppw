@@ -3,9 +3,10 @@ Continuous MetaTrader 5 implementation of the OPPW strategy.
 
 Key execution rules
 -------------------
-* BUY is sent at XNYS cash open minus three seconds for a valid new-week entry.
-* OH is evaluated exactly once at cash open minus three seconds and is no longer reported after that check.
-* CH and final-week TO are evaluated at XNYS session close minus three seconds.
+* BUY is sent at its separately configurable entry-action lead time for a valid new-week entry.
+* OH is always evaluated exactly once at cash open minus three seconds, independent of any BUY test offset.
+* CH and final-week TO are always evaluated at XNYS session close minus three seconds.
+* Every outgoing SL is normalized to a whole index point by rounding upward, then constrained to a broker-valid long-position level.
 * Hard SL and weekday SL levels are maintained with TRADE_ACTION_SLTP.
 * One configurable TSL is active continuously from Thursday date change through Friday and the weekend if needed.
 * TSL is a broker-side SL label; candle lows do not latch it.
@@ -52,8 +53,9 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-BUILD_ID = "2026-07-20-required-balance-sizing-v47.2"
-SCHEDULED_ACTION_LEAD_SECONDS = 3.0
+BUILD_ID = "2026-07-20-session-clock-and-whole-sl-v47.3"
+DEFAULT_ENTRY_ACTION_LEAD_SECONDS = 3.0
+NON_ENTRY_ACTION_LEAD_SECONDS = 3.0
 AUTOTRADING_REMINDER_SECONDS = 60.0
 STALE_TICK_REMINDER_SECONDS = 60.0
 PUBLISHER_HEARTBEAT_INTERVAL_SECONDS = 1.0
@@ -234,6 +236,7 @@ class M1Bar:
 @dataclass(frozen=True)
 class SessionTimes:
     cash_open: datetime
+    buy_action: datetime
     open_action: datetime
     weekly_close: datetime
     close_bar_open: datetime
@@ -321,6 +324,11 @@ def floor_step(value: float, step: float) -> float:
 
 def ceil_step(value: float, step: float) -> float:
     return value if step <= 0 else math.ceil((value - 1e-12) / step) * step
+
+
+def ceil_whole_sl(value: float) -> float:
+    """Normalize every positive SL upward to the next whole index point."""
+    return 0.0 if value <= 0 else float(math.ceil(value - 1e-9))
 
 
 def price_changed(current: float, desired: float, tolerance: float) -> bool:
@@ -1139,6 +1147,21 @@ class OPPWContinuousStrategy:
     def week_plan_day(self, day: date) -> date:
         return self.next_week_monday(day) if day.weekday() >= 5 else day
 
+    def entry_action_lead_seconds(self) -> float:
+        configured = getattr(self.cfg, "entry_action_lead_seconds", None)
+        if configured is None:
+            configured = getattr(self.cfg, "buy_action_lead_seconds", None)
+        if configured is None:
+            configured = os.getenv("OPPW_ENTRY_ACTION_LEAD_SECONDS", str(DEFAULT_ENTRY_ACTION_LEAD_SECONDS))
+        try:
+            return max(0.0, float(configured))
+        except (TypeError, ValueError):
+            self.log.warning(
+                "EVENT INVALID_ENTRY_ACTION_LEAD configured=%s fallback=%.1f",
+                configured, DEFAULT_ENTRY_ACTION_LEAD_SECONDS,
+            )
+            return DEFAULT_ENTRY_ACTION_LEAD_SECONDS
+
     def session_times(self, day: date) -> SessionTimes:
         cached = self._session_times_cache.get(day)
         if cached is not None:
@@ -1155,8 +1178,16 @@ class OPPWContinuousStrategy:
             close_bar_open = datetime.combine(day, self.cfg.close_bar_open, self.market_tz).astimezone(self.tz)
             close_processing = datetime.combine(day, self.cfg.close_processing, self.market_tz).astimezone(self.tz)
 
-        lead = timedelta(seconds=SCHEDULED_ACTION_LEAD_SECONDS)
-        value = SessionTimes(cash_open, cash_open - lead, close_bar_open - lead, close_bar_open, close_processing)
+        entry_lead = timedelta(seconds=self.entry_action_lead_seconds())
+        non_entry_lead = timedelta(seconds=NON_ENTRY_ACTION_LEAD_SECONDS)
+        value = SessionTimes(
+            cash_open=cash_open,
+            buy_action=cash_open - entry_lead,
+            open_action=cash_open - non_entry_lead,
+            weekly_close=close_bar_open - non_entry_lead,
+            close_bar_open=close_bar_open,
+            close_processing=close_processing,
+        )
         self._session_times_cache[day] = value
         return value
 
@@ -1165,6 +1196,27 @@ class OPPWContinuousStrategy:
         friday = monday + timedelta(days=4)
         sessions = self.calendar.sessions_in_range(monday.isoformat(), friday.isoformat())
         return [session.date() for session in sessions]
+
+    def is_trading_session_day(self, day: date) -> bool:
+        return len(self.calendar.sessions_in_range(day.isoformat(), day.isoformat())) > 0
+
+    def market_session_payload(self, now: datetime) -> dict[str, Any]:
+        local_day = now.date()
+        monday = local_day - timedelta(days=local_day.weekday())
+        is_trading_day = self.is_trading_session_day(local_day)
+        previous_day = self.previous_trading_date(local_day)
+        session = self.session_times(local_day) if is_trading_day else None
+        return {
+            "isTradingDay": is_trading_day,
+            "regularSessionStarted": bool(session is not None and now >= session.cash_open),
+            "cashOpen": session.cash_open.isoformat() if session is not None else "",
+            "cashClose": session.close_bar_open.isoformat() if session is not None else "",
+            "weekMonday": monday.isoformat(),
+            "previousWeekMonday": (monday - timedelta(days=7)).isoformat(),
+            "previousTradingDay": previous_day.isoformat() if previous_day is not None else "",
+            "entryActionLeadSeconds": self.entry_action_lead_seconds(),
+            "nonEntryActionLeadSeconds": NON_ENTRY_ACTION_LEAD_SECONDS,
+        }
 
     def final_trading_day(self, day: date) -> Optional[date]:
         sessions = self.trading_sessions_for_week(day)
@@ -1178,12 +1230,15 @@ class OPPWContinuousStrategy:
         sessions = self.trading_sessions_for_week(plan_day)
         first_day = sessions[0] if sessions else None
         final_day = sessions[-1] if sessions else None
+        buy_action = self.session_times(first_day).buy_action.strftime("%Y-%m-%d %H:%M:%S %Z") if first_day else "none"
         open_action = self.session_times(first_day).open_action.strftime("%Y-%m-%d %H:%M:%S %Z") if first_day else "none"
         weekly_to = self.session_times(final_day).weekly_close.strftime("%Y-%m-%d %H:%M:%S %Z") if final_day else "none"
         self.last_week_plan_key = key
         self.log.info(
-            "EVENT WEEK_PLAN week=%s sessions=%s first_day=%s final_day=%s open_action=%s weekly_TO=%s source_day=%s weekend_next_week=%s",
-            key, ",".join(value.isoformat() for value in sessions) or "none", first_day, final_day, open_action, weekly_to,
+            "EVENT WEEK_PLAN week=%s sessions=%s first_day=%s final_day=%s buy_action=%s OH=%s weekly_TO=%s "
+            "entry_lead_seconds=%.1f non_entry_lead_seconds=%.1f source_day=%s weekend_next_week=%s",
+            key, ",".join(value.isoformat() for value in sessions) or "none", first_day, final_day,
+            buy_action, open_action, weekly_to, self.entry_action_lead_seconds(), NON_ENTRY_ACTION_LEAD_SECONDS,
             day.isoformat(), day.weekday() >= 5,
         )
 
@@ -1623,7 +1678,7 @@ class OPPWContinuousStrategy:
         add("SL", self.hard_sl_price(position))
         weekday_price, weekday_reason = self.weekday_sl_target(position, now)
         if weekday_reason != "SL":
-            add(weekday_reason, floor_step(weekday_price, tick_size))
+            add(weekday_reason, ceil_step(ceil_whole_sl(weekday_price), tick_size))
         if float(position.sl) > 0:
             add(self.state.active_sl_reason or "BROKER_SL", float(position.sl))
         if self.state.break_even:
@@ -1899,7 +1954,7 @@ class OPPWContinuousStrategy:
         return float(margin)
 
     def capped_hard_stop(self, symbol: str, volume: float, entry_price: float, balance: float, leverage: int, tick_size: float) -> tuple[float, float, bool]:
-        requested_price = floor_step(entry_price * self.hard_sl_ratio(leverage), tick_size)
+        requested_price = ceil_step(ceil_whole_sl(entry_price * self.hard_sl_ratio(leverage)), tick_size)
         requested_profit_raw = mt5.order_calc_profit(mt5.ORDER_TYPE_BUY, symbol, volume, entry_price, requested_price)
         if requested_profit_raw is None:
             raise RuntimeError(f"order_calc_profit failed for hard stop: {mt5.last_error()}")
@@ -1920,13 +1975,13 @@ class OPPWContinuousStrategy:
             else:
                 high = middle
 
-        capped_price = ceil_step(high, tick_size)
+        capped_price = ceil_step(ceil_whole_sl(high), tick_size)
         capped_profit_raw = mt5.order_calc_profit(mt5.ORDER_TYPE_BUY, symbol, volume, entry_price, capped_price)
         if capped_profit_raw is None:
             raise RuntimeError(f"order_calc_profit failed for capped hard stop: {mt5.last_error()}")
         capped_profit = float(capped_profit_raw)
         while capped_profit < maximum_loss - 1e-8 and capped_price < entry_price:
-            capped_price = min(entry_price, capped_price + tick_size)
+            capped_price = min(entry_price, capped_price + max(1.0, tick_size))
             capped_profit_raw = mt5.order_calc_profit(mt5.ORDER_TYPE_BUY, symbol, volume, entry_price, capped_price)
             if capped_profit_raw is None:
                 raise RuntimeError(f"order_calc_profit failed while rounding capped hard stop: {mt5.last_error()}")
@@ -2357,7 +2412,7 @@ class OPPWContinuousStrategy:
             sessions = self.calendar.sessions_in_range(now.date().isoformat(), end.isoformat())
             for calendar_session in sessions:
                 session_day = calendar_session.date()
-                candidate = self.session_times(session_day).open_action
+                candidate = self.session_times(session_day).buy_action
                 if candidate <= now:
                     continue
                 if position is None and session_day.weekday() not in (0, 1):
@@ -2402,7 +2457,7 @@ class OPPWContinuousStrategy:
             })
 
         desired_sl, sl_reason = self.weekday_sl_target(position, now)
-        add(sl_reason, floor_step(desired_sl, tick_size), trade_bid, self.cfg.trade_symbol)
+        add(sl_reason, ceil_step(ceil_whole_sl(desired_sl), tick_size), trade_bid, self.cfg.trade_symbol)
         if float(position.sl) > 0:
             add(self.state.active_sl_reason or "BROKER_SL", float(position.sl), trade_bid, self.cfg.trade_symbol)
 
@@ -2589,6 +2644,7 @@ class OPPWContinuousStrategy:
                 "signalPrice": signal_price,
                 "signalPriceTime": signal_time,
                 "currentM1": current_bar_payload,
+                "session": self.market_session_payload(now),
             },
             "metrics": {
                 "currentPrice": current_price,
@@ -2715,7 +2771,7 @@ class OPPWContinuousStrategy:
         balance = float(getattr(account, "balance", 0.0) or 0.0) if account is not None else 0.0
         volume = float(getattr(position, "volume", 0.0) or 0.0)
         if volume <= 0 or balance <= 0:
-            return floor_step(entry * self.hard_sl_ratio(leverage), tick_size)
+            return ceil_step(ceil_whole_sl(entry * self.hard_sl_ratio(leverage)), tick_size)
         price, _profit, _capped = self.capped_hard_stop(position.symbol, volume, entry, balance, leverage, tick_size)
         return price
 
@@ -2944,7 +3000,7 @@ class OPPWContinuousStrategy:
             "deviation": self.cfg.deviation_points, "magic": self.cfg.magic,
             "comment": f"{self.cfg.comment_prefix} L{leverage}"[:31], "type_time": mt5.ORDER_TIME_GTC,
         }
-        scheduled = self.session_times(current_day).open_action
+        scheduled = self.session_times(current_day).buy_action
         if not self.cfg.live_enabled:
             request = dict(request_base)
             request["type_filling"] = self.order_filling_modes(info)[0]
@@ -3043,8 +3099,14 @@ class OPPWContinuousStrategy:
 
         tick_size = float(getattr(info, "trade_tick_size", 0.0) or info.point)
         digits = int(info.digits)
-        desired_sl = round(desired_sl, digits) if desired_sl else 0.0
+        desired_sl = ceil_step(ceil_whole_sl(desired_sl), tick_size) if desired_sl else 0.0
         desired_tp = round(desired_tp, digits) if desired_tp else 0.0
+        if desired_sl > 0:
+            tick = self.latest_tick(position.symbol)
+            maximum_valid_sl = float(getattr(tick, "bid", 0.0) or 0.0) - self.broker_minimum_distance(info)
+            if maximum_valid_sl > 0 and desired_sl >= maximum_valid_sl:
+                desired_sl = floor_step(math.floor(maximum_valid_sl - 1e-9), tick_size)
+            desired_sl = round(desired_sl, digits)
         tolerance = max(tick_size * 0.5, float(info.point) * 0.5)
 
         if not price_changed(float(position.sl), desired_sl, tolerance) and not price_changed(float(position.tp), desired_tp, tolerance):
@@ -3207,6 +3269,7 @@ class OPPWContinuousStrategy:
 
         max_valid_sl = bid - distance
         min_valid_tp = ask + distance
+        desired_sl = ceil_step(ceil_whole_sl(desired_sl), tick_size)
         if desired_sl >= max_valid_sl:
             self.arm_exit(position, "PROTECTION_SL_ALREADY_CROSSED", now)
             return False
@@ -3214,7 +3277,6 @@ class OPPWContinuousStrategy:
             self.arm_exit(position, "PROTECTION_TP_ALREADY_CROSSED", now)
             return False
 
-        desired_sl = floor_step(desired_sl, tick_size)
         desired_tp = ceil_step(desired_tp, tick_size) if desired_tp > 0 else 0.0
         leverage = self.state.entry_leverage or self.choose_leverage()
         account = mt5.account_info()
@@ -3301,19 +3363,19 @@ class OPPWContinuousStrategy:
             return
         session = self.session_times(current_day)
         latest_entry = session.cash_open + timedelta(seconds=self.cfg.entry_window_seconds)
-        if now < session.open_action:
+        if now < session.buy_action:
             return
         if now > latest_entry:
             week = iso_week_key(current_day)
             if self.state.last_missed_entry_week != week:
                 self.state.active_execution_id = uuid.uuid4().hex
                 self.state.active_decision_id = self.state.active_decision_id or str((self.last_strategy_decision_payload or {}).get("decisionId", ""))
-                self.state.execution_scheduled_at = session.open_action.isoformat()
+                self.state.execution_scheduled_at = session.buy_action.isoformat()
                 self.state.execution_started_at = datetime.now(UTC).isoformat()
                 self.state.last_missed_entry_week = week
                 self.state.save(self.cfg.state_file)
-                self.execution_stage("MISSED_WINDOW", result=False, scheduled_at=session.open_action.isoformat(), reason="entry_window_elapsed")
-                self.log.error("EVENT ENTRY_WINDOW_MISSED week=%s scheduled=%s latest_entry=%s now=%s", week, session.open_action.isoformat(), latest_entry.isoformat(), now.isoformat())
+                self.execution_stage("MISSED_WINDOW", result=False, scheduled_at=session.buy_action.isoformat(), reason="entry_window_elapsed")
+                self.log.error("EVENT ENTRY_WINDOW_MISSED week=%s scheduled=%s latest_entry=%s now=%s", week, session.buy_action.isoformat(), latest_entry.isoformat(), now.isoformat())
             return
         if int(datetime.now(UTC).timestamp()) < self.state.entry_pending_until_utc:
             return
@@ -3406,7 +3468,7 @@ class OPPWContinuousStrategy:
             session = self.session_times(current_day)
             self.log_check(now, "POSITION_IS_OPEN", False)
             self.log_check(now, "NEW_WEEK_ENTRY", new_week)
-            self.log_check(now, "BUY_TIME_REACHED", now >= session.open_action, scheduled=session.open_action.strftime("%H:%M:%S"))
+            self.log_check(now, "BUY_TIME_REACHED", now >= session.buy_action, scheduled=session.buy_action.strftime("%H:%M:%S"))
             self.log.info("CONDITION_REPORT_END minute=%s checks=3", now.strftime("%Y-%m-%d %H:%M"))
             return
 
@@ -3429,7 +3491,7 @@ class OPPWContinuousStrategy:
         desired_sl, sl_reason = self.weekday_sl_target(position, now)
         info = mt5.symbol_info(position.symbol)
         tick_size = float(getattr(info, "trade_tick_size", 0.0) or getattr(info, "point", 0.0) or 0.01) if info is not None else 0.01
-        desired_sl = floor_step(desired_sl, tick_size)
+        desired_sl = ceil_step(ceil_whole_sl(desired_sl), tick_size)
         sl_set = float(position.sl) > 0 and abs(float(position.sl) - desired_sl) <= tick_size * 1.5
         self.log_check(now, sl_reason, sl_set, current_sl=f"{float(position.sl):.5f}", required_sl=f"{desired_sl:.5f}")
         check_count += 1
@@ -3519,6 +3581,7 @@ class OPPWContinuousStrategy:
                 "symbol": self.cfg.trade_symbol, "currentPrice": current_price, "bid": 0.0, "ask": 0.0,
                 "priceTime": current_bar.local_datetime.isoformat() if current_bar else "", "tickAgeSeconds": None,
                 "signalSymbol": self.cfg.signal_symbol, "signalPrice": 0.0, "signalPriceTime": "", "currentM1": candle,
+                "session": self.market_session_payload(now),
             },
             "metrics": {
                 "currentPrice": current_price, "currentProfit": float(position_payload["profit"]) if position_payload else 0.0,
