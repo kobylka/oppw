@@ -15,9 +15,9 @@ Key execution rules
 * EXECUTOR mode is the only role permitted to submit or modify trades.
 * PUBLISHER mode is read-only and owns backend publishing while active.
 * EXECUTOR automatically publishes when no PUBLISHER heartbeat is active.
-* Flat status publishes an institutional-style pre-trade what-if ticket and a structured strategy decision record.
+* Status publishes an institutional-style next-trade What-if ticket; while a position is open it assumes the current position closes first and never resizes that live position.
 * Every completed trade is assigned a Guy Fleury A/B/C/D class and the publisher includes the label.
-* Weekends are idle after startup: one startup snapshot includes a fresh pre-trade What-if calculation, one MySQL trade-history refresh and the latest candle; no recurring checks or minute publishing follow.
+* Weekends remain market-idle after startup. A lightweight MT5 account-balance watcher runs regardless of position state and may publish a fresh next-trade What-if snapshot after a top-up or withdrawal; no recurring market checks or minute publishing follow.
 
 Run with `--mode executor|publisher` and `--account demo|real`. DEMO loads
 oppw-mt5-config.py and REAL loads real-mt5-config.py. Live trading is disabled
@@ -51,12 +51,13 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-BUILD_ID = "2026-07-19-decision-history-execution-audit-v46"
+BUILD_ID = "2026-07-20-account-funding-refresh-v47.1"
 SCHEDULED_ACTION_LEAD_SECONDS = 3.0
 AUTOTRADING_REMINDER_SECONDS = 60.0
 STALE_TICK_REMINDER_SECONDS = 60.0
 PUBLISHER_HEARTBEAT_INTERVAL_SECONDS = 1.0
 PUBLISHER_HEARTBEAT_STALE_SECONDS = 8.0
+ACCOUNT_FUNDING_CHECK_INTERVAL_SECONDS = 5.0
 MAX_ACCOUNT_STOP_LOSS_FRACTION = 0.50
 INSTANCE_MODE_EXECUTOR = "EXECUTOR"
 INSTANCE_MODE_PUBLISHER = "PUBLISHER"
@@ -686,10 +687,10 @@ class MobileMonitorPublisher:
             self.weekend_idle = bool(active)
             if self.weekend_idle:
                 self.guaranteed_snapshots = deque(
-                    (snapshot for snapshot in self.guaranteed_snapshots if str(snapshot.get("statusUpdate", {}).get("kind", "")) == "WEEKEND_STARTUP"),
+                    (snapshot for snapshot in self.guaranteed_snapshots if str(snapshot.get("statusUpdate", {}).get("kind", "")) in {"WEEKEND_STARTUP", "ACCOUNT_FUNDING_CHANGE"}),
                     maxlen=max(1, self.cfg.monitor_minute_snapshot_buffer_size),
                 )
-                if self.latest_snapshot is not None and str(self.latest_snapshot.get("statusUpdate", {}).get("kind", "")) != "WEEKEND_STARTUP":
+                if self.latest_snapshot is not None and str(self.latest_snapshot.get("statusUpdate", {}).get("kind", "")) not in {"WEEKEND_STARTUP", "ACCOUNT_FUNDING_CHANGE"}:
                     self.latest_snapshot = None
                 self.publish_requested = bool(self.guaranteed_snapshots) or self.latest_snapshot is not None
             self.condition.notify_all()
@@ -724,7 +725,7 @@ class MobileMonitorPublisher:
         if not self.ready:
             return
         kind = str(snapshot.get("statusUpdate", {}).get("kind", ""))
-        if self.weekend_idle and kind != "WEEKEND_STARTUP":
+        if self.weekend_idle and kind not in {"WEEKEND_STARTUP", "ACCOUNT_FUNDING_CHANGE"}:
             return
         with self.condition:
             if guaranteed and self.allowed_to_publish():
@@ -771,7 +772,7 @@ class MobileMonitorPublisher:
         public_events = [{key: value for key, value in event.items() if not key.startswith("_spool") and key != "_sourcePid"} for event in events]
         payload = {"accountKey": self.cfg.monitor_account_key, "capturedAt": captured_at, "snapshot": snapshot_copy, "events": public_events}
         body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-        request = urllib.request.Request(self.cfg.monitor_ingest_url, data=body, method="POST", headers={"Authorization": f"Bearer {self.cfg.monitor_write_token}", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "OPPW-MT5-Publisher/46"})
+        request = urllib.request.Request(self.cfg.monitor_ingest_url, data=body, method="POST", headers={"Authorization": f"Bearer {self.cfg.monitor_write_token}", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "OPPW-MT5-Publisher/47.1"})
         try:
             with urllib.request.urlopen(request, timeout=self.cfg.monitor_timeout_seconds) as response:
                 if int(response.status) not in (200, 201):
@@ -811,7 +812,7 @@ class MobileMonitorPublisher:
                     return
                 continue
 
-            if self.weekend_idle and str(snapshot.get("statusUpdate", {}).get("kind", "")) != "WEEKEND_STARTUP":
+            if self.weekend_idle and str(snapshot.get("statusUpdate", {}).get("kind", "")) not in {"WEEKEND_STARTUP", "ACCOUNT_FUNDING_CHANGE"}:
                 continue
 
             if not self.allowed_to_publish():
@@ -996,6 +997,8 @@ class OPPWContinuousStrategy:
         self.cached_mysql_trade_record: Optional[dict[str, Any]] = None
         self.last_mysql_trade_refresh_monotonic = 0.0
         self.last_mysql_trade_error_monotonic = 0.0
+        self.last_account_funding_check_monotonic = 0.0
+        self.last_account_funding_signature: Optional[tuple[float, float]] = None
         self.weekend_idle = False
         self.started_at = datetime.now(self.tz)
         self.monitor_publisher = MobileMonitorPublisher(config, self.log, self.tz, role, publisher_presence, event_spool, publish_lock_path)
@@ -1737,7 +1740,7 @@ class OPPWContinuousStrategy:
                 headers={
                     "Authorization": f"Bearer {token}",
                     "Accept": "application/json",
-                    "User-Agent": "OPPW-MT5-History/45.4",
+                    "User-Agent": "OPPW-MT5-History/47.1",
                 },
             )
             try:
@@ -1946,7 +1949,7 @@ class OPPWContinuousStrategy:
             })
         return result
 
-    def potential_position_preview(self) -> dict[str, Any]:
+    def potential_position_preview(self, assume_current_position_closed: bool = False) -> dict[str, Any]:
         previous_full_week, previous_trade, full_week_source, trade_source = self.resolved_leverage_inputs()
         leverage, leverage_reason = self.leverage_decision()
         now = datetime.now(self.tz)
@@ -1964,6 +1967,13 @@ class OPPWContinuousStrategy:
             "potentialStopLossPrice": 0.0, "potentialStopLossCash": 0.0, "accountLossPercentAtStop": 0.0,
             "accountLossCapApplied": False, "stopLossFormula": "",
             "positionNotional": 0.0, "sizingUnits": 0, "minimumVolumeFloor": False, "scenarios": [], "error": "",
+            "purpose": "NEXT_TRADE", "currentPositionOpen": bool(assume_current_position_closed),
+            "assumesCurrentPositionClosed": bool(assume_current_position_closed), "sizingFreeMargin": 0.0,
+            "sizingBalanceSource": "MT5 account balance",
+            "assumptionNote": (
+                "Current position remains unchanged; next-trade sizing assumes it is closed before the hypothetical entry"
+                if assume_current_position_closed else "Account is flat at the hypothetical entry"
+            ),
         }
         try:
             account = mt5.account_info()
@@ -1975,6 +1985,7 @@ class OPPWContinuousStrategy:
             balance = float(getattr(account, "balance", 0.0) or 0.0)
             equity = float(getattr(account, "equity", 0.0) or 0.0)
             free_margin = float(getattr(account, "margin_free", 0.0) or 0.0)
+            sizing_free_margin = max(0.0, balance) if assume_current_position_closed else max(0.0, free_margin)
             ask = float(getattr(tick, "ask", 0.0) or 0.0)
             bid = float(getattr(tick, "bid", 0.0) or 0.0)
             last = float(getattr(tick, "last", 0.0) or 0.0)
@@ -1989,7 +2000,7 @@ class OPPWContinuousStrategy:
             if volume <= 0:
                 minimum_volume = float(info.volume_min)
                 minimum_margin = mt5.order_calc_margin(mt5.ORDER_TYPE_BUY, self.cfg.trade_symbol, minimum_volume, price)
-                if minimum_margin is not None and float(minimum_margin) <= max(0.0, free_margin):
+                if minimum_margin is not None and float(minimum_margin) <= sizing_free_margin:
                     volume = minimum_volume
                     sizing_units = 1
                     minimum_volume_floor = True
@@ -2000,6 +2011,11 @@ class OPPWContinuousStrategy:
             if required_raw is None:
                 raise RuntimeError(f"order_calc_margin failed: {mt5.last_error()}")
             required_deposit = float(required_raw)
+            if required_deposit > sizing_free_margin + 0.01:
+                assumption = "assumed post-close balance" if assume_current_position_closed else "current free margin"
+                raise RuntimeError(
+                    f"Calculated potential volume requires margin {required_deposit:.2f}, above {assumption} {sizing_free_margin:.2f}"
+                )
             broker_leverage = self.broker_margin_leverage(account)
             effective_leverage = required_deposit * float(self.cfg.sizing_multiplier) / balance if balance > 0 else 0.0
             tick_size = float(getattr(info, "trade_tick_size", 0.0) or getattr(info, "point", 0.0) or 0.01)
@@ -2009,14 +2025,17 @@ class OPPWContinuousStrategy:
             stop_ratio = stop_price / price if price > 0 else 0.0
             stop_return = stop_ratio - 1.0
             existing_margin = float(getattr(account, "margin", 0.0) or 0.0)
-            margin_after = existing_margin + required_deposit
+            margin_before_hypothetical_entry = 0.0 if assume_current_position_closed else existing_margin
+            margin_after = margin_before_hypothetical_entry + required_deposit
+            equity_for_margin_level = balance if assume_current_position_closed else equity
 
             result.update({
                 "available": True, "price": price, "volume": float(volume), "requiredDeposit": required_deposit,
                 "brokerMarginLeverage": broker_leverage, "depositSource": "MT5 order_calc_margin(proposed volume, current BUY price)",
-                "balance": balance, "equity": equity, "freeMargin": free_margin, "freeMarginAfter": free_margin - required_deposit,
+                "balance": balance, "equity": equity, "freeMargin": free_margin, "sizingFreeMargin": sizing_free_margin,
+                "freeMarginAfter": sizing_free_margin - required_deposit,
                 "marginUsagePercent": required_deposit / balance * 100.0 if balance > 0 else 0.0,
-                "marginLevelAfterPercent": equity / margin_after * 100.0 if margin_after > 0 else 0.0,
+                "marginLevelAfterPercent": equity_for_margin_level / margin_after * 100.0 if margin_after > 0 else 0.0,
                 "effectiveLeverage": effective_leverage, "potentialStopLossPercent": stop_return * 100.0,
                 "potentialStopLossRatio": stop_ratio, "potentialStopLossPrice": stop_price,
                 "potentialStopLossCash": stop_profit, "accountLossPercentAtStop": stop_profit / balance * 100.0 if balance > 0 else 0.0,
@@ -2051,6 +2070,7 @@ class OPPWContinuousStrategy:
             self.account, self.strategy_decision_week_key(), BUILD_ID, preview.get("symbol", ""),
             preview.get("strategyLeverage", 0.0), preview.get("previousFullWeekChange", 0.0),
             preview.get("previousTradeChange", 0.0), preview.get("volume", 0.0), preview.get("available", False),
+            round(float(preview.get("balance") or 0.0), 2), round(float(preview.get("sizingFreeMargin", preview.get("freeMargin")) or 0.0), 2),
         ))
         decision_id = uuid.uuid5(uuid.NAMESPACE_URL, decision_id_source).hex
         return {
@@ -2069,7 +2089,8 @@ class OPPWContinuousStrategy:
             "sizing": {key: preview.get(key) for key in (
                 "symbol", "side", "price", "priceSource", "volume", "requiredDeposit", "depositSource",
                 "brokerMarginLeverage", "effectiveLeverage", "positionNotional", "sizingUnits", "minimumVolumeFloor",
-                "balance", "equity", "freeMargin", "freeMarginAfter", "marginUsagePercent", "marginLevelAfterPercent",
+                "balance", "equity", "freeMargin", "sizingFreeMargin", "freeMarginAfter", "marginUsagePercent", "marginLevelAfterPercent",
+                "purpose", "currentPositionOpen", "assumesCurrentPositionClosed", "sizingBalanceSource", "assumptionNote",
             )},
             "risk": {key: preview.get(key) for key in (
                 "potentialStopLossPercent", "potentialStopLossRatio", "potentialStopLossPrice",
@@ -2090,8 +2111,9 @@ class OPPWContinuousStrategy:
             self.strategy_decision_week_key(), payload["outcome"], round(float(payload["selectedLeverage"]), 6),
             round(float(payload["inputs"]["previousFullWeekChange"]), 8), round(float(payload["inputs"]["previousTradeChange"]), 8),
             str(payload["inputs"].get("previousFullWeekSource", "")), str(payload["inputs"].get("previousTradeSource", "")),
-            round(float(payload["sizing"].get("volume") or 0.0), 8), bool(payload["sizing"].get("minimumVolumeFloor")),
-            payload["error"].split(":", 1)[0],
+            round(float(payload["sizing"].get("volume") or 0.0), 8), int(payload["sizing"].get("sizingUnits") or 0),
+            round(float(payload["sizing"].get("balance") or 0.0), 2), round(float(payload["sizing"].get("sizingFreeMargin", payload["sizing"].get("freeMargin")) or 0.0), 2),
+            bool(payload["sizing"].get("minimumVolumeFloor")), payload["error"].split(":", 1)[0],
         )
         self.last_strategy_decision_payload = payload
         self.state.active_decision_id = str(payload.get("decisionId", ""))
@@ -2227,13 +2249,64 @@ class OPPWContinuousStrategy:
         now = now or datetime.now(self.tz)
         self.log.info("STATUS%s", self.format_status(reason, position, now, current_bar))
 
+    @staticmethod
+    def account_funding_signature(account) -> Optional[tuple[float, float]]:
+        if account is None:
+            return None
+        return (round(float(getattr(account, "balance", 0.0) or 0.0), 2), round(float(getattr(account, "credit", 0.0) or 0.0), 2))
+
+    def publish_account_change_if_needed(self, position, now: datetime, current_bar: Optional[M1Bar], label: str) -> bool:
+        monotonic = time_module.monotonic()
+        if monotonic - self.last_account_funding_check_monotonic < ACCOUNT_FUNDING_CHECK_INTERVAL_SECONDS:
+            return False
+        self.last_account_funding_check_monotonic = monotonic
+        account = mt5.account_info()
+        signature = self.account_funding_signature(account)
+        if signature is None:
+            return False
+        previous = self.last_account_funding_signature
+        self.last_account_funding_signature = signature
+        if previous is None or signature == previous:
+            return False
+
+        position_open = position is not None
+        preview = self.potential_position_preview(assume_current_position_closed=position_open)
+        decision = self.last_strategy_decision_payload
+        if not position_open:
+            decision = self.record_strategy_decision_if_changed(force=self.is_weekend(now), preview=preview)
+
+        current_bar = current_bar or self.current_m1_bar(self.cfg.trade_symbol)
+        if self.is_weekend(now):
+            snapshot = self.build_weekend_startup_snapshot(
+                position, now, current_bar, preview, decision, self.last_closed_trade_payload(refresh=False),
+            )
+        else:
+            snapshot = self.build_mobile_snapshot(position, now, current_bar, potential_position=preview)
+            snapshot["strategyDecision"] = decision
+        snapshot["statusUpdate"] = {
+            "kind": "ACCOUNT_FUNDING_CHANGE", "minute": now.strftime("%Y-%m-%d %H:%M"),
+            "generatedAt": now.isoformat(), "build": BUILD_ID,
+        }
+        self.monitor_publisher.submit_snapshot(snapshot, guaranteed=True)
+        self.last_monitor_publish_monotonic = monotonic
+        self.log.info(
+            "EVENT ACCOUNT_FUNDING_CHANGE_DETECTED role=%s old_balance=%.2f new_balance=%.2f old_credit=%.2f new_credit=%.2f "
+            "position_open=%s current_position_unchanged=true next_trade_volume=%.8f next_trade_required_deposit=%.2f "
+            "actual_free_margin=%.2f sizing_free_margin=%.2f sizing_units=%s",
+            label, previous[0], signature[0], previous[1], signature[1], str(position_open).lower(),
+            float(preview.get("volume") or 0.0), float(preview.get("requiredDeposit") or 0.0),
+            float(preview.get("freeMargin") or 0.0), float(preview.get("sizingFreeMargin") or 0.0),
+            int(preview.get("sizingUnits") or 0), extra={"skip_mobile_publish": True},
+        )
+        return True
+
     def status_signature(self, position, now: datetime) -> tuple[Any, ...]:
         if position is None:
-            return (None, self.state.last_exit_reason, self.state.break_even, self.protection_regime(now))
+            return (None, self.state.last_exit_reason, self.state.break_even, self.protection_regime(now), self.account_funding_signature(mt5.account_info()))
         return (
             int(position.ticket), round(float(position.volume), 8), round(float(position.sl), 5), round(float(position.tp), 5),
             self.state.break_even, self.state.exit_latched_reason, self.state.active_sl_reason, self.state.active_tp_reason,
-            self.protection_regime(now),
+            self.protection_regime(now), self.account_funding_signature(mt5.account_info()),
         )
 
     # ----- Mobile monitoring --------------------------------------------------
@@ -2371,7 +2444,7 @@ class OPPWContinuousStrategy:
             "returnSource": "strategy state fallback",
         }
 
-    def build_mobile_snapshot(self, position, now: datetime, current_bar: Optional[M1Bar]) -> dict[str, Any]:
+    def build_mobile_snapshot(self, position, now: datetime, current_bar: Optional[M1Bar], potential_position: Optional[dict[str, Any]] = None) -> dict[str, Any]:
         account = mt5.account_info()
         balance = float(getattr(account, "balance", 0.0)) if account is not None else 0.0
         equity = float(getattr(account, "equity", 0.0)) if account is not None else 0.0
@@ -2467,6 +2540,8 @@ class OPPWContinuousStrategy:
             "close": current_bar.close,
         }
 
+        preview = potential_position or self.potential_position_preview(assume_current_position_closed=position is not None)
+
         return {
             "connection": {
                 "connected": connected,
@@ -2514,7 +2589,7 @@ class OPPWContinuousStrategy:
                 "currency": currency,
             },
             "position": position_payload,
-            "potentialPosition": (preview := self.potential_position_preview()) if position is None else None,
+            "potentialPosition": preview,
             "strategyDecision": self.strategy_decision_payload(preview) if position is None else self.last_strategy_decision_payload,
             "lastClosedTrade": self.last_closed_trade_payload(),
             "execution": self.execution_snapshot(),
@@ -3370,11 +3445,13 @@ class OPPWContinuousStrategy:
 
         position = self.weekend_position_read_only()
         current_bar = self.current_m1_bar(self.cfg.trade_symbol)
+        self.last_account_funding_signature = self.account_funding_signature(mt5.account_info())
+        self.last_account_funding_check_monotonic = time_module.monotonic()
 
         # Startup-only weekend work. This runs on every script start; the loop
         # remains completely idle after the snapshot has been queued.
         self.latest_closed_trade_record(force=True)
-        potential_position = self.potential_position_preview()
+        potential_position = self.potential_position_preview(assume_current_position_closed=position is not None)
         strategy_decision = self.record_strategy_decision_if_changed(force=True, preview=potential_position)
         last_closed_trade = self.last_closed_trade_payload(refresh=False)
 
@@ -3431,6 +3508,8 @@ class OPPWContinuousStrategy:
             self.recover_position_state(position, now, force=True)
             self.apply_standard_protection(position, now)
         current_bar = self.current_m1_bar(self.cfg.trade_symbol)
+        self.last_account_funding_signature = self.account_funding_signature(mt5.account_info())
+        self.last_account_funding_check_monotonic = time_module.monotonic()
         self.emit_status("STARTUP", position, now, current_bar)
         self.print_instance_banner(now)
         self.print_autotrading_banner(now)
@@ -3482,11 +3561,12 @@ class OPPWContinuousStrategy:
             self.maybe_open_new_week(now.date(), now, current_bar, None)
 
         position = self.managed_position()
+        funding_published = self.publish_account_change_if_needed(position, now, current_bar, "EXECUTOR")
         if position is None:
             self.record_strategy_decision_if_changed()
         self.log_status_if_needed(position, now, current_bar)
         minute_published = self.publish_mobile_minute_status(position, now, current_bar)
-        if not minute_published:
+        if not minute_published and not funding_published:
             self.publish_mobile_if_due(position, now, current_bar)
 
     def reload_state_read_only(self) -> None:
@@ -3503,6 +3583,8 @@ class OPPWContinuousStrategy:
         now = datetime.now(self.tz)
         position = self.managed_position()
         current_bar = self.current_m1_bar(self.cfg.trade_symbol)
+        self.last_account_funding_signature = self.account_funding_signature(mt5.account_info())
+        self.last_account_funding_check_monotonic = time_module.monotonic()
         self.emit_status("PUBLISHER_STARTUP", position, now, current_bar)
         self.print_instance_banner(now)
         self.last_minute_status = now.strftime("%Y-%m-%d %H:%M")
@@ -3524,12 +3606,13 @@ class OPPWContinuousStrategy:
             self.last_minute_status = minute_key
             self.emit_status("PUBLISHER_MINUTE", position, now, current_bar)
             self.print_instance_banner(now)
+        funding_published = self.publish_account_change_if_needed(position, now, current_bar, "PUBLISHER")
         signature = self.status_signature(position, now)
         if signature != self.last_meaningful_signature:
             self.last_meaningful_signature = signature
             self.emit_status("PUBLISHER_STATUS_CHANGE", position, now, current_bar)
         minute_published = self.publish_mobile_minute_status(position, now, current_bar)
-        if not minute_published:
+        if not minute_published and not funding_published:
             self.publish_mobile_if_due(position, now, current_bar)
 
     def run_executor(self) -> None:
@@ -3545,6 +3628,8 @@ class OPPWContinuousStrategy:
                 if self.is_weekend(now):
                     if not self.weekend_idle:
                         self.enter_weekend_idle_without_publish("EXECUTOR")
+                    weekend_position = self.managed_position()
+                    self.publish_account_change_if_needed(weekend_position, now, None, "EXECUTOR")
                     time_module.sleep(max(1.0, self.cfg.poll_seconds))
                     continue
                 if self.weekend_idle:
@@ -3577,10 +3662,12 @@ class OPPWContinuousStrategy:
             try:
                 now = datetime.now(self.tz)
                 if self.is_weekend(now):
-                    # Coordination heartbeat only; no MT5/backend checks and no publishing.
+                    # Market-idle coordination plus an account-funding watcher that also covers carried positions.
                     self.publisher_presence.touch()
                     if not self.weekend_idle:
                         self.enter_weekend_idle_without_publish("PUBLISHER")
+                    weekend_position = self.managed_position()
+                    self.publish_account_change_if_needed(weekend_position, now, None, "PUBLISHER")
                     time_module.sleep(max(1.0, self.cfg.poll_seconds))
                     continue
                 self.publisher_presence.touch()
