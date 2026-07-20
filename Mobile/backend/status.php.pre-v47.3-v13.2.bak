@@ -148,113 +148,6 @@ function equity_points(PDO $db, string $accountKey, string $whereSql, int $maxim
     return downsample_points($rows, $maximum);
 }
 
-// OPPW_V47_3_V13_2_BEGIN
-function oppw_valid_iso_day(mixed $value): ?string
-{
-    $text = trim((string)$value);
-    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $text)) return null;
-    $parsed = DateTimeImmutable::createFromFormat('!Y-m-d', $text, new DateTimeZone('Europe/Warsaw'));
-    return $parsed && $parsed->format('Y-m-d') === $text ? $text : null;
-}
-
-function oppw_previous_weekday(DateTimeImmutable $localDay): DateTimeImmutable
-{
-    $candidate = $localDay->modify('-1 day');
-    while ((int)$candidate->format('N') > 5) $candidate = $candidate->modify('-1 day');
-    return $candidate;
-}
-
-function oppw_equity_period_points(
-    PDO $db,
-    string $accountKey,
-    DateTimeImmutable $startLocal,
-    DateTimeImmutable $endLocal,
-    int $maximum
-): array {
-    if ($endLocal <= $startLocal) return [];
-    $utc = new DateTimeZone('UTC');
-    $startUtc = $startLocal->setTimezone($utc);
-    $endUtc = $endLocal->setTimezone($utc);
-    $startSql = $startUtc->format('Y-m-d H:i:s');
-    $endSql = $endUtc->format('Y-m-d H:i:s');
-
-    $baselineStmt = $db->prepare(
-        'SELECT captured_minute, equity FROM strategy_equity_points '
-        . 'WHERE strategy_key = ? AND captured_minute <= ? '
-        . 'ORDER BY captured_minute DESC LIMIT 1'
-    );
-    $baselineStmt->execute([$accountKey, $startSql]);
-    $baseline = $baselineStmt->fetch();
-
-    $pointsStmt = $db->prepare(
-        'SELECT captured_minute, equity FROM strategy_equity_points '
-        . 'WHERE strategy_key = ? AND captured_minute >= ? AND captured_minute <= ? '
-        . 'ORDER BY captured_minute'
-    );
-    $pointsStmt->execute([$accountKey, $startSql, $endSql]);
-    $stored = $pointsStmt->fetchAll();
-
-    $startValue = $baseline && is_numeric($baseline['equity'] ?? null)
-        ? (float)$baseline['equity']
-        : ($stored && is_numeric($stored[0]['equity'] ?? null) ? (float)$stored[0]['equity'] : null);
-    if ($startValue === null) return [];
-
-    $rows = [['time' => atom_datetime($startUtc), 'value' => $startValue]];
-    $lastValue = $startValue;
-    foreach ($stored as $row) {
-        if (!is_numeric($row['equity'] ?? null)) continue;
-        $time = new DateTimeImmutable((string)$row['captured_minute'], $utc);
-        $lastValue = (float)$row['equity'];
-        if ($time <= $startUtc) {
-            $rows[0]['value'] = $lastValue;
-            continue;
-        }
-        $rows[] = ['time' => atom_datetime($time), 'value' => $lastValue];
-    }
-
-    $endAtom = atom_datetime($endUtc);
-    if (!$rows || (string)end($rows)['time'] !== $endAtom) $rows[] = ['time' => $endAtom, 'value' => $lastValue];
-    return downsample_points($rows, $maximum);
-}
-
-function oppw_selected_equity_periods(
-    PDO $db,
-    string $accountKey,
-    array $snapshot,
-    DateTimeImmutable $localNow,
-    DateTimeZone $localTimezone
-): array {
-    $session = is_array($snapshot['market']['session'] ?? null) ? $snapshot['market']['session'] : [];
-    $isTradingDay = array_key_exists('isTradingDay', $session)
-        ? (bool)$session['isTradingDay']
-        : ((int)$localNow->format('N') <= 5 && strtoupper((string)($snapshot['connection']['phase'] ?? '')) !== 'WEEKEND');
-
-    $today = $localNow->setTimezone($localTimezone)->setTime(0, 0, 0);
-    $previousTradingDayKey = oppw_valid_iso_day($session['previousTradingDay'] ?? null);
-    $previousTradingDay = $previousTradingDayKey !== null
-        ? new DateTimeImmutable($previousTradingDayKey . ' 00:00:00', $localTimezone)
-        : oppw_previous_weekday($today);
-
-    if ($isTradingDay) {
-        $dailyStart = $today;
-        $dailyEnd = $localNow;
-        $weeklyStart = strategy_week_start($today);
-        $weeklyEnd = $localNow;
-    } else {
-        $dailyStart = $previousTradingDay;
-        $dailyEnd = $dailyStart->modify('+1 day');
-        $thisMonday = strategy_week_start($today);
-        $weeklyStart = $thisMonday->modify('-7 days');
-        $weeklyEnd = $thisMonday;
-    }
-
-    return [
-        'daily' => oppw_equity_period_points($db, $accountKey, $dailyStart, $dailyEnd, 144),
-        'weekly' => oppw_equity_period_points($db, $accountKey, $weeklyStart, $weeklyEnd, 168),
-    ];
-}
-// OPPW_V47_3_V13_2_END
-
 function all_time_equity_points(PDO $db, string $accountKey): array
 {
     $equitySql =
@@ -376,98 +269,67 @@ function build_market_week_stats(array $rows, DateTimeImmutable $weekStart, Date
 {
     $weekStartKey = $weekStart->format('Y-m-d');
     $weekRows = [];
-    $regularRows = [];
-    $currentPrice = null;
-
     foreach ($rows as $marketRow) {
         $local = (new DateTimeImmutable((string)$marketRow['captured_minute'], new DateTimeZone('UTC')))->setTimezone($localTimezone);
-        if (strategy_week_start($local)->format('Y-m-d') !== $weekStartKey) continue;
-        $weekRows[] = [$marketRow, $local];
-        $price = positive_number($marketRow, 'current_price') ?? positive_number($marketRow, 'bid') ?? positive_number($marketRow, 'ask');
-        if ($price !== null) $currentPrice = $price;
-        if (strtoupper(trim((string)($marketRow['phase'] ?? ''))) === 'REGULAR') $regularRows[] = [$marketRow, $local];
+        if (strategy_week_start($local)->format('Y-m-d') === $weekStartKey) $weekRows[] = [$marketRow, $local];
     }
-
     if (!$weekRows) return null;
 
-    $weekEnd = $weekStart->modify('+6 days');
-    $emptyResult = static function () use ($weekStart, $weekEnd, $currentPrice): array {
-        return [
-            'week' => $weekStart->format('d M') . ' – ' . $weekEnd->format('d M Y'),
-            'currentPrice' => $currentPrice,
-            'weekOpen' => null,
-            'weekOpenDate' => '',
-            'weeklyHigh' => null,
-            'weeklyLow' => null,
-            'weeklyClose' => null,
-            'weeklyHighPercent' => null,
-            'weeklyLowPercent' => null,
-            'weeklyClosePercent' => null,
-            'dailyDate' => '',
-            'dailyOpen' => null,
-            'dailyHigh' => null,
-            'dailyLow' => null,
-            'dailyClose' => null,
-            'dailyHighPercent' => null,
-            'dailyLowPercent' => null,
-            'dailyClosePercent' => null,
-            'fridayOpen' => null,
-            'dailyLowDate' => '',
-        ];
-    };
-
-    // Current price may be premarket. Every O/H/L/C value below is REGULAR-only.
-    if (!$regularRows) return $emptyResult();
-
-    usort($regularRows, static fn(array $a, array $b): int => $a[1]->getTimestamp() <=> $b[1]->getTimestamp());
     $days = [];
     $weekOpen = null;
-    $weekOpenDate = '';
     $weeklyHigh = null;
     $weeklyLow = null;
     $weeklyClose = null;
+    $currentPrice = null;
 
-    foreach ($regularRows as [$row, $local]) {
+    foreach ($weekRows as [$row, $local]) {
         $dayKey = $local->format('Y-m-d');
         $price = positive_number($row, 'current_price') ?? positive_number($row, 'bid') ?? positive_number($row, 'ask');
         $open = market_point_price($row, 'm1_open', $price);
         $high = market_point_price($row, 'm1_high', $price);
         $low = market_point_price($row, 'm1_low', $price);
         $close = market_point_price($row, 'm1_close', $price);
-
-        if (!isset($days[$dayKey])) {
-            $days[$dayKey] = ['open' => $open, 'high' => null, 'low' => null, 'close' => null];
-            if ($weekOpen === null && $open !== null) {
-                $weekOpen = $open;
-                $weekOpenDate = $dayKey;
-            }
-        }
-        if ($days[$dayKey]['open'] === null && $open !== null) $days[$dayKey]['open'] = $open;
-        if ($high !== null) {
-            $days[$dayKey]['high'] = $days[$dayKey]['high'] === null ? $high : max((float)$days[$dayKey]['high'], $high);
-            $weeklyHigh = $weeklyHigh === null ? $high : max($weeklyHigh, $high);
-        }
-        if ($low !== null) {
-            $days[$dayKey]['low'] = $days[$dayKey]['low'] === null ? $low : min((float)$days[$dayKey]['low'], $low);
-            $weeklyLow = $weeklyLow === null ? $low : min($weeklyLow, $low);
-        }
-        if ($close !== null) {
-            $days[$dayKey]['close'] = $close;
-            $weeklyClose = $close;
-        }
+        if (!isset($days[$dayKey])) $days[$dayKey] = ['rows' => [], 'open' => null, 'high' => null, 'low' => null, 'close' => null];
+        $days[$dayKey]['rows'][] = [$row, $local, $open, $high, $low, $close, $price];
+        if ($high !== null) $days[$dayKey]['high'] = $days[$dayKey]['high'] === null ? $high : max($days[$dayKey]['high'], $high);
+        if ($low !== null) $days[$dayKey]['low'] = $days[$dayKey]['low'] === null ? $low : min($days[$dayKey]['low'], $low);
+        if ($close !== null) $days[$dayKey]['close'] = $close;
+        if ($high !== null) $weeklyHigh = $weeklyHigh === null ? $high : max($weeklyHigh, $high);
+        if ($low !== null) $weeklyLow = $weeklyLow === null ? $low : min($weeklyLow, $low);
+        if ($close !== null) $weeklyClose = $close;
+        if ($price !== null) $currentPrice = $price;
     }
 
-    if (!$days || $weekOpen === null) return $emptyResult();
     ksort($days, SORT_STRING);
-    $latestDayDate = (string)(array_key_last($days) ?? '');
+    $firstTradingDayKey = array_key_first($days);
+    foreach ($days as $dayKey => &$day) {
+        usort($day['rows'], static fn(array $a, array $b): int => $a[1]->getTimestamp() <=> $b[1]->getTimestamp());
+        if ($dayKey === $firstTradingDayKey) {
+            for ($index = count($day['rows']) - 1; $index >= 0; $index--) {
+                $candidate = $day['rows'][$index];
+                $seconds = ((int)$candidate[1]->format('H')) * 3600 + ((int)$candidate[1]->format('i')) * 60 + (int)$candidate[1]->format('s');
+                if ($seconds >= 15 * 3600 + 25 * 60 && $seconds <= 15 * 3600 + 30 * 60) {
+                    $day['open'] = $candidate[2];
+                    break;
+                }
+            }
+        } else {
+            $day['open'] = $day['rows'][0][2] ?? null;
+        }
+    }
+    unset($day);
+
+    $weekOpen = $firstTradingDayKey !== null ? ($days[$firstTradingDayKey]['open'] ?? null) : null;
+    $latestDayDate = array_key_last($days) ?: '';
     $latestDay = $latestDayDate !== '' ? $days[$latestDayDate] : null;
-    $relative = static fn(?float $value): ?float => $weekOpen > 0 && $value !== null ? ($value / $weekOpen - 1.0) * 100.0 : null;
+    $relative = static fn(?float $value): ?float => $weekOpen !== null && $weekOpen > 0 && $value !== null ? ($value / $weekOpen - 1.0) * 100.0 : null;
+    $weekEnd = $weekStart->modify('+6 days');
 
     return [
         'week' => $weekStart->format('d M') . ' – ' . $weekEnd->format('d M Y'),
         'currentPrice' => $currentPrice,
         'weekOpen' => $weekOpen,
-        'weekOpenDate' => $weekOpenDate,
+        'weekOpenDate' => '',
         'weeklyHigh' => $weeklyHigh,
         'weeklyLow' => $weeklyLow,
         'weeklyClose' => $weeklyClose,
@@ -501,10 +363,9 @@ $snapshot['marketStats'] = [
     'currentWeek' => build_market_week_stats($marketRows, $currentWeekStart, $warsaw),
     'previousWeek' => build_market_week_stats($marketRows, $previousWeekStart, $warsaw),
 ];
-$oppwEquityPeriods = oppw_selected_equity_periods($db, $accountKey, $snapshot, $localNow, $warsaw);
 $snapshot['equityCurves'] = [
-    'daily' => $oppwEquityPeriods['daily'],
-    'weekly' => $oppwEquityPeriods['weekly'],
+    'daily' => equity_points($db, $accountKey, 'AND captured_minute >= UTC_TIMESTAMP() - INTERVAL 24 HOUR', 144),
+    'weekly' => equity_points($db, $accountKey, 'AND captured_minute >= UTC_TIMESTAMP() - INTERVAL 7 DAY', 168),
     'allTime' => all_time_equity_points($db, $accountKey),
 ];
 
