@@ -19,6 +19,7 @@ Key execution rules
 * Status publishes an institutional-style next-trade What-if ticket; while a position is open it assumes the current position closes first and never resizes that live position.
 * Entry volume uses the configured balance-multiplier profile. The default growth profile uses 1.765; --legacy-balance-multiplier selects 2.0 at L10 and 2.5 at L8.
 * All runtime, strategy, timing, risk, publisher, and backend settings are loaded from the selected account config file.
+* Strategy decisions remain visible in every mobile snapshot, but each decision ID is sent to the MySQL persistence path only until its first successful backend acknowledgement.
 * Every completed trade is assigned a Guy Fleury A/B/C/D class and the publisher includes the label.
 * Weekends remain market-idle after startup. A lightweight MT5 account-balance watcher runs regardless of position state and may publish a fresh next-trade What-if snapshot after a top-up or withdrawal; no recurring market checks or minute publishing follow.
 
@@ -54,7 +55,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-BUILD_ID = "2026-07-20-growth-profile-fixed-position-stop-v47.5"
+BUILD_ID = "2026-07-20-strategy-decision-ack-dedup-v47.6"
 INSTANCE_MODE_EXECUTOR = "EXECUTOR"
 INSTANCE_MODE_PUBLISHER = "PUBLISHER"
 ACCOUNT_DEMO = "DEMO"
@@ -686,6 +687,12 @@ class MobileMonitorPublisher:
         self.last_publish_permission: Optional[bool] = None
         self.weekend_idle = False
         self.published_execution_ids: set[str] = set()
+        # Keep the full strategyDecision object in every snapshot for the mobile
+        # app, but submit it to the backend persistence path only until that
+        # decision ID has been acknowledged successfully.
+        self.acknowledged_strategy_decision_ids: set[str] = set()
+        self.acknowledged_strategy_decision_order: deque[str] = deque()
+        self.acknowledged_strategy_decision_limit = 256
 
         if self.enabled and not self.ready:
             self.local_log(logging.WARNING, "EVENT MONITOR_DISABLED reason=missing_configuration required=OPPW_MONITOR_INGEST_URL,OPPW_MONITOR_WRITE_TOKEN,OPPW_MONITOR_ACCOUNT_KEY")
@@ -789,6 +796,26 @@ class MobileMonitorPublisher:
             self.last_error_log_monotonic = now
             self.local_log(logging.ERROR, message, *args)
 
+    def strategy_decision_for_persistence(self, snapshot: dict[str, Any]) -> Optional[dict[str, Any]]:
+        decision = snapshot.get("strategyDecision") if isinstance(snapshot.get("strategyDecision"), dict) else None
+        if decision is None:
+            return None
+        decision_id = str(decision.get("decisionId", "")).strip()
+        if not decision_id or decision_id in self.acknowledged_strategy_decision_ids:
+            return None
+        return decision
+
+    def remember_acknowledged_strategy_decision(self, decision_id: str) -> bool:
+        decision_id = str(decision_id).strip()
+        if not decision_id or decision_id in self.acknowledged_strategy_decision_ids:
+            return False
+        while len(self.acknowledged_strategy_decision_order) >= self.acknowledged_strategy_decision_limit:
+            expired = self.acknowledged_strategy_decision_order.popleft()
+            self.acknowledged_strategy_decision_ids.discard(expired)
+        self.acknowledged_strategy_decision_order.append(decision_id)
+        self.acknowledged_strategy_decision_ids.add(decision_id)
+        return True
+
     def update_equity_history(self, snapshot: dict[str, Any], captured_at: str) -> None:
         self.equity_history = self.load_equity_history()
         account = snapshot.get("account")
@@ -818,11 +845,16 @@ class MobileMonitorPublisher:
         snapshot_copy = json.loads(json.dumps(snapshot, separators=(",", ":")))
         self.update_equity_history(snapshot_copy, captured_at)
         public_events = [{key: value for key, value in event.items() if not key.startswith("_spool") and key != "_sourcePid"} for event in events]
-        strategy_decision = snapshot_copy.get("strategyDecision") if isinstance(snapshot_copy.get("strategyDecision"), dict) else None
+        strategy_decision = self.strategy_decision_for_persistence(snapshot_copy)
         payload = {
-            "accountKey": self.cfg.monitor_account_key, "capturedAt": captured_at, "snapshot": snapshot_copy,
-            "strategyDecision": strategy_decision, "events": public_events,
+            "accountKey": self.cfg.monitor_account_key, "capturedAt": captured_at,
+            "snapshot": snapshot_copy, "events": public_events,
         }
+        # The full decision remains inside snapshot_copy for Android/status.php.
+        # Only an unacknowledged decision is duplicated at the top level, which
+        # is the explicit persistence command consumed by ingest.php v47.6.
+        if strategy_decision is not None:
+            payload["strategyDecision"] = strategy_decision
         body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
         request = urllib.request.Request(self.cfg.monitor_ingest_url, data=body, method="POST", headers={"Authorization": f"Bearer {self.cfg.monitor_write_token}", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": f"OPPW-MT5-Publisher/{BUILD_ID}"})
         try:
@@ -843,7 +875,8 @@ class MobileMonitorPublisher:
                         "Backend did not acknowledge strategy_decisions persistence; deploy the v47.4 ingest patch "
                         f"(expected={expected_decision_id or 'none'} stored={stored_id or 'none'})"
                     )
-                self.local_log(logging.INFO, "EVENT STRATEGY_DECISION_PERSISTED decision_id=%s backend=%s", stored_id, self.cfg.monitor_ingest_url)
+                if self.remember_acknowledged_strategy_decision(stored_id):
+                    self.local_log(logging.INFO, "EVENT STRATEGY_DECISION_PERSISTED decision_id=%s backend=%s", stored_id, self.cfg.monitor_ingest_url)
             execution = snapshot_copy.get("execution") if isinstance(snapshot_copy.get("execution"), dict) else {}
             execution_id = str(execution.get("executionId", ""))
             if execution_id and execution_id not in self.published_execution_ids:

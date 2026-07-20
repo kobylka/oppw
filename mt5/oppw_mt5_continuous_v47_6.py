@@ -17,7 +17,9 @@ Key execution rules
 * PUBLISHER mode is read-only and owns backend publishing while active.
 * EXECUTOR automatically publishes when no PUBLISHER heartbeat is active.
 * Status publishes an institutional-style next-trade What-if ticket; while a position is open it assumes the current position closes first and never resizes that live position.
-* Entry volume is the largest broker volume step whose MT5 required deposit multiplied by 1.765 does not exceed account balance; this deliberately maximizes usable leverage at low balances.
+* Entry volume uses the configured balance-multiplier profile. The default growth profile uses 1.765; --legacy-balance-multiplier selects 2.0 at L10 and 2.5 at L8.
+* All runtime, strategy, timing, risk, publisher, and backend settings are loaded from the selected account config file.
+* Strategy decisions remain visible in every mobile snapshot, but each decision ID is sent to the MySQL persistence path only until its first successful backend acknowledgement.
 * Every completed trade is assigned a Guy Fleury A/B/C/D class and the publisher includes the label.
 * Weekends remain market-idle after startup. A lightweight MT5 account-balance watcher runs regardless of position state and may publish a fresh next-trade What-if snapshot after a top-up or withdrawal; no recurring market checks or minute publishing follow.
 
@@ -53,16 +55,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-BUILD_ID = "2026-07-20-session-clock-and-whole-sl-v47.3"
-DEFAULT_ENTRY_ACTION_LEAD_SECONDS = 3.0
-NON_ENTRY_ACTION_LEAD_SECONDS = 3.0
-AUTOTRADING_REMINDER_SECONDS = 60.0
-STALE_TICK_REMINDER_SECONDS = 60.0
-PUBLISHER_HEARTBEAT_INTERVAL_SECONDS = 1.0
-PUBLISHER_HEARTBEAT_STALE_SECONDS = 8.0
-ACCOUNT_FUNDING_CHECK_INTERVAL_SECONDS = 5.0
-MAX_ACCOUNT_STOP_LOSS_FRACTION = 0.50
-REQUIRED_BALANCE_MULTIPLIER = 1.765
+BUILD_ID = "2026-07-20-strategy-decision-ack-dedup-v47.6"
 INSTANCE_MODE_EXECUTOR = "EXECUTOR"
 INSTANCE_MODE_PUBLISHER = "PUBLISHER"
 ACCOUNT_DEMO = "DEMO"
@@ -105,6 +98,50 @@ def load_account_config(account: str):
     if config_class is None or not callable(config_class):
         raise RuntimeError(f"Configuration file does not define Config: {config_path}")
     return config_class(), config_path
+
+
+REQUIRED_CONFIG_FIELDS = (
+    "trade_symbol", "signal_symbol", "timezone_name", "market_timezone_name", "exchange_calendar",
+    "terminal_path", "login", "password", "server", "magic", "comment_prefix", "deviation_points",
+    "poll_seconds", "entry_window_seconds", "reconnect_seconds", "maximum_tick_age_seconds",
+    "request_retry_seconds", "filling_mode", "base_leverage", "loss_leverage",
+    "full_week_loss_trigger", "previous_trade_loss_trigger", "break_even_ratio", "tsl_stop",
+    "leverage_stop_points", "sizing_multiplier", "required_balance_multiplier",
+    "legacy_required_balance_multiplier_l10", "legacy_required_balance_multiplier_l8",
+    "max_account_stop_loss_fraction", "broker_margin_leverage_fallback", "manage_manual_position",
+    "live_enabled", "state_file", "log_dir", "lock_file", "premarket_start", "cash_open",
+    "close_bar_open", "close_processing", "entry_action_lead_seconds", "non_entry_action_lead_seconds",
+    "autotrading_reminder_seconds", "stale_tick_reminder_seconds", "publisher_heartbeat_interval_seconds",
+    "publisher_heartbeat_stale_seconds", "publisher_presence_check_interval_seconds",
+    "account_funding_check_interval_seconds", "mysql_trade_refresh_seconds",
+    "mysql_trade_error_log_interval_seconds", "leverage_inputs_refresh_seconds",
+    "event_spool_lock_timeout_seconds", "event_spool_lock_retry_seconds", "monitor_enabled",
+    "monitor_ingest_url", "monitor_write_token", "monitor_account_key", "monitor_publish_interval_seconds",
+    "monitor_timeout_seconds", "monitor_error_log_interval_seconds", "monitor_equity_sample_seconds",
+    "monitor_equity_history_points", "monitor_event_buffer_size", "monitor_minute_snapshot_buffer_size",
+    "monitor_history_file", "backend_latest_trade_path", "tpps", "tsl_ratio",
+)
+
+
+def validate_config(config) -> None:
+    missing = [name for name in REQUIRED_CONFIG_FIELDS if not hasattr(config, name)]
+    if missing:
+        raise RuntimeError(
+            "Selected account config is not v47.4-compatible. Missing fields: " + ", ".join(missing)
+            + ". Replace it from the v47.4 config template and restore only local credential values."
+        )
+    if not is_dataclass(config):
+        raise RuntimeError("Config must be a frozen dataclass")
+    if float(config.required_balance_multiplier) <= 0:
+        raise RuntimeError("required_balance_multiplier must be positive")
+    if float(config.legacy_required_balance_multiplier_l10) <= 0 or float(config.legacy_required_balance_multiplier_l8) <= 0:
+        raise RuntimeError("legacy required-balance multipliers must be positive")
+    if not 0 < float(config.max_account_stop_loss_fraction) <= 1:
+        raise RuntimeError("max_account_stop_loss_fraction must be in (0, 1]")
+
+
+def apply_runtime_flags(config, legacy_balance_multiplier: bool):
+    return replace(config, use_legacy_balance_multiplier=bool(legacy_balance_multiplier))
 
 
 def account_scoped_file(path: Path, account: str) -> Path:
@@ -450,9 +487,12 @@ class InterProcessFileLock:
 
 
 class PublisherPresence:
-    def __init__(self, path: Path, role: str):
+    def __init__(self, path: Path, role: str, heartbeat_interval_seconds: float, heartbeat_stale_seconds: float, check_interval_seconds: float):
         self.path = path
         self.role = role
+        self.heartbeat_interval_seconds = max(0.05, float(heartbeat_interval_seconds))
+        self.heartbeat_stale_seconds = max(self.heartbeat_interval_seconds, float(heartbeat_stale_seconds))
+        self.check_interval_seconds = max(0.05, float(check_interval_seconds))
         self.token = uuid.uuid4().hex
         self.last_touch_monotonic = 0.0
         self.cached_active = False
@@ -462,7 +502,7 @@ class PublisherPresence:
         if self.role != INSTANCE_MODE_PUBLISHER:
             return
         now = time_module.monotonic()
-        if not force and now - self.last_touch_monotonic < PUBLISHER_HEARTBEAT_INTERVAL_SECONDS:
+        if not force and now - self.last_touch_monotonic < self.heartbeat_interval_seconds:
             return
         self.last_touch_monotonic = now
         payload = {
@@ -481,7 +521,7 @@ class PublisherPresence:
         if self.role == INSTANCE_MODE_PUBLISHER:
             return True
         now = time_module.monotonic()
-        if now - self.last_check_monotonic < 0.5:
+        if now - self.last_check_monotonic < self.check_interval_seconds:
             return self.cached_active
         self.last_check_monotonic = now
         try:
@@ -489,7 +529,7 @@ class PublisherPresence:
             pid = int(raw.get("pid", 0))
             updated = float(raw.get("updatedEpoch", 0.0))
             age = max(0.0, time_module.time() - updated)
-            self.cached_active = age <= PUBLISHER_HEARTBEAT_STALE_SECONDS and InterProcessFileLock.pid_is_running(pid)
+            self.cached_active = age <= self.heartbeat_stale_seconds and InterProcessFileLock.pid_is_running(pid)
         except Exception:
             self.cached_active = False
         return self.cached_active
@@ -519,12 +559,11 @@ class SharedEventSpool:
     backend publishing failure.
     """
 
-    FILE_LOCK_TIMEOUT_SECONDS = 5.0
-    FILE_LOCK_RETRY_SECONDS = 0.02
-
-    def __init__(self, path: Path, limit: int):
+    def __init__(self, path: Path, limit: int, lock_timeout_seconds: float, lock_retry_seconds: float):
         self.path = path
         self.limit = max(1, limit)
+        self.lock_timeout_seconds = max(0.1, float(lock_timeout_seconds))
+        self.lock_retry_seconds = max(0.001, float(lock_retry_seconds))
         self.lock_path = path.with_suffix(path.suffix + ".lock")
         self.thread_lock = threading.RLock()
 
@@ -564,7 +603,7 @@ class SharedEventSpool:
             "pid": os.getpid(),
             "thread": threading.get_ident(),
         })
-        deadline = time_module.monotonic() + self.FILE_LOCK_TIMEOUT_SECONDS
+        deadline = time_module.monotonic() + self.lock_timeout_seconds
         while not lock.try_acquire():
             if time_module.monotonic() >= deadline:
                 owner = ""
@@ -573,10 +612,10 @@ class SharedEventSpool:
                 except OSError:
                     pass
                 raise EventSpoolLockTimeout(
-                    f"Event spool lock timed out after {self.FILE_LOCK_TIMEOUT_SECONDS:.1f}s: "
+                    f"Event spool lock timed out after {self.lock_timeout_seconds:.1f}s: "
                     f"{self.lock_path} owner={owner or 'unknown'}"
                 )
-            time_module.sleep(self.FILE_LOCK_RETRY_SECONDS)
+            time_module.sleep(self.lock_retry_seconds)
         return lock
 
     def append(self, event: dict[str, Any]) -> None:
@@ -648,6 +687,12 @@ class MobileMonitorPublisher:
         self.last_publish_permission: Optional[bool] = None
         self.weekend_idle = False
         self.published_execution_ids: set[str] = set()
+        # Keep the full strategyDecision object in every snapshot for the mobile
+        # app, but submit it to the backend persistence path only until that
+        # decision ID has been acknowledged successfully.
+        self.acknowledged_strategy_decision_ids: set[str] = set()
+        self.acknowledged_strategy_decision_order: deque[str] = deque()
+        self.acknowledged_strategy_decision_limit = 256
 
         if self.enabled and not self.ready:
             self.local_log(logging.WARNING, "EVENT MONITOR_DISABLED reason=missing_configuration required=OPPW_MONITOR_INGEST_URL,OPPW_MONITOR_WRITE_TOKEN,OPPW_MONITOR_ACCOUNT_KEY")
@@ -751,6 +796,26 @@ class MobileMonitorPublisher:
             self.last_error_log_monotonic = now
             self.local_log(logging.ERROR, message, *args)
 
+    def strategy_decision_for_persistence(self, snapshot: dict[str, Any]) -> Optional[dict[str, Any]]:
+        decision = snapshot.get("strategyDecision") if isinstance(snapshot.get("strategyDecision"), dict) else None
+        if decision is None:
+            return None
+        decision_id = str(decision.get("decisionId", "")).strip()
+        if not decision_id or decision_id in self.acknowledged_strategy_decision_ids:
+            return None
+        return decision
+
+    def remember_acknowledged_strategy_decision(self, decision_id: str) -> bool:
+        decision_id = str(decision_id).strip()
+        if not decision_id or decision_id in self.acknowledged_strategy_decision_ids:
+            return False
+        while len(self.acknowledged_strategy_decision_order) >= self.acknowledged_strategy_decision_limit:
+            expired = self.acknowledged_strategy_decision_order.popleft()
+            self.acknowledged_strategy_decision_ids.discard(expired)
+        self.acknowledged_strategy_decision_order.append(decision_id)
+        self.acknowledged_strategy_decision_ids.add(decision_id)
+        return True
+
     def update_equity_history(self, snapshot: dict[str, Any], captured_at: str) -> None:
         self.equity_history = self.load_equity_history()
         account = snapshot.get("account")
@@ -780,13 +845,38 @@ class MobileMonitorPublisher:
         snapshot_copy = json.loads(json.dumps(snapshot, separators=(",", ":")))
         self.update_equity_history(snapshot_copy, captured_at)
         public_events = [{key: value for key, value in event.items() if not key.startswith("_spool") and key != "_sourcePid"} for event in events]
-        payload = {"accountKey": self.cfg.monitor_account_key, "capturedAt": captured_at, "snapshot": snapshot_copy, "events": public_events}
+        strategy_decision = self.strategy_decision_for_persistence(snapshot_copy)
+        payload = {
+            "accountKey": self.cfg.monitor_account_key, "capturedAt": captured_at,
+            "snapshot": snapshot_copy, "events": public_events,
+        }
+        # The full decision remains inside snapshot_copy for Android/status.php.
+        # Only an unacknowledged decision is duplicated at the top level, which
+        # is the explicit persistence command consumed by ingest.php v47.6.
+        if strategy_decision is not None:
+            payload["strategyDecision"] = strategy_decision
         body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-        request = urllib.request.Request(self.cfg.monitor_ingest_url, data=body, method="POST", headers={"Authorization": f"Bearer {self.cfg.monitor_write_token}", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "OPPW-MT5-Publisher/47.2"})
+        request = urllib.request.Request(self.cfg.monitor_ingest_url, data=body, method="POST", headers={"Authorization": f"Bearer {self.cfg.monitor_write_token}", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": f"OPPW-MT5-Publisher/{BUILD_ID}"})
         try:
             with urllib.request.urlopen(request, timeout=self.cfg.monitor_timeout_seconds) as response:
                 if int(response.status) not in (200, 201):
                     raise RuntimeError(f"HTTP {response.status}")
+                response_text = response.read().decode("utf-8", errors="replace")
+            try:
+                response_payload = json.loads(response_text) if response_text.strip() else {}
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(f"Backend response was not JSON: {response_text[:200]}") from exc
+            if strategy_decision is not None:
+                expected_decision_id = str(strategy_decision.get("decisionId", ""))
+                stored = bool(response_payload.get("strategyDecisionStored", False))
+                stored_id = str(response_payload.get("strategyDecisionId", ""))
+                if not stored or stored_id != expected_decision_id:
+                    raise RuntimeError(
+                        "Backend did not acknowledge strategy_decisions persistence; deploy the v47.4 ingest patch "
+                        f"(expected={expected_decision_id or 'none'} stored={stored_id or 'none'})"
+                    )
+                if self.remember_acknowledged_strategy_decision(stored_id):
+                    self.local_log(logging.INFO, "EVENT STRATEGY_DECISION_PERSISTED decision_id=%s backend=%s", stored_id, self.cfg.monitor_ingest_url)
             execution = snapshot_copy.get("execution") if isinstance(snapshot_copy.get("execution"), dict) else {}
             execution_id = str(execution.get("executionId", ""))
             if execution_id and execution_id not in self.published_execution_ids:
@@ -1052,6 +1142,11 @@ class OPPWContinuousStrategy:
             self.role, self.account, getattr(account, "login", "?"), getattr(account, "server", "?"), self.cfg.trade_symbol,
             self.cfg.signal_symbol, self.cfg.live_enabled, BUILD_ID, Path(__file__).resolve(),
         )
+        self.log.info(
+            "EVENT CONFIG_PROFILE config=%s balance_multiplier_profile=%s default_multiplier=%.3f legacy_L10=%.3f legacy_L8=%.3f",
+            getattr(self.cfg, "config_name", self.account), self.balance_multiplier_profile(), float(self.cfg.required_balance_multiplier),
+            float(self.cfg.legacy_required_balance_multiplier_l10), float(self.cfg.legacy_required_balance_multiplier_l8),
+        )
         if self.is_executor:
             if not self.cfg.live_enabled:
                 self.log.warning("EVENT DRY_RUN live_enabled=false")
@@ -1148,19 +1243,7 @@ class OPPWContinuousStrategy:
         return self.next_week_monday(day) if day.weekday() >= 5 else day
 
     def entry_action_lead_seconds(self) -> float:
-        configured = getattr(self.cfg, "entry_action_lead_seconds", None)
-        if configured is None:
-            configured = getattr(self.cfg, "buy_action_lead_seconds", None)
-        if configured is None:
-            configured = os.getenv("OPPW_ENTRY_ACTION_LEAD_SECONDS", str(DEFAULT_ENTRY_ACTION_LEAD_SECONDS))
-        try:
-            return max(0.0, float(configured))
-        except (TypeError, ValueError):
-            self.log.warning(
-                "EVENT INVALID_ENTRY_ACTION_LEAD configured=%s fallback=%.1f",
-                configured, DEFAULT_ENTRY_ACTION_LEAD_SECONDS,
-            )
-            return DEFAULT_ENTRY_ACTION_LEAD_SECONDS
+        return max(0.0, float(self.cfg.entry_action_lead_seconds))
 
     def session_times(self, day: date) -> SessionTimes:
         cached = self._session_times_cache.get(day)
@@ -1179,7 +1262,7 @@ class OPPWContinuousStrategy:
             close_processing = datetime.combine(day, self.cfg.close_processing, self.market_tz).astimezone(self.tz)
 
         entry_lead = timedelta(seconds=self.entry_action_lead_seconds())
-        non_entry_lead = timedelta(seconds=NON_ENTRY_ACTION_LEAD_SECONDS)
+        non_entry_lead = timedelta(seconds=float(self.cfg.non_entry_action_lead_seconds))
         value = SessionTimes(
             cash_open=cash_open,
             buy_action=cash_open - entry_lead,
@@ -1215,7 +1298,7 @@ class OPPWContinuousStrategy:
             "previousWeekMonday": (monday - timedelta(days=7)).isoformat(),
             "previousTradingDay": previous_day.isoformat() if previous_day is not None else "",
             "entryActionLeadSeconds": self.entry_action_lead_seconds(),
-            "nonEntryActionLeadSeconds": NON_ENTRY_ACTION_LEAD_SECONDS,
+            "nonEntryActionLeadSeconds": float(self.cfg.non_entry_action_lead_seconds),
         }
 
     def final_trading_day(self, day: date) -> Optional[date]:
@@ -1238,7 +1321,7 @@ class OPPWContinuousStrategy:
             "EVENT WEEK_PLAN week=%s sessions=%s first_day=%s final_day=%s buy_action=%s OH=%s weekly_TO=%s "
             "entry_lead_seconds=%.1f non_entry_lead_seconds=%.1f source_day=%s weekend_next_week=%s",
             key, ",".join(value.isoformat() for value in sessions) or "none", first_day, final_day,
-            buy_action, open_action, weekly_to, self.entry_action_lead_seconds(), NON_ENTRY_ACTION_LEAD_SECONDS,
+            buy_action, open_action, weekly_to, self.entry_action_lead_seconds(), float(self.cfg.non_entry_action_lead_seconds),
             day.isoformat(), day.weekday() >= 5,
         )
 
@@ -1275,7 +1358,7 @@ class OPPWContinuousStrategy:
             key = f"{position.symbol}:{context}"
             now = time_module.monotonic()
             previous = self.last_stale_tick_log_monotonic.get(key, 0.0)
-            if now - previous >= STALE_TICK_REMINDER_SECONDS:
+            if now - previous >= float(self.cfg.stale_tick_reminder_seconds):
                 self.last_stale_tick_log_monotonic[key] = now
                 log = self.log.error if float(position.sl) <= 0 else self.log.warning
                 log(
@@ -1746,7 +1829,7 @@ class OPPWContinuousStrategy:
         if not ingest_url:
             return []
         base = ingest_url.rsplit("/", 1)[0]
-        return [f"{base}/oppw_latest_trade.php"]
+        return [f"{base}/{str(self.cfg.backend_latest_trade_path).lstrip('/')}"]
 
     def backend_trade_history_url(self) -> str:
         urls = self.backend_trade_history_urls()
@@ -1775,7 +1858,7 @@ class OPPWContinuousStrategy:
         if self.is_weekend(datetime.now(self.tz)) and not force:
             return self.cached_mysql_trade_record
         now_monotonic = time_module.monotonic()
-        if not force and now_monotonic - self.last_mysql_trade_refresh_monotonic < 60.0:
+        if not force and now_monotonic - self.last_mysql_trade_refresh_monotonic < float(self.cfg.mysql_trade_refresh_seconds):
             return self.cached_mysql_trade_record
         self.last_mysql_trade_refresh_monotonic = now_monotonic
 
@@ -1797,7 +1880,7 @@ class OPPWContinuousStrategy:
                 headers={
                     "Authorization": f"Bearer {token}",
                     "Accept": "application/json",
-                    "User-Agent": "OPPW-MT5-History/47.2",
+                    "User-Agent": f"OPPW-MT5-History/{BUILD_ID}",
                 },
             )
             try:
@@ -1846,7 +1929,7 @@ class OPPWContinuousStrategy:
             except Exception as exc:
                 errors.append(f"{url}: {exc}")
 
-        if now_monotonic - self.last_mysql_trade_error_monotonic >= 60.0:
+        if now_monotonic - self.last_mysql_trade_error_monotonic >= float(self.cfg.mysql_trade_error_log_interval_seconds):
             self.last_mysql_trade_error_monotonic = now_monotonic
             self.log.warning(
                 "EVENT MYSQL_TRADE_HISTORY_READ_FAILED errors=%s",
@@ -1864,7 +1947,7 @@ class OPPWContinuousStrategy:
         )
         now_monotonic = time_module.monotonic()
         state_changed = state_signature != self.last_leverage_state_signature
-        if not force and not state_changed and now_monotonic - self.last_leverage_inputs_refresh_monotonic < 60.0:
+        if not force and not state_changed and now_monotonic - self.last_leverage_inputs_refresh_monotonic < float(self.cfg.leverage_inputs_refresh_seconds):
             return self.cached_previous_full_week_change, self.cached_previous_trade_change, self.cached_previous_full_week_source, self.cached_previous_trade_source
         self.last_leverage_inputs_refresh_monotonic = now_monotonic
         self.last_leverage_state_signature = state_signature
@@ -1924,19 +2007,18 @@ class OPPWContinuousStrategy:
         previous_full_week, previous_trade, full_week_source, trade_source = self.resolved_leverage_inputs()
         if self.cfg.base_leverage == 8:
             triggers: list[str] = []
-            if previous_full_week < -0.025:
-                triggers.append(f"previous full-week change {previous_full_week:.4%} ({full_week_source}) < -2.5000%")
-            if previous_trade < -0.007:
-                triggers.append(f"previous trade change {previous_trade:.4%} ({trade_source}) < -0.7000%")
+            if previous_full_week < float(self.cfg.full_week_loss_trigger):
+                triggers.append(f"previous full-week change {previous_full_week:.4%} ({full_week_source}) < {float(self.cfg.full_week_loss_trigger):.4%}")
+            if previous_trade < float(self.cfg.previous_trade_loss_trigger):
+                triggers.append(f"previous trade change {previous_trade:.4%} ({trade_source}) < {float(self.cfg.previous_trade_loss_trigger):.4%}")
             if triggers:
                 return self.cfg.loss_leverage, f"{self.cfg.loss_leverage}x because " + " and ".join(triggers)
-            return self.cfg.base_leverage, f"{self.cfg.base_leverage}x because previous full-week change {previous_full_week:.4%} ({full_week_source}) >= -2.5000% and previous trade change {previous_trade:.4%} ({trade_source}) >= -0.7000%"
+            return self.cfg.base_leverage, f"{self.cfg.base_leverage}x because previous full-week change {previous_full_week:.4%} ({full_week_source}) >= {float(self.cfg.full_week_loss_trigger):.4%} and previous trade change {previous_trade:.4%} ({trade_source}) >= {float(self.cfg.previous_trade_loss_trigger):.4%}"
         return self.cfg.base_leverage, f"{self.cfg.base_leverage}x because base leverage is configured as {self.cfg.base_leverage}x"
 
-    @staticmethod
-    def broker_margin_leverage(account) -> float:
+    def broker_margin_leverage(self, account) -> float:
         value = float(getattr(account, "leverage", 0.0) or 0.0) if account is not None else 0.0
-        return value if value > 0 else 20.0
+        return value if value > 0 else float(self.cfg.broker_margin_leverage_fallback)
 
     def position_required_deposit(self, position, current_price: float) -> float:
         if position is None:
@@ -1959,7 +2041,10 @@ class OPPWContinuousStrategy:
         if requested_profit_raw is None:
             raise RuntimeError(f"order_calc_profit failed for hard stop: {mt5.last_error()}")
         requested_profit = float(requested_profit_raw)
-        maximum_loss = -MAX_ACCOUNT_STOP_LOSS_FRACTION * max(0.0, balance)
+        if not self.account_loss_cap_enabled():
+            return requested_price, requested_profit, False
+
+        maximum_loss = -float(self.cfg.max_account_stop_loss_fraction) * max(0.0, balance)
         if balance <= 0 or requested_profit >= maximum_loss - 1e-8:
             return requested_price, requested_profit, False
 
@@ -2006,28 +2091,47 @@ class OPPWContinuousStrategy:
             })
         return result
 
+    def required_balance_multiplier(self, leverage: int) -> float:
+        if bool(getattr(self.cfg, "use_legacy_balance_multiplier", False)):
+            if int(leverage) == int(self.cfg.loss_leverage):
+                return float(self.cfg.legacy_required_balance_multiplier_l10)
+            if int(leverage) == int(self.cfg.base_leverage):
+                return float(self.cfg.legacy_required_balance_multiplier_l8)
+            raise RuntimeError(f"No legacy required-balance multiplier configured for leverage {leverage}")
+        return float(self.cfg.required_balance_multiplier)
+
+    def balance_multiplier_profile(self) -> str:
+        return "LEGACY_LEVERAGE_BOUND" if bool(getattr(self.cfg, "use_legacy_balance_multiplier", False)) else "GROWTH_1_765"
+
+    def account_loss_cap_enabled(self) -> bool:
+        return bool(getattr(self.cfg, "use_legacy_balance_multiplier", False))
+
+    def account_loss_cap_policy(self) -> str:
+        return "BALANCE_50_PERCENT" if self.account_loss_cap_enabled() else "DISABLED_FOR_GROWTH_1_765"
+
     def potential_position_preview(self, assume_current_position_closed: bool = False) -> dict[str, Any]:
         previous_full_week, previous_trade, full_week_source, trade_source = self.resolved_leverage_inputs()
         leverage, leverage_reason = self.leverage_decision()
+        required_balance_multiplier = self.required_balance_multiplier(leverage)
         now = datetime.now(self.tz)
         result: dict[str, Any] = {
             "available": False, "generatedAt": now.isoformat(), "build": BUILD_ID, "account": self.account,
             "symbol": self.cfg.trade_symbol, "side": "BUY", "price": 0.0, "priceSource": "MT5 current BUY price",
             "volume": 0.0, "requiredDeposit": 0.0, "requiredBalance": 0.0,
-            "requiredBalanceMultiplier": REQUIRED_BALANCE_MULTIPLIER, "requiredBalanceHeadroom": 0.0,
+            "requiredBalanceMultiplier": required_balance_multiplier, "requiredBalanceHeadroom": 0.0,
             "minimumVolumeRequiredDeposit": 0.0, "minimumVolumeRequiredBalance": 0.0,
             "nextVolumeStep": 0.0, "nextVolumeStepRequiredDeposit": 0.0,
             "nextVolumeStepRequiredBalance": 0.0, "nextVolumeStepAffordable": False,
-            "sizingMethod": "MAX_VOLUME_BY_REQUIRED_BALANCE", "brokerMarginLeverage": 0.0, "depositSource": "",
+            "sizingMethod": "MAX_VOLUME_BY_REQUIRED_BALANCE", "balanceMultiplierProfile": self.balance_multiplier_profile(), "brokerMarginLeverage": 0.0, "depositSource": "",
             "balance": 0.0, "equity": 0.0, "freeMargin": 0.0, "freeMarginAfter": 0.0,
             "marginUsagePercent": 0.0, "marginLevelAfterPercent": 0.0, "effectiveLeverage": 0.0,
             "strategyLeverage": float(leverage), "leverageReason": leverage_reason,
             "previousFullWeekChange": float(previous_full_week), "previousFullWeekSource": full_week_source,
             "previousTradeChange": float(previous_trade), "previousTradeSource": trade_source,
-            "fullWeekTriggerPercent": -2.5, "previousTradeTriggerPercent": -0.7,
+            "fullWeekTriggerPercent": float(self.cfg.full_week_loss_trigger) * 100.0, "previousTradeTriggerPercent": float(self.cfg.previous_trade_loss_trigger) * 100.0,
             "potentialStopLossPercent": 0.0, "potentialStopLossRatio": 0.0,
             "potentialStopLossPrice": 0.0, "potentialStopLossCash": 0.0, "accountLossPercentAtStop": 0.0,
-            "accountLossCapApplied": False, "stopLossFormula": "",
+            "accountLossCapApplied": False, "accountLossCapPolicy": self.account_loss_cap_policy(), "stopLossFormula": "",
             "positionNotional": 0.0, "sizingUnits": 0, "minimumVolumeFloor": False, "scenarios": [], "error": "",
             "purpose": "NEXT_TRADE", "currentPositionOpen": bool(assume_current_position_closed),
             "assumesCurrentPositionClosed": bool(assume_current_position_closed), "sizingFreeMargin": 0.0,
@@ -2055,7 +2159,7 @@ class OPPWContinuousStrategy:
             if price <= 0:
                 raise RuntimeError(f"No usable current price for {self.cfg.trade_symbol}")
 
-            sizing = self.required_balance_sizing(balance, sizing_free_margin, info, price)
+            sizing = self.required_balance_sizing(balance, sizing_free_margin, info, price, leverage)
             minimum_volume_notional = self.minimum_volume_notional(info, price)
             sizing_units = int(sizing["sizingUnits"])
             volume = float(sizing["volume"])
@@ -2076,7 +2180,7 @@ class OPPWContinuousStrategy:
 
             result.update({
                 "available": True, "price": price, "volume": float(volume), "requiredDeposit": required_deposit,
-                "requiredBalance": required_balance, "requiredBalanceMultiplier": REQUIRED_BALANCE_MULTIPLIER,
+                "requiredBalance": required_balance, "requiredBalanceMultiplier": required_balance_multiplier,
                 "requiredBalanceHeadroom": balance - required_balance,
                 "minimumVolumeRequiredDeposit": float(sizing["minimumVolumeRequiredDeposit"]),
                 "minimumVolumeRequiredBalance": float(sizing["minimumVolumeRequiredBalance"]),
@@ -2084,9 +2188,9 @@ class OPPWContinuousStrategy:
                 "nextVolumeStepRequiredDeposit": float(sizing["nextVolumeStepRequiredDeposit"]),
                 "nextVolumeStepRequiredBalance": float(sizing["nextVolumeStepRequiredBalance"]),
                 "nextVolumeStepAffordable": bool(sizing["nextVolumeStepAffordable"]),
-                "sizingMethod": "MAX_VOLUME_BY_REQUIRED_BALANCE",
+                "sizingMethod": "MAX_VOLUME_BY_REQUIRED_BALANCE", "balanceMultiplierProfile": self.balance_multiplier_profile(),
                 "brokerMarginLeverage": broker_leverage,
-                "depositSource": "MT5 order_calc_margin(volume, current BUY price); required balance = deposit × 1.765",
+                "depositSource": f"MT5 order_calc_margin(volume, current BUY price); required balance = deposit × {required_balance_multiplier:.3f}",
                 "balance": balance, "equity": equity, "freeMargin": free_margin, "sizingFreeMargin": sizing_free_margin,
                 "freeMarginAfter": sizing_free_margin - required_deposit,
                 "marginUsagePercent": required_deposit / balance * 100.0 if balance > 0 else 0.0,
@@ -2094,7 +2198,7 @@ class OPPWContinuousStrategy:
                 "effectiveLeverage": effective_leverage, "potentialStopLossPercent": stop_return * 100.0,
                 "potentialStopLossRatio": stop_ratio, "potentialStopLossPrice": stop_price,
                 "potentialStopLossCash": stop_profit, "accountLossPercentAtStop": stop_profit / balance * 100.0 if balance > 0 else 0.0,
-                "accountLossCapApplied": account_loss_cap_applied,
+                "accountLossCapApplied": account_loss_cap_applied, "accountLossCapPolicy": self.account_loss_cap_policy(),
                 "positionNotional": minimum_volume_notional * (float(volume) / float(info.volume_min)),
                 "sizingUnits": int(sizing_units), "minimumVolumeFloor": False,
                 "scenarios": self.what_if_scenarios(float(volume), price, balance, stop_return),
@@ -2109,7 +2213,11 @@ class OPPWContinuousStrategy:
             "breakEvenRatio": self.cfg.break_even_ratio, "tslStop": self.cfg.tsl_stop,
             "leverageStopPoints": self.cfg.leverage_stop_points, "tpps": list(self.cfg.tpps),
             "sizingMultiplier": self.cfg.sizing_multiplier,
-            "requiredBalanceMultiplier": REQUIRED_BALANCE_MULTIPLIER,
+            "requiredBalanceMultiplier": self.required_balance_multiplier(self.leverage_decision()[0]),
+            "balanceMultiplierProfile": self.balance_multiplier_profile(),
+            "accountLossCapPolicy": self.account_loss_cap_policy(),
+            "hardStopRatioL10": self.hard_sl_ratio(int(self.cfg.loss_leverage)),
+            "hardStopRatioL8": self.hard_sl_ratio(int(self.cfg.base_leverage)),
             "sizingMethod": "MAX_VOLUME_BY_REQUIRED_BALANCE",
         }
         return hashlib.sha256(json.dumps(values, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
@@ -2145,7 +2253,7 @@ class OPPWContinuousStrategy:
             },
             "sizing": {key: preview.get(key) for key in (
                 "symbol", "side", "price", "priceSource", "volume", "requiredDeposit", "requiredBalance",
-                "requiredBalanceMultiplier", "requiredBalanceHeadroom", "minimumVolumeRequiredDeposit",
+                "requiredBalanceMultiplier", "requiredBalanceHeadroom", "balanceMultiplierProfile", "minimumVolumeRequiredDeposit",
                 "minimumVolumeRequiredBalance", "nextVolumeStep", "nextVolumeStepRequiredDeposit",
                 "nextVolumeStepRequiredBalance", "nextVolumeStepAffordable", "sizingMethod", "depositSource",
                 "brokerMarginLeverage", "effectiveLeverage", "positionNotional", "sizingUnits", "minimumVolumeFloor",
@@ -2182,7 +2290,7 @@ class OPPWContinuousStrategy:
         if force or signature != self.last_strategy_decision_signature:
             self.last_strategy_decision_signature = signature
             self.log.info(
-                "EVENT STRATEGY_DECISION_RECORDED decision_id=%s parameter_hash=%s outcome=%s leverage=%.0f "
+                "EVENT STRATEGY_DECISION_CALCULATED decision_id=%s parameter_hash=%s outcome=%s leverage=%.0f "
                 "previous_full_week=%.8f full_week_source=%s previous_trade=%.8f trade_source=%s volume=%.8f required_deposit=%.2f "
                 "required_balance=%.2f required_balance_multiplier=%.3f effective_leverage=%.6f stop_loss_percent=%.4f "
                 "stop_loss_price=%.5f stop_loss_cash=%.2f error=%s",
@@ -2191,7 +2299,7 @@ class OPPWContinuousStrategy:
                 payload["inputs"]["previousTradeChange"], str(payload["inputs"].get("previousTradeSource", "")).replace(" ", "_"),
                 float(payload["sizing"].get("volume") or 0.0), float(payload["sizing"].get("requiredDeposit") or 0.0),
                 float(payload["sizing"].get("requiredBalance") or 0.0),
-                float(payload["sizing"].get("requiredBalanceMultiplier") or REQUIRED_BALANCE_MULTIPLIER),
+                float(payload["sizing"].get("requiredBalanceMultiplier") or self.required_balance_multiplier(int(payload["selectedLeverage"] or self.cfg.base_leverage))),
                 float(payload["sizing"].get("effectiveLeverage") or 0.0),
                 float(payload["risk"].get("potentialStopLossPercent") or 0.0),
                 float(payload["risk"].get("potentialStopLossPrice") or 0.0),
@@ -2218,7 +2326,7 @@ class OPPWContinuousStrategy:
                 potential_lines = [
                     f"next potential position: BUY {float(preview['volume']):.2f} lot {preview['symbol']} @ {float(preview['price']):.5f}",
                     f"required deposit: {float(preview['requiredDeposit']):.2f}{currency_suffix}",
-                    f"required balance: {float(preview['requiredBalance']):.2f}{currency_suffix} ({REQUIRED_BALANCE_MULTIPLIER:.3f} × deposit)",
+                    f"required balance: {float(preview['requiredBalance']):.2f}{currency_suffix} ({float(preview.get('requiredBalanceMultiplier') or self.required_balance_multiplier(int(preview.get('strategyLeverage') or self.cfg.base_leverage))):.3f} × deposit)",
                     f"balance headroom: {float(preview['requiredBalanceHeadroom']):.2f}{currency_suffix}",
                     f"next volume step: {float(preview['nextVolumeStep']):.2f} lot requires balance {float(preview['nextVolumeStepRequiredBalance']):.2f}{currency_suffix}",
                     f"effective leverage: {float(preview['effectiveLeverage']):.4f}x ({float(self.cfg.sizing_multiplier):g} × required deposit / balance)",
@@ -2323,7 +2431,7 @@ class OPPWContinuousStrategy:
 
     def publish_account_change_if_needed(self, position, now: datetime, current_bar: Optional[M1Bar], label: str) -> bool:
         monotonic = time_module.monotonic()
-        if monotonic - self.last_account_funding_check_monotonic < ACCOUNT_FUNDING_CHECK_INTERVAL_SECONDS:
+        if monotonic - self.last_account_funding_check_monotonic < float(self.cfg.account_funding_check_interval_seconds):
             return False
         self.last_account_funding_check_monotonic = monotonic
         account = mt5.account_info()
@@ -2362,7 +2470,7 @@ class OPPWContinuousStrategy:
             "sizing_free_margin=%.2f sizing_units=%s",
             label, previous[0], signature[0], previous[1], signature[1], str(position_open).lower(),
             float(preview.get("volume") or 0.0), float(preview.get("requiredDeposit") or 0.0),
-            float(preview.get("requiredBalance") or 0.0), REQUIRED_BALANCE_MULTIPLIER,
+            float(preview.get("requiredBalance") or 0.0), float(preview.get("requiredBalanceMultiplier") or self.required_balance_multiplier(int(preview.get("strategyLeverage") or self.cfg.base_leverage))),
             float(preview.get("freeMargin") or 0.0), float(preview.get("sizingFreeMargin") or 0.0),
             int(preview.get("sizingUnits") or 0), extra={"skip_mobile_publish": True},
         )
@@ -2832,7 +2940,7 @@ class OPPWContinuousStrategy:
             return 0
         return max(1, int(math.floor((maximum - minimum) / step + 1e-9)) + 1)
 
-    def required_balance_sizing(self, balance: float, available_margin: float, info, ask: float) -> dict[str, Any]:
+    def required_balance_sizing(self, balance: float, available_margin: float, info, ask: float, leverage: int) -> dict[str, Any]:
         if balance <= 0:
             raise RuntimeError(f"Account balance must be positive for sizing, got {balance:.2f}")
         if available_margin < 0:
@@ -2840,6 +2948,7 @@ class OPPWContinuousStrategy:
         if ask <= 0:
             raise RuntimeError(f"BUY price must be positive for sizing, got {ask}")
 
+        required_balance_multiplier = self.required_balance_multiplier(leverage)
         maximum_units = self.maximum_sizing_units(info)
         if maximum_units <= 0:
             raise RuntimeError(
@@ -2855,7 +2964,7 @@ class OPPWContinuousStrategy:
             if margin_raw is None:
                 raise RuntimeError(f"order_calc_margin failed for volume {volume:.8f}: {mt5.last_error()}")
             deposit = float(margin_raw)
-            required_balance = deposit * REQUIRED_BALANCE_MULTIPLIER
+            required_balance = deposit * required_balance_multiplier
             affordable = required_balance <= balance + 0.01 and deposit <= available_margin + 0.01
             return {
                 "sizingUnits": units, "volume": volume, "requiredDeposit": deposit,
@@ -2879,14 +2988,14 @@ class OPPWContinuousStrategy:
             raise RuntimeError(
                 f"Minimum volume {minimum_candidate['volume']:.8f} requires deposit "
                 f"{minimum_candidate['requiredDeposit']:.2f} and balance {minimum_candidate['requiredBalance']:.2f} "
-                f"(deposit × {REQUIRED_BALANCE_MULTIPLIER:.3f}); available balance={balance:.2f} "
+                f"(deposit × {required_balance_multiplier:.3f}); available balance={balance:.2f} "
                 f"available margin={available_margin:.2f}"
             )
 
         next_candidate = candidate(int(best["sizingUnits"]) + 1) if int(best["sizingUnits"]) < maximum_units else None
         return {
             **best,
-            "requiredBalanceMultiplier": REQUIRED_BALANCE_MULTIPLIER,
+            "requiredBalanceMultiplier": required_balance_multiplier,
             "minimumVolumeRequiredDeposit": float(minimum_candidate["requiredDeposit"]),
             "minimumVolumeRequiredBalance": float(minimum_candidate["requiredBalance"]),
             "nextVolumeStep": float(next_candidate["volume"]) if next_candidate is not None else 0.0,
@@ -2901,7 +3010,7 @@ class OPPWContinuousStrategy:
         return names.get(mode, str(mode))
 
     def order_filling_modes(self, info) -> list[int]:
-        configured = os.getenv("OPPW_FILLING_MODE", "AUTO").strip().upper()
+        configured = str(self.cfg.filling_mode).strip().upper()
         mapping = {"FOK": mt5.ORDER_FILLING_FOK, "IOC": mt5.ORDER_FILLING_IOC, "RETURN": mt5.ORDER_FILLING_RETURN}
         if configured in mapping:
             return [mapping[configured]]
@@ -2974,17 +3083,18 @@ class OPPWContinuousStrategy:
         minimum_volume_notional = self.minimum_volume_notional(info, ask)
         try:
             sizing = self.required_balance_sizing(
-                float(account.balance), max(0.0, float(getattr(account, "margin_free", 0.0) or 0.0)), info, ask,
+                float(account.balance), max(0.0, float(getattr(account, "margin_free", 0.0) or 0.0)), info, ask, leverage,
             )
         except RuntimeError as exc:
             self.log.error(
                 "EVENT BUY_SKIPPED reason=required_balance_sizing_failed balance=%.2f free_margin=%.2f "
                 "required_balance_multiplier=%.3f error=%s",
                 float(account.balance), float(getattr(account, "margin_free", 0.0) or 0.0),
-                REQUIRED_BALANCE_MULTIPLIER, shlex.quote(str(exc)),
+                self.required_balance_multiplier(leverage), shlex.quote(str(exc)),
             )
             return False
 
+        required_balance_multiplier = float(sizing["requiredBalanceMultiplier"])
         sizing_units = int(sizing["sizingUnits"])
         volume = float(sizing["volume"])
         required_deposit = float(sizing["requiredDeposit"])
@@ -3010,7 +3120,7 @@ class OPPWContinuousStrategy:
                 "next_volume_step=%.8f next_step_required_balance=%.2f position_notional=%.2f ask=%.5f sl=%.5f "
                 "sl_cash=%.2f account_loss_cap=%s filling=%s",
                 current_day, scheduled.isoformat(), leverage, volume, float(info.volume_min), minimum_volume_notional,
-                sizing_units, required_deposit, required_balance, REQUIRED_BALANCE_MULTIPLIER,
+                sizing_units, required_deposit, required_balance, required_balance_multiplier,
                 float(sizing["nextVolumeStep"]), float(sizing["nextVolumeStepRequiredBalance"]),
                 position_notional, ask, sl, sl_profit, account_loss_cap_applied,
                 self.filling_mode_name(request["type_filling"]),
@@ -3042,7 +3152,7 @@ class OPPWContinuousStrategy:
             "next_volume_step=%.8f next_step_required_balance=%.2f position_notional=%.2f ask=%.5f sl=%.5f "
             "sl_cash=%.2f account_loss_cap=%s filling=%s",
             current_day, scheduled.isoformat(), leverage, volume, float(info.volume_min), minimum_volume_notional,
-            sizing_units, required_deposit, required_balance, REQUIRED_BALANCE_MULTIPLIER,
+            sizing_units, required_deposit, required_balance, required_balance_multiplier,
             float(sizing["nextVolumeStep"]), float(sizing["nextVolumeStepRequiredBalance"]),
             position_notional, ask, sl, sl_profit, account_loss_cap_applied,
             self.filling_mode_name(request.get("type_filling", -1)),
@@ -3624,7 +3734,7 @@ class OPPWContinuousStrategy:
             float(strategy_decision["sizing"].get("volume") or 0.0),
             float(strategy_decision["sizing"].get("requiredDeposit") or 0.0),
             float(strategy_decision["sizing"].get("requiredBalance") or 0.0),
-            float(strategy_decision["sizing"].get("requiredBalanceMultiplier") or REQUIRED_BALANCE_MULTIPLIER),
+            float(strategy_decision["sizing"].get("requiredBalanceMultiplier") or self.required_balance_multiplier(int(strategy_decision["selectedLeverage"] or self.cfg.base_leverage))),
             float(strategy_decision["sizing"].get("effectiveLeverage") or 0.0),
         )
 
@@ -3868,24 +3978,23 @@ class OPPWContinuousStrategy:
 
 
 def parse_arguments(argv: Optional[list[str]] = None) -> argparse.Namespace:
-    default_mode = os.getenv("OPPW_INSTANCE_MODE", INSTANCE_MODE_EXECUTOR).strip().upper() or INSTANCE_MODE_EXECUTOR
-    if default_mode not in {INSTANCE_MODE_EXECUTOR, INSTANCE_MODE_PUBLISHER}:
-        default_mode = INSTANCE_MODE_EXECUTOR
-    default_account = os.getenv("OPPW_ACCOUNT", ACCOUNT_DEMO).strip().upper() or ACCOUNT_DEMO
-    if default_account not in {ACCOUNT_DEMO, ACCOUNT_REAL}:
-        default_account = ACCOUNT_DEMO
     parser = argparse.ArgumentParser(description="OPPW MT5 continuous strategy")
     parser.add_argument(
         "--mode",
         choices=(INSTANCE_MODE_EXECUTOR.lower(), INSTANCE_MODE_PUBLISHER.lower()),
-        default=default_mode.lower(),
+        default=INSTANCE_MODE_EXECUTOR.lower(),
         help="executor may trade and publishes only when no publisher exists; publisher is read-only and handles backend publishing",
     )
     parser.add_argument(
         "--account",
         choices=(ACCOUNT_DEMO.lower(), ACCOUNT_REAL.lower()),
-        default=default_account.lower(),
+        default=ACCOUNT_DEMO.lower(),
         help="demo loads oppw-mt5-config.py; real loads real-mt5-config.py",
+    )
+    parser.add_argument(
+        "--legacy-balance-multiplier",
+        action="store_true",
+        help="replace the default configured multiplier with leverage-bound legacy sizing: 2.0 at L10 and 2.5 at L8",
     )
     return parser.parse_args(argv)
 
@@ -3932,6 +4041,8 @@ def main() -> int:
     role = str(args.mode).upper()
     account = str(args.account).upper()
     original_cfg, config_path = load_account_config(account)
+    validate_config(original_cfg)
+    original_cfg = apply_runtime_flags(original_cfg, bool(args.legacy_balance_multiplier))
     cfg = scope_config_to_account(original_cfg, account)
     ensure_unscoped_instances_stopped(original_cfg, cfg)
     migrate_legacy_demo_runtime_files(original_cfg, cfg, account)
@@ -3951,8 +4062,8 @@ def main() -> int:
     event_spool_path = cfg.monitor_history_file.with_name(f"{cfg.monitor_history_file.stem}.events.jsonl")
 
     role_lock = InterProcessFileLock(role_lock_path, {"role": role, "account": account, "config": str(config_path), "build": BUILD_ID})
-    publisher_presence = PublisherPresence(heartbeat_path, role)
-    event_spool = SharedEventSpool(event_spool_path, cfg.monitor_event_buffer_size)
+    publisher_presence = PublisherPresence(heartbeat_path, role, cfg.publisher_heartbeat_interval_seconds, cfg.publisher_heartbeat_stale_seconds, cfg.publisher_presence_check_interval_seconds)
+    event_spool = SharedEventSpool(event_spool_path, cfg.monitor_event_buffer_size, cfg.event_spool_lock_timeout_seconds, cfg.event_spool_lock_retry_seconds)
     strategy: Optional[OPPWContinuousStrategy] = None
 
     try:

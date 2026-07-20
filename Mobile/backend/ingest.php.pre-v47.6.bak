@@ -88,11 +88,9 @@ try {
     $snapshotStmt = $db->prepare('INSERT INTO strategy_snapshots(strategy_key, captured_at, payload) VALUES (?, ?, ?)');
     $snapshotStmt->execute([$accountKey, $capturedAt, $payload]);
   // OPPW_V47_4_STRATEGY_DECISION_PERSISTENCE_BEGIN
-  // OPPW_V47_6_EXPLICIT_DECISION_PERSISTENCE_BEGIN
-  // snapshot.strategyDecision remains available to status.php/Android. Only
-  // the explicit top-level strategyDecision key requests a MySQL upsert.
-  $decision = is_array($data['strategyDecision'] ?? null) ? $data['strategyDecision'] : null;
-  // OPPW_V47_6_EXPLICIT_DECISION_PERSISTENCE_END
+  $decision = is_array($data['strategyDecision'] ?? null)
+      ? $data['strategyDecision']
+      : (is_array($snapshot['strategyDecision'] ?? null) ? $snapshot['strategyDecision'] : null);
   if ($decision !== null && trim((string)($decision['decisionId'] ?? '')) !== '') {
       $inputs = is_array($decision['inputs'] ?? null) ? $decision['inputs'] : [];
       $sizing = is_array($decision['sizing'] ?? null) ? $decision['sizing'] : [];
