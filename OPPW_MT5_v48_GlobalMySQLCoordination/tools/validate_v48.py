@@ -24,6 +24,8 @@ for path in [LOOP, *CONFIGS]:
     compile(path.read_text(encoding="utf-8-sig"), str(path), "exec")
 
 loop_text = LOOP.read_text(encoding="utf-8-sig")
+require("--conservative-multiplier" in loop_text, "v48.2 conservative CLI flag missing")
+require("--legacy-balance-multiplier" not in loop_text, "obsolete legacy CLI flag remains")
 for forbidden in (
     "InterProcessFileLock",
     "PublisherPresence",

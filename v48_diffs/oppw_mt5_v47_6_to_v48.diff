@@ -1,5 +1,5 @@
 ﻿diff --git "a/mt5\\oppw_mt5_continuous_v47_6.py" "b/mt5\\oppw_mt5_continuous_v48.py"
-index 9018f73..940eac2 100644
+index 9018f73..36a352d 100644
 --- "a/mt5\\oppw_mt5_continuous_v47_6.py"
 +++ "b/mt5\\oppw_mt5_continuous_v48.py"
 @@ -1,4 +1,4 @@
@@ -8,7 +8,7 @@ index 9018f73..940eac2 100644
  Continuous MetaTrader 5 implementation of the OPPW strategy.
  
  Key execution rules
-@@ -14,8 +14,11 @@ Key execution rules
+@@ -14,10 +14,13 @@ Key execution rules
  * Status deposit is read directly from MT5 as float(account.margin).
  * Terminal/account AutoTrading permissions are verified continuously before every live trade request.
  * EXECUTOR mode is the only role permitted to submit or modify trades.
@@ -20,8 +20,11 @@ index 9018f73..940eac2 100644
 +* Weekly BUY idempotency is enforced in MySQL before order_send; an uncertain send is never retried automatically.
 +* No authoritative filesystem lock, heartbeat file, or cross-process event-spool lock is used.
  * Status publishes an institutional-style next-trade What-if ticket; while a position is open it assumes the current position closes first and never resizes that live position.
- * Entry volume uses the configured balance-multiplier profile. The default growth profile uses 1.765; --legacy-balance-multiplier selects 2.0 at L10 and 2.5 at L8.
+-* Entry volume uses the configured balance-multiplier profile. The default growth profile uses 1.765; --legacy-balance-multiplier selects 2.0 at L10 and 2.5 at L8.
++* Entry volume uses the configured balance-multiplier profile. The default growth profile uses 1.765; --conservative-multiplier selects 2.0 at L10 and 2.5 at L8.
  * All runtime, strategy, timing, risk, publisher, and backend settings are loaded from the selected account config file.
+ * Strategy decisions remain visible in every mobile snapshot, but each decision ID is sent to the MySQL persistence path only until its first successful backend acknowledgement.
+ * Every completed trade is assigned a Guy Fleury A/B/C/D class and the publisher includes the label.
 @@ -40,6 +43,7 @@ import os
  import signal
  import shlex
@@ -35,7 +38,7 @@ index 9018f73..940eac2 100644
  
  BASE_DIR = Path(__file__).resolve().parent
 -BUILD_ID = "2026-07-20-strategy-decision-ack-dedup-v47.6"
-+BUILD_ID = "2026-07-20-global-mysql-leases-v48.1"
++BUILD_ID = "2026-07-20-conservative-multiplier-v48.2"
  INSTANCE_MODE_EXECUTOR = "EXECUTOR"
  INSTANCE_MODE_PUBLISHER = "PUBLISHER"
  ACCOUNT_DEMO = "DEMO"
@@ -70,7 +73,7 @@ index 9018f73..940eac2 100644
          )
      if not is_dataclass(config):
          raise RuntimeError("Config must be a frozen dataclass")
-@@ -138,6 +144,22 @@ def validate_config(config) -> None:
+@@ -138,10 +144,28 @@ def validate_config(config) -> None:
          raise RuntimeError("legacy required-balance multipliers must be positive")
      if not 0 < float(config.max_account_stop_loss_fraction) <= 1:
          raise RuntimeError("max_account_stop_loss_fraction must be in (0, 1]")
@@ -92,8 +95,16 @@ index 9018f73..940eac2 100644
 +        raise RuntimeError("trade_gate_max_hold_seconds must be positive and less than trade_gate_ttl_seconds")
  
  
- def apply_runtime_flags(config, legacy_balance_multiplier: bool):
-@@ -160,8 +182,6 @@ def scope_config_to_account(config, account: str):
+-def apply_runtime_flags(config, legacy_balance_multiplier: bool):
+-    return replace(config, use_legacy_balance_multiplier=bool(legacy_balance_multiplier))
++def apply_runtime_flags(config, conservative_multiplier: bool):
++    # Keep the established config field names for backward-compatible private
++    # account configs; only the operator-facing CLI/profile terminology changes.
++    return replace(config, use_legacy_balance_multiplier=bool(conservative_multiplier))
+ 
+ 
+ def account_scoped_file(path: Path, account: str) -> Path:
+@@ -160,8 +184,6 @@ def scope_config_to_account(config, account: str):
      changes: dict[str, Any] = {}
      if hasattr(config, "state_file"):
          changes["state_file"] = account_scoped_file(Path(config.state_file), account)
@@ -102,7 +113,7 @@ index 9018f73..940eac2 100644
      if hasattr(config, "monitor_history_file"):
          changes["monitor_history_file"] = account_scoped_file(Path(config.monitor_history_file), account)
      if hasattr(config, "log_dir"):
-@@ -375,309 +395,339 @@ def price_changed(current: float, desired: float, tolerance: float) -> bool:
+@@ -375,309 +397,339 @@ def price_changed(current: float, desired: float, tolerance: float) -> bool:
  
  
  
@@ -707,7 +718,7 @@ index 9018f73..940eac2 100644
          self.publish_requested = False
          self.stopping = False
          self.thread: Optional[threading.Thread] = None
-@@ -687,29 +737,42 @@ class MobileMonitorPublisher:
+@@ -687,29 +739,42 @@ class MobileMonitorPublisher:
          self.last_publish_permission: Optional[bool] = None
          self.weekend_idle = False
          self.published_execution_ids: set[str] = set()
@@ -760,7 +771,7 @@ index 9018f73..940eac2 100644
          return allowed
  
      def load_equity_history(self) -> list[dict[str, Any]]:
-@@ -721,7 +784,11 @@ class MobileMonitorPublisher:
+@@ -721,7 +786,11 @@ class MobileMonitorPublisher:
                  return []
              result: list[dict[str, Any]] = []
              for item in raw[-max(1, self.cfg.monitor_equity_history_points):]:
@@ -773,7 +784,7 @@ index 9018f73..940eac2 100644
                      result.append({"time": item["time"], "value": float(item["value"])})
              return result
          except Exception:
-@@ -732,7 +799,10 @@ class MobileMonitorPublisher:
+@@ -732,7 +801,10 @@ class MobileMonitorPublisher:
              path = self.cfg.monitor_history_file
              path.parent.mkdir(parents=True, exist_ok=True)
              temporary = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
@@ -785,7 +796,7 @@ index 9018f73..940eac2 100644
              os.replace(temporary, path)
          except Exception as exc:
              self.rate_limited_error("EVENT MONITOR_HISTORY_SAVE_FAILED error=%s", exc)
-@@ -742,28 +812,53 @@ class MobileMonitorPublisher:
+@@ -742,28 +814,53 @@ class MobileMonitorPublisher:
              self.weekend_idle = bool(active)
              if self.weekend_idle:
                  self.guaranteed_snapshots = deque(
@@ -846,7 +857,7 @@ index 9018f73..940eac2 100644
              self.condition.notify_all()
          self.thread.join(timeout=max(1.0, self.cfg.monitor_timeout_seconds + 2.0))
          self.thread = None
-@@ -771,10 +866,13 @@ class MobileMonitorPublisher:
+@@ -771,10 +868,13 @@ class MobileMonitorPublisher:
      def enqueue_event(self, event: dict[str, Any]) -> None:
          if not self.ready:
              return
@@ -864,7 +875,7 @@ index 9018f73..940eac2 100644
  
      def submit_snapshot(self, snapshot: dict[str, Any], guaranteed: bool = False) -> None:
          if not self.ready:
-@@ -783,7 +881,7 @@ class MobileMonitorPublisher:
+@@ -783,7 +883,7 @@ class MobileMonitorPublisher:
          if self.weekend_idle and kind not in {"WEEKEND_STARTUP", "ACCOUNT_FUNDING_CHANGE"}:
              return
          with self.condition:
@@ -873,7 +884,7 @@ index 9018f73..940eac2 100644
                  self.guaranteed_snapshots.append(snapshot)
              else:
                  self.latest_snapshot = snapshot
-@@ -792,12 +890,20 @@ class MobileMonitorPublisher:
+@@ -792,12 +892,20 @@ class MobileMonitorPublisher:
  
      def rate_limited_error(self, message: str, *args: Any) -> None:
          now = time_module.monotonic()
@@ -897,7 +908,7 @@ index 9018f73..940eac2 100644
          if decision is None:
              return None
          decision_id = str(decision.get("decisionId", "")).strip()
-@@ -809,7 +915,10 @@ class MobileMonitorPublisher:
+@@ -809,7 +917,10 @@ class MobileMonitorPublisher:
          decision_id = str(decision_id).strip()
          if not decision_id or decision_id in self.acknowledged_strategy_decision_ids:
              return False
@@ -909,7 +920,7 @@ index 9018f73..940eac2 100644
              expired = self.acknowledged_strategy_decision_order.popleft()
              self.acknowledged_strategy_decision_ids.discard(expired)
          self.acknowledged_strategy_decision_order.append(decision_id)
-@@ -824,158 +933,273 @@ class MobileMonitorPublisher:
+@@ -824,158 +935,273 @@ class MobileMonitorPublisher:
          equity = account.get("equity")
          if not isinstance(equity, (int, float)):
              return
@@ -1289,7 +1300,7 @@ index 9018f73..940eac2 100644
  class MobileEventHandler(logging.Handler):
      def __init__(self, publisher: MobileMonitorPublisher):
          super().__init__(logging.INFO)
-@@ -1058,12 +1282,12 @@ class MobileEventHandler(logging.Handler):
+@@ -1058,12 +1284,12 @@ class MobileEventHandler(logging.Handler):
  
  
  class OPPWContinuousStrategy:
@@ -1304,7 +1315,7 @@ index 9018f73..940eac2 100644
          self.tz = ZoneInfo(config.timezone_name)
          self.market_tz = ZoneInfo(config.market_timezone_name)
          self.log = setup_logging(config.log_dir, self.tz, role, self.account)
-@@ -1101,7 +1325,8 @@ class OPPWContinuousStrategy:
+@@ -1101,7 +1327,8 @@ class OPPWContinuousStrategy:
          self.last_account_funding_signature: Optional[tuple[float, float]] = None
          self.weekend_idle = False
          self.started_at = datetime.now(self.tz)
@@ -1314,7 +1325,16 @@ index 9018f73..940eac2 100644
          self.monitor_event_handler = MobileEventHandler(self.monitor_publisher)
          if self.monitor_publisher.ready:
              self.log.addHandler(self.monitor_event_handler)
-@@ -1220,6 +1445,15 @@ class OPPWContinuousStrategy:
+@@ -1143,7 +1370,7 @@ class OPPWContinuousStrategy:
+             self.cfg.signal_symbol, self.cfg.live_enabled, BUILD_ID, Path(__file__).resolve(),
+         )
+         self.log.info(
+-            "EVENT CONFIG_PROFILE config=%s balance_multiplier_profile=%s default_multiplier=%.3f legacy_L10=%.3f legacy_L8=%.3f",
++            "EVENT CONFIG_PROFILE config=%s balance_multiplier_profile=%s default_multiplier=%.3f conservative_L10=%.3f conservative_L8=%.3f",
+             getattr(self.cfg, "config_name", self.account), self.balance_multiplier_profile(), float(self.cfg.required_balance_multiplier),
+             float(self.cfg.legacy_required_balance_multiplier_l10), float(self.cfg.legacy_required_balance_multiplier_l8),
+         )
+@@ -1220,6 +1447,15 @@ class OPPWContinuousStrategy:
          reset = "\033[0m"
          print(f"\n{color}{text.center(width)}{reset}\n", flush=True)
  
@@ -1330,7 +1350,7 @@ index 9018f73..940eac2 100644
      def print_instance_banner(self, now: datetime) -> None:
          status = f"INSTANCE_{self.role} [{self.account}]"
          text = f"{now:%Y-%m-%d %H:%M:%S} {status}"
-@@ -1778,7 +2012,7 @@ class OPPWContinuousStrategy:
+@@ -1778,7 +2014,7 @@ class OPPWContinuousStrategy:
          distance = abs(difference)
          distance_pct = distance / bid * 100.0
          direction = "at current price" if abs(difference) <= tolerance else "above" if difference > 0 else "below"
@@ -1339,7 +1359,16 @@ index 9018f73..940eac2 100644
  
  
      def m1_bar_near(self, symbol: str, local_day: date, target_time: time, before_minutes: int = 5, after_minutes: int = 0) -> Optional[M1Bar]:
-@@ -2190,7 +2424,7 @@ class OPPWContinuousStrategy:
+@@ -2101,7 +2337,7 @@ class OPPWContinuousStrategy:
+         return float(self.cfg.required_balance_multiplier)
+ 
+     def balance_multiplier_profile(self) -> str:
+-        return "LEGACY_LEVERAGE_BOUND" if bool(getattr(self.cfg, "use_legacy_balance_multiplier", False)) else "GROWTH_1_765"
++        return "CONSERVATIVE_LEVERAGE_BOUND" if bool(getattr(self.cfg, "use_legacy_balance_multiplier", False)) else "GROWTH_1_765"
+ 
+     def account_loss_cap_enabled(self) -> bool:
+         return bool(getattr(self.cfg, "use_legacy_balance_multiplier", False))
+@@ -2190,7 +2426,7 @@ class OPPWContinuousStrategy:
                  "nextVolumeStepAffordable": bool(sizing["nextVolumeStepAffordable"]),
                  "sizingMethod": "MAX_VOLUME_BY_REQUIRED_BALANCE", "balanceMultiplierProfile": self.balance_multiplier_profile(),
                  "brokerMarginLeverage": broker_leverage,
@@ -1348,7 +1377,7 @@ index 9018f73..940eac2 100644
                  "balance": balance, "equity": equity, "freeMargin": free_margin, "sizingFreeMargin": sizing_free_margin,
                  "freeMarginAfter": sizing_free_margin - required_deposit,
                  "marginUsagePercent": required_deposit / balance * 100.0 if balance > 0 else 0.0,
-@@ -2326,10 +2560,10 @@ class OPPWContinuousStrategy:
+@@ -2326,10 +2562,10 @@ class OPPWContinuousStrategy:
                  potential_lines = [
                      f"next potential position: BUY {float(preview['volume']):.2f} lot {preview['symbol']} @ {float(preview['price']):.5f}",
                      f"required deposit: {float(preview['requiredDeposit']):.2f}{currency_suffix}",
@@ -1361,7 +1390,7 @@ index 9018f73..940eac2 100644
                      f"potential hard SL: {float(preview['potentialStopLossPrice']):.5f} ({float(preview['potentialStopLossPercent']):.4f}%)",
                      f"potential SL cash P/L: {float(preview['potentialStopLossCash']):.2f}{currency_suffix}",
                      f"free margin after: {float(preview['freeMarginAfter']):.2f}{currency_suffix}",
-@@ -2344,7 +2578,7 @@ class OPPWContinuousStrategy:
+@@ -2344,7 +2580,7 @@ class OPPWContinuousStrategy:
                  f"==================== TRADE STATUS - {reason} ====================",
                  f"phase: {phase} protection regime: {regime}",
                  f"time: {now:%Y-%m-%d %H:%M:%S %Z} week: {iso_week_key(now.date())}",
@@ -1370,7 +1399,7 @@ index 9018f73..940eac2 100644
                  "position: FLAT",
                  *potential_lines,
                  f"chosen leverage: {leverage}x",
-@@ -2988,7 +3222,7 @@ class OPPWContinuousStrategy:
+@@ -2988,7 +3224,7 @@ class OPPWContinuousStrategy:
              raise RuntimeError(
                  f"Minimum volume {minimum_candidate['volume']:.8f} requires deposit "
                  f"{minimum_candidate['requiredDeposit']:.2f} and balance {minimum_candidate['requiredBalance']:.2f} "
@@ -1379,7 +1408,7 @@ index 9018f73..940eac2 100644
                  f"available margin={available_margin:.2f}"
              )
  
-@@ -3067,6 +3301,14 @@ class OPPWContinuousStrategy:
+@@ -3067,6 +3303,14 @@ class OPPWContinuousStrategy:
          if not self.selected_account_matches():
              self.log.critical("EVENT TRADE_BLOCKED_BY_ACCOUNT_MISMATCH selected_account=%s expected_login=%s event=%s action=none", self.account, getattr(self.cfg, "login", 0), event)
              return False
@@ -1394,7 +1423,7 @@ index 9018f73..940eac2 100644
          return True
  
      def send_buy(self, current_day: date) -> bool:
-@@ -3163,12 +3405,65 @@ class OPPWContinuousStrategy:
+@@ -3163,12 +3407,65 @@ class OPPWContinuousStrategy:
              self.log.error("EVENT BUY_CHECK_REJECTED retcode=%s comment=%s", getattr(check, "retcode", None), getattr(check, "comment", mt5.last_error()))
              return False
  
@@ -1464,7 +1493,7 @@ index 9018f73..940eac2 100644
              if int(getattr(result, "retcode", -1)) == int(getattr(mt5, "TRADE_RETCODE_CLIENT_DISABLES_AT", 10027)):
                  self.ensure_autotrading_enabled("BUY_RETCODE_10027", force_log=True)
              self.execution_stage("ACCEPTED", result=False, reference_price=ask, retcode=int(getattr(result, "retcode", -1)) if result is not None else None,
-@@ -3176,6 +3471,10 @@ class OPPWContinuousStrategy:
+@@ -3176,6 +3473,10 @@ class OPPWContinuousStrategy:
              self.log.error("EVENT BUY_REJECTED retcode=%s comment=%s", getattr(result, "retcode", None), getattr(result, "comment", mt5.last_error()))
              return False
  
@@ -1475,7 +1504,7 @@ index 9018f73..940eac2 100644
          self.state.entry_pending_until_utc = int(datetime.now(UTC).timestamp()) + 10
          self.state.open_date = current_day.isoformat()
          self.state.entry_price = ask
-@@ -3246,7 +3545,21 @@ class OPPWContinuousStrategy:
+@@ -3246,7 +3547,21 @@ class OPPWContinuousStrategy:
              "action": mt5.TRADE_ACTION_SLTP, "symbol": position.symbol, "position": int(position.ticket),
              "sl": desired_sl, "tp": desired_tp, "magic": self.cfg.magic,
          }
@@ -1498,7 +1527,7 @@ index 9018f73..940eac2 100644
          accepted = {getattr(mt5, "TRADE_RETCODE_DONE", 10009), getattr(mt5, "TRADE_RETCODE_NO_CHANGES", 10025)}
          if result is None or int(result.retcode) not in accepted:
              if int(getattr(result, "retcode", -1)) == int(getattr(mt5, "TRADE_RETCODE_CLIENT_DISABLES_AT", 10027)):
-@@ -3302,9 +3615,23 @@ class OPPWContinuousStrategy:
+@@ -3302,9 +3617,23 @@ class OPPWContinuousStrategy:
          self.state.save(self.cfg.state_file)
          self.log.info("EVENT SELL_REQUEST reason=%s ticket=%s volume=%s bid=%.5f", reason, position.ticket, position.volume, bid)
          self.execution_stage("EXIT_SENT", position_ticket=int(position.ticket), reference_price=bid, reason=reason)
@@ -1525,7 +1554,7 @@ index 9018f73..940eac2 100644
          accepted = {getattr(mt5, "TRADE_RETCODE_DONE", 10009), getattr(mt5, "TRADE_RETCODE_PLACED", 10008), getattr(mt5, "TRADE_RETCODE_DONE_PARTIAL", 10010)}
          if result is None or int(result.retcode) not in accepted:
              if int(getattr(result, "retcode", -1)) == int(getattr(mt5, "TRADE_RETCODE_CLIENT_DISABLES_AT", 10027)):
-@@ -3620,6 +3947,7 @@ class OPPWContinuousStrategy:
+@@ -3620,6 +3949,7 @@ class OPPWContinuousStrategy:
              self.emit_status("MINUTE", position, now, current_bar)
              self.print_instance_banner(now)
              self.print_autotrading_banner(now)
@@ -1533,7 +1562,7 @@ index 9018f73..940eac2 100644
              self.log_minute_condition_report(position, now, current_bar)
  
          if position is None:
-@@ -3785,6 +4113,7 @@ class OPPWContinuousStrategy:
+@@ -3785,6 +4115,7 @@ class OPPWContinuousStrategy:
          self.emit_status("STARTUP", position, now, current_bar)
          self.print_instance_banner(now)
          self.print_autotrading_banner(now)
@@ -1541,7 +1570,7 @@ index 9018f73..940eac2 100644
          self.last_minute_status = now.strftime("%Y-%m-%d %H:%M")
          self.last_meaningful_signature = self.status_signature(position, now)
          if position is None:
-@@ -3796,6 +4125,7 @@ class OPPWContinuousStrategy:
+@@ -3796,6 +4127,7 @@ class OPPWContinuousStrategy:
              return
          if not self.is_executor:
              raise RuntimeError("cycle is executor-only")
@@ -1549,7 +1578,7 @@ index 9018f73..940eac2 100644
          now = datetime.now(self.tz)
          self.ensure_autotrading_enabled("CYCLE")
          self.log_week_plan(now.date())
-@@ -3850,7 +4180,7 @@ class OPPWContinuousStrategy:
+@@ -3850,7 +4182,7 @@ class OPPWContinuousStrategy:
      def publisher_startup(self) -> None:
          if not self.monitor_publisher.ready:
              raise RuntimeError("Publisher mode requires valid monitor configuration")
@@ -1558,7 +1587,7 @@ index 9018f73..940eac2 100644
          self.reload_state_read_only()
          now = datetime.now(self.tz)
          position = self.managed_position()
-@@ -3868,7 +4198,7 @@ class OPPWContinuousStrategy:
+@@ -3868,7 +4200,7 @@ class OPPWContinuousStrategy:
      def publisher_cycle(self) -> None:
          if self.is_weekend(datetime.now(self.tz)):
              return
@@ -1567,7 +1596,7 @@ index 9018f73..940eac2 100644
          self.reload_state_read_only()
          now = datetime.now(self.tz)
          position = self.managed_position()
-@@ -3896,6 +4226,7 @@ class OPPWContinuousStrategy:
+@@ -3896,6 +4228,7 @@ class OPPWContinuousStrategy:
              self.startup_reconcile()
          while self.running:
              try:
@@ -1575,7 +1604,7 @@ index 9018f73..940eac2 100644
                  now = datetime.now(self.tz)
                  if self.is_weekend(now):
                      if not self.weekend_idle:
-@@ -3917,13 +4248,16 @@ class OPPWContinuousStrategy:
+@@ -3917,13 +4250,16 @@ class OPPWContinuousStrategy:
                  self.cycle()
              except KeyboardInterrupt:
                  self.running = False
@@ -1593,7 +1622,7 @@ index 9018f73..940eac2 100644
          self.connect()
          started_on_weekend = self.is_weekend(datetime.now(self.tz))
          if started_on_weekend:
-@@ -3932,17 +4266,18 @@ class OPPWContinuousStrategy:
+@@ -3932,17 +4268,18 @@ class OPPWContinuousStrategy:
              self.publisher_startup()
          while self.running:
              try:
@@ -1614,7 +1643,7 @@ index 9018f73..940eac2 100644
                  if self.weekend_idle:
                      self.weekend_idle = False
                      self.monitor_publisher.set_weekend_idle(False)
-@@ -3951,12 +4286,15 @@ class OPPWContinuousStrategy:
+@@ -3951,12 +4288,15 @@ class OPPWContinuousStrategy:
                      self.log.error("EVENT CONNECTION_LOST role=PUBLISHER reconnecting=true")
                      self.disconnect()
                      time_module.sleep(self.cfg.reconnect_seconds)
@@ -1631,7 +1660,16 @@ index 9018f73..940eac2 100644
              except Exception:
                  self.log.exception("EVENT PUBLISHER_CYCLE_FAILED role=PUBLISHER")
              time_module.sleep(self.cfg.poll_seconds)
-@@ -3999,42 +4337,6 @@ def parse_arguments(argv: Optional[list[str]] = None) -> argparse.Namespace:
+@@ -3992,49 +4332,13 @@ def parse_arguments(argv: Optional[list[str]] = None) -> argparse.Namespace:
+         help="demo loads oppw-mt5-config.py; real loads real-mt5-config.py",
+     )
+     parser.add_argument(
+-        "--legacy-balance-multiplier",
++        "--conservative-multiplier",
+         action="store_true",
+-        help="replace the default configured multiplier with leverage-bound legacy sizing: 2.0 at L10 and 2.5 at L8",
++        help="replace the default 1.765 growth multiplier with conservative leverage-bound sizing: 2.0 at L10 and 2.5 at L8",
+     )
      return parser.parse_args(argv)
  
  
@@ -1674,13 +1712,13 @@ index 9018f73..940eac2 100644
  
  def main() -> int:
      args = parse_arguments()
-@@ -4042,35 +4344,25 @@ def main() -> int:
+@@ -4042,35 +4346,25 @@ def main() -> int:
      account = str(args.account).upper()
      original_cfg, config_path = load_account_config(account)
      validate_config(original_cfg)
 -    original_cfg = apply_runtime_flags(original_cfg, bool(args.legacy_balance_multiplier))
 +    original_cfg = apply_runtime_flags(
-+        original_cfg, bool(args.legacy_balance_multiplier)
++        original_cfg, bool(args.conservative_multiplier)
 +    )
      cfg = scope_config_to_account(original_cfg, account)
 -    ensure_unscoped_instances_stopped(original_cfg, cfg)
@@ -1724,7 +1762,7 @@ index 9018f73..940eac2 100644
          signal.signal(signal.SIGINT, strategy.stop)
          if hasattr(signal, "SIGTERM"):
              signal.signal(signal.SIGTERM, strategy.stop)
-@@ -4078,18 +4370,30 @@ def main() -> int:
+@@ -4078,18 +4372,30 @@ def main() -> int:
          return 0
      except Exception:
          if strategy is not None:

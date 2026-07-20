@@ -702,10 +702,10 @@ index 0000000..c265a41
 +
 diff --git a/install_v48.ps1 b/install_v48.ps1
 new file mode 100644
-index 0000000..9d19723
+index 0000000..3efd759
 --- /dev/null
 +++ b/install_v48.ps1
-@@ -0,0 +1,88 @@
+@@ -0,0 +1,91 @@
 +param(
 +    [Parameter(Mandatory = $false)]
 +    [string]$RepoRoot = "D:\oppw",
@@ -730,18 +730,21 @@ index 0000000..9d19723
 +
 +$loopSource = Join-Path $source "mt5\oppw_mt5_continuous_v48.py"
 +if (-not (Test-Path -LiteralPath $loopSource -PathType Leaf)) {
-+    throw "v48 source not found: $loopSource"
++    throw "v48.2 source not found: $loopSource"
 +}
 +
 +$copies = @(
 +    @{ Source = $loopSource; Target = (Join-Path $repo "mt5\oppw_mt5_continuous_v48.py") },
 +    @{ Source = $loopSource; Target = (Join-Path $repo "mt5\oppw_mt5_continuous_v48_1.py") },
++    @{ Source = $loopSource; Target = (Join-Path $repo "mt5\oppw_mt5_continuous_v48_2.py") },
 +    @{ Source = $loopSource; Target = (Join-Path $repo "mt5\oppw_mt5_continuous.py") },
 +    @{ Source = $loopSource; Target = (Join-Path $repo "mt5\demo\oppw_mt5_continuous_v48.py") },
 +    @{ Source = $loopSource; Target = (Join-Path $repo "mt5\demo\oppw_mt5_continuous_v48_1.py") },
++    @{ Source = $loopSource; Target = (Join-Path $repo "mt5\demo\oppw_mt5_continuous_v48_2.py") },
 +    @{ Source = $loopSource; Target = (Join-Path $repo "mt5\demo\oppw_mt5_continuous.py") },
 +    @{ Source = $loopSource; Target = (Join-Path $repo "mt5\real\oppw_mt5_continuous_v48.py") },
 +    @{ Source = $loopSource; Target = (Join-Path $repo "mt5\real\oppw_mt5_continuous_v48_1.py") },
++    @{ Source = $loopSource; Target = (Join-Path $repo "mt5\real\oppw_mt5_continuous_v48_2.py") },
 +    @{ Source = $loopSource; Target = (Join-Path $repo "mt5\real\oppw_mt5_continuous.py") },
 +    @{ Source = (Join-Path $source "mt5\oppw_mt5_config.example.py"); Target = (Join-Path $repo "mt5\oppw_mt5_config.example.py") },
 +    @{ Source = (Join-Path $source "mt5\demo\oppw_mt5_config.example.py"); Target = (Join-Path $repo "mt5\demo\oppw_mt5_config.example.py") },
@@ -788,7 +791,7 @@ index 0000000..9d19723
 +    Move-Item -LiteralPath $resolved -Destination (Join-Path $archive $safeName) -Force
 +}
 +
-+Write-Host "v48 source and backend files installed in $repo"
++Write-Host "v48.2 source and backend files installed in $repo"
 +Write-Host "Private account configs were not overwritten. Merge the new v48 coordination fields manually."
 +Write-Host "Run the SQL migration before starting either process:"
 +Write-Host "  Mobile\backend\sql\migrate_v48_global_leases.sql"
@@ -796,10 +799,10 @@ index 0000000..9d19723
 +Write-Host "Start PUBLISHER first, then EXECUTOR."
 diff --git "a/tools\\validate_v48.py" "b/tools\\validate_v48.py"
 new file mode 100644
-index 0000000..ebb80d4
+index 0000000..4bafcf2
 --- /dev/null
 +++ "b/tools\\validate_v48.py"
-@@ -0,0 +1,152 @@
+@@ -0,0 +1,154 @@
 +"""Offline structural validation for the OPPW MT5 v48 package."""
 +
 +from __future__ import annotations
@@ -826,6 +829,8 @@ index 0000000..ebb80d4
 +    compile(path.read_text(encoding="utf-8-sig"), str(path), "exec")
 +
 +loop_text = LOOP.read_text(encoding="utf-8-sig")
++require("--conservative-multiplier" in loop_text, "v48.2 conservative CLI flag missing")
++require("--legacy-balance-multiplier" not in loop_text, "obsolete legacy CLI flag remains")
 +for forbidden in (
 +    "InterProcessFileLock",
 +    "PublisherPresence",

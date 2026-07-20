@@ -3,7 +3,7 @@
 Build:
 
 ```text
-2026-07-20-global-mysql-leases-v48.1
+2026-07-20-conservative-multiplier-v48.2
 ```
 
 v48 removes filesystem locks as an ownership mechanism. EXECUTOR and PUBLISHER
@@ -13,6 +13,10 @@ folders or computers coordinate through the same MySQL database.
 v48.1 includes the startup deadlock correction: the asynchronous publisher
 checks database ownership and logs publication-state changes outside its event
 queue condition lock.
+
+v48.2 renames the optional CLI profile flag to
+`--conservative-multiplier`. Its sizing remains 2.0× required deposit at L10
+and 2.5× at L8; no strategy calculation or private-config migration changed.
 
 ## Coordination model
 
@@ -110,7 +114,7 @@ powershell -ExecutionPolicy Bypass -File .\install_v48.ps1 -RepoRoot D:\oppw
 ```
 
 7. Start PUBLISHER first, then EXECUTOR, using the same balance-multiplier flag
-   for both processes when `--legacy-balance-multiplier` is selected.
+   for both processes when `--conservative-multiplier` is selected.
 
 The installer never overwrites private account configs. It moves obsolete v47
 lock, heartbeat, and event-spool files into a timestamped archive under `mt5`.

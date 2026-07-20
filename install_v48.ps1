@@ -22,18 +22,21 @@ $source = (Resolve-Path -LiteralPath $SourceRoot).Path
 
 $loopSource = Join-Path $source "mt5\oppw_mt5_continuous_v48.py"
 if (-not (Test-Path -LiteralPath $loopSource -PathType Leaf)) {
-    throw "v48 source not found: $loopSource"
+    throw "v48.2 source not found: $loopSource"
 }
 
 $copies = @(
     @{ Source = $loopSource; Target = (Join-Path $repo "mt5\oppw_mt5_continuous_v48.py") },
     @{ Source = $loopSource; Target = (Join-Path $repo "mt5\oppw_mt5_continuous_v48_1.py") },
+    @{ Source = $loopSource; Target = (Join-Path $repo "mt5\oppw_mt5_continuous_v48_2.py") },
     @{ Source = $loopSource; Target = (Join-Path $repo "mt5\oppw_mt5_continuous.py") },
     @{ Source = $loopSource; Target = (Join-Path $repo "mt5\demo\oppw_mt5_continuous_v48.py") },
     @{ Source = $loopSource; Target = (Join-Path $repo "mt5\demo\oppw_mt5_continuous_v48_1.py") },
+    @{ Source = $loopSource; Target = (Join-Path $repo "mt5\demo\oppw_mt5_continuous_v48_2.py") },
     @{ Source = $loopSource; Target = (Join-Path $repo "mt5\demo\oppw_mt5_continuous.py") },
     @{ Source = $loopSource; Target = (Join-Path $repo "mt5\real\oppw_mt5_continuous_v48.py") },
     @{ Source = $loopSource; Target = (Join-Path $repo "mt5\real\oppw_mt5_continuous_v48_1.py") },
+    @{ Source = $loopSource; Target = (Join-Path $repo "mt5\real\oppw_mt5_continuous_v48_2.py") },
     @{ Source = $loopSource; Target = (Join-Path $repo "mt5\real\oppw_mt5_continuous.py") },
     @{ Source = (Join-Path $source "mt5\oppw_mt5_config.example.py"); Target = (Join-Path $repo "mt5\oppw_mt5_config.example.py") },
     @{ Source = (Join-Path $source "mt5\demo\oppw_mt5_config.example.py"); Target = (Join-Path $repo "mt5\demo\oppw_mt5_config.example.py") },
@@ -80,7 +83,7 @@ foreach ($legacy in $legacyFiles) {
     Move-Item -LiteralPath $resolved -Destination (Join-Path $archive $safeName) -Force
 }
 
-Write-Host "v48 source and backend files installed in $repo"
+Write-Host "v48.2 source and backend files installed in $repo"
 Write-Host "Private account configs were not overwritten. Merge the new v48 coordination fields manually."
 Write-Host "Run the SQL migration before starting either process:"
 Write-Host "  Mobile\backend\sql\migrate_v48_global_leases.sql"

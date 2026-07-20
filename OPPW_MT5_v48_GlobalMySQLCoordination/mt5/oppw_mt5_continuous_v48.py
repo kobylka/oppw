@@ -20,7 +20,7 @@ Key execution rules
 * Weekly BUY idempotency is enforced in MySQL before order_send; an uncertain send is never retried automatically.
 * No authoritative filesystem lock, heartbeat file, or cross-process event-spool lock is used.
 * Status publishes an institutional-style next-trade What-if ticket; while a position is open it assumes the current position closes first and never resizes that live position.
-* Entry volume uses the configured balance-multiplier profile. The default growth profile uses 1.765; --legacy-balance-multiplier selects 2.0 at L10 and 2.5 at L8.
+* Entry volume uses the configured balance-multiplier profile. The default growth profile uses 1.765; --conservative-multiplier selects 2.0 at L10 and 2.5 at L8.
 * All runtime, strategy, timing, risk, publisher, and backend settings are loaded from the selected account config file.
 * Strategy decisions remain visible in every mobile snapshot, but each decision ID is sent to the MySQL persistence path only until its first successful backend acknowledgement.
 * Every completed trade is assigned a Guy Fleury A/B/C/D class and the publisher includes the label.
@@ -59,7 +59,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-BUILD_ID = "2026-07-20-global-mysql-leases-v48.1"
+BUILD_ID = "2026-07-20-conservative-multiplier-v48.2"
 INSTANCE_MODE_EXECUTOR = "EXECUTOR"
 INSTANCE_MODE_PUBLISHER = "PUBLISHER"
 ACCOUNT_DEMO = "DEMO"
@@ -162,8 +162,10 @@ def validate_config(config) -> None:
         raise RuntimeError("trade_gate_max_hold_seconds must be positive and less than trade_gate_ttl_seconds")
 
 
-def apply_runtime_flags(config, legacy_balance_multiplier: bool):
-    return replace(config, use_legacy_balance_multiplier=bool(legacy_balance_multiplier))
+def apply_runtime_flags(config, conservative_multiplier: bool):
+    # Keep the established config field names for backward-compatible private
+    # account configs; only the operator-facing CLI/profile terminology changes.
+    return replace(config, use_legacy_balance_multiplier=bool(conservative_multiplier))
 
 
 def account_scoped_file(path: Path, account: str) -> Path:
@@ -1368,7 +1370,7 @@ class OPPWContinuousStrategy:
             self.cfg.signal_symbol, self.cfg.live_enabled, BUILD_ID, Path(__file__).resolve(),
         )
         self.log.info(
-            "EVENT CONFIG_PROFILE config=%s balance_multiplier_profile=%s default_multiplier=%.3f legacy_L10=%.3f legacy_L8=%.3f",
+            "EVENT CONFIG_PROFILE config=%s balance_multiplier_profile=%s default_multiplier=%.3f conservative_L10=%.3f conservative_L8=%.3f",
             getattr(self.cfg, "config_name", self.account), self.balance_multiplier_profile(), float(self.cfg.required_balance_multiplier),
             float(self.cfg.legacy_required_balance_multiplier_l10), float(self.cfg.legacy_required_balance_multiplier_l8),
         )
@@ -2335,7 +2337,7 @@ class OPPWContinuousStrategy:
         return float(self.cfg.required_balance_multiplier)
 
     def balance_multiplier_profile(self) -> str:
-        return "LEGACY_LEVERAGE_BOUND" if bool(getattr(self.cfg, "use_legacy_balance_multiplier", False)) else "GROWTH_1_765"
+        return "CONSERVATIVE_LEVERAGE_BOUND" if bool(getattr(self.cfg, "use_legacy_balance_multiplier", False)) else "GROWTH_1_765"
 
     def account_loss_cap_enabled(self) -> bool:
         return bool(getattr(self.cfg, "use_legacy_balance_multiplier", False))
@@ -4330,9 +4332,9 @@ def parse_arguments(argv: Optional[list[str]] = None) -> argparse.Namespace:
         help="demo loads oppw-mt5-config.py; real loads real-mt5-config.py",
     )
     parser.add_argument(
-        "--legacy-balance-multiplier",
+        "--conservative-multiplier",
         action="store_true",
-        help="replace the default configured multiplier with leverage-bound legacy sizing: 2.0 at L10 and 2.5 at L8",
+        help="replace the default 1.765 growth multiplier with conservative leverage-bound sizing: 2.0 at L10 and 2.5 at L8",
     )
     return parser.parse_args(argv)
 
@@ -4345,7 +4347,7 @@ def main() -> int:
     original_cfg, config_path = load_account_config(account)
     validate_config(original_cfg)
     original_cfg = apply_runtime_flags(
-        original_cfg, bool(args.legacy_balance_multiplier)
+        original_cfg, bool(args.conservative_multiplier)
     )
     cfg = scope_config_to_account(original_cfg, account)
     migrate_legacy_demo_runtime_files(original_cfg, cfg, account)

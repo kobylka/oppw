@@ -21,6 +21,9 @@
   project tree on Windows PowerShell 5.1.
 - The publisher ownership check and its state-transition log execute outside
   the event-queue condition lock, preventing logger/queue lock inversion.
+- v48.2 accepts `--conservative-multiplier`, rejects the removed
+  `--legacy-balance-multiplier` spelling, and maps the new flag to the unchanged
+  2.0× L10 / 2.5× L8 sizing policy.
 
 ## Environment limitations
 
