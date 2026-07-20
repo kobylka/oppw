@@ -3,6 +3,7 @@ package com.oppw.monitor.ui.screens
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,6 +21,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -35,6 +37,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.oppw.monitor.data.AnalyticsFilters
 import com.oppw.monitor.data.AnalyticsResponse
@@ -291,12 +294,33 @@ private fun AnalyticsContent(state: UiState, analytics: AnalyticsResponse, onFil
 @Composable
 private fun FiltersPanel(filters: AnalyticsFilters, analytics: AnalyticsResponse, onFiltersChanged: (AnalyticsFilters) -> Unit) {
     val options = analytics.filterOptions
+    var rollingWeeksText by remember(filters.rollingWeeks) { mutableStateOf(filters.rollingWeeks.toString()) }
+    val requestedRollingWeeks = rollingWeeksText.toIntOrNull()
     AppCard(Modifier.fillMaxWidth()) {
         SectionTitle("Analytics filters", "applied server-side")
         FilterMenu("Account scope", filters.scope, listOf("SELECTED", "ALL", "REAL", "DEMO")) { onFiltersChanged(filters.copy(scope = it)) }
         FilterMenu("Leverage", filters.leverage.ifBlank { "All" }, listOf("") + options.leverages.map(::formatLeverage)) { onFiltersChanged(filters.copy(leverage = it.removeSuffix("x").takeUnless { value -> value == "All" }.orEmpty())) }
         FilterMenu("Exit reason", filters.exitReason.ifBlank { "All" }, listOf("") + options.exitReasons) { onFiltersChanged(filters.copy(exitReason = it.takeUnless { value -> value == "All" }.orEmpty())) }
-        FilterMenu("Year", filters.year.ifBlank { "All" }, listOf("") + options.years.map(Int::toString)) { onFiltersChanged(filters.copy(year = it.takeUnless { value -> value == "All" }.orEmpty())) }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = rollingWeeksText,
+                onValueChange = { value -> if (value.length <= 3 && value.all(Char::isDigit)) rollingWeeksText = value },
+                modifier = Modifier.fillMaxWidth(0.55f),
+                label = { Text("Rolling weeks") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            )
+            OutlinedButton(
+                enabled = requestedRollingWeeks != null && requestedRollingWeeks in 1..520 && requestedRollingWeeks != filters.rollingWeeks,
+                onClick = { requestedRollingWeeks?.let { onFiltersChanged(filters.copy(rollingWeeks = it)) } },
+            ) { Text("Apply") }
+        }
+        Text(
+            if (options.availableWeeks > 0) "Using ${options.effectiveRollingWeeks} of ${options.availableWeeks} available calendar weeks"
+            else "No weekly trade data available",
+            color = TextSecondary,
+            style = MaterialTheme.typography.labelMedium,
+        )
         FilterMenu("Class", filters.tradeClass.ifBlank { "All" }, listOf("") + options.classes) { onFiltersChanged(filters.copy(tradeClass = it.takeUnless { value -> value == "All" }.orEmpty())) }
         TextButton(onClick = { onFiltersChanged(AnalyticsFilters()) }) { Text("Reset filters") }
     }

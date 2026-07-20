@@ -74,7 +74,7 @@ object JsonParser {
             generatedAt = root.optString("generatedAt"),
             filters = AnalyticsFilters(
                 scope = filters.optString("scope", "SELECTED"), leverage = filters.optString("leverage"),
-                exitReason = filters.optString("exitReason"), year = filters.optString("year"), tradeClass = filters.optString("tradeClass"),
+                exitReason = filters.optString("exitReason"), rollingWeeks = filters.optInt("rollingWeeks", 4), tradeClass = filters.optString("tradeClass"),
             ),
             filterOptions = AnalyticsFilterOptions(
                 accounts = buildList {
@@ -84,7 +84,9 @@ object JsonParser {
                     )) }
                 },
                 leverages = options.optJSONArray("leverages").toDoubles(), exitReasons = options.optJSONArray("exitReasons").toStrings(),
-                years = options.optJSONArray("years").toInts(), classes = options.optJSONArray("classes").toStrings().ifEmpty { listOf("A", "B", "C", "D") },
+                availableWeeks = options.optInt("availableWeeks"), defaultRollingWeeks = options.optInt("defaultRollingWeeks", 4),
+                effectiveRollingWeeks = options.optInt("effectiveRollingWeeks"),
+                classes = options.optJSONArray("classes").toStrings().ifEmpty { listOf("A", "B", "C", "D") },
             ),
             summary = AnalyticsSummary(
                 totalTrades = summary.optInt("totalTrades"), closedTrades = summary.optInt("closedTrades"), openTrades = summary.optInt("openTrades"),

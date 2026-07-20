@@ -1,0 +1,7 @@
+# Android Studio writes sdk.dir automatically.
+# sdk.dir=C\:\\Users\\YOUR_NAME\\AppData\\Local\\Android\\Sdk
+OPPW_API_BASE_URL=https://your-domain.example/oppw-backend/
+OPPW_FIREBASE_APPLICATION_ID=
+OPPW_FIREBASE_PROJECT_ID=
+OPPW_FIREBASE_API_KEY=
+OPPW_FIREBASE_SENDER_ID=

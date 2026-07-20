@@ -360,7 +360,7 @@ data class AnalyticsFilters(
     val scope: String = "SELECTED",
     val leverage: String = "",
     val exitReason: String = "",
-    val year: String = "",
+    val rollingWeeks: Int = 4,
     val tradeClass: String = "",
 )
 
@@ -369,7 +369,9 @@ data class AnalyticsFilterOptions(
     val accounts: List<AnalyticsAccountOption> = emptyList(),
     val leverages: List<Double> = emptyList(),
     val exitReasons: List<String> = emptyList(),
-    val years: List<Int> = emptyList(),
+    val availableWeeks: Int = 0,
+    val defaultRollingWeeks: Int = 4,
+    val effectiveRollingWeeks: Int = 0,
     val classes: List<String> = listOf("A", "B", "C", "D"),
 )
 
