@@ -102,9 +102,9 @@ if ($weekendIdle) {
 // even before the upgraded publisher sends its first v35 snapshot.
 if (is_array($snapshot['position'] ?? null) && (!array_key_exists('open', $snapshot['position']) || (bool)$snapshot['position']['open'])) {
     $depositValue = is_numeric($snapshot['account']['deposit'] ?? null) ? (float)$snapshot['account']['deposit'] : 0.0;
-    $equityValue = is_numeric($snapshot['account']['equity'] ?? null) ? (float)$snapshot['account']['equity'] : 0.0;
+    $balanceValue = is_numeric($snapshot['account']['balance'] ?? null) ? (float)$snapshot['account']['balance'] : 0.0;
     $snapshot['position']['exposure'] = $depositValue * 20.0;
-    $snapshot['position']['effectiveLeverage'] = $equityValue > 0 ? $snapshot['position']['exposure'] / $equityValue : 0.0;
+    $snapshot['position']['effectiveLeverage'] = $balanceValue > 0 ? $snapshot['position']['exposure'] / $balanceValue : 0.0;
 
     $nextAction = strtoupper(trim((string)($snapshot['connection']['nextAction'] ?? '')));
     if ($nextAction !== 'OH' && is_array($snapshot['conditions'] ?? null)) {
@@ -372,6 +372,13 @@ function market_point_price(array $row, string $field, ?float $fallback = null):
     return positive_number($row, $field) ?? $fallback;
 }
 
+function is_regular_market_phase(mixed $phase): bool
+{
+    $normalized = strtoupper(trim(str_replace(['_', '-'], ' ', (string)$phase)));
+    if ($normalized === '') return false;
+    return preg_match('/(^|\s)REGULAR(\s|$)/', $normalized) === 1;
+}
+
 
 function build_market_week_stats(array $rows, DateTimeImmutable $weekStart, DateTimeZone $localTimezone): ?array
 {
@@ -385,7 +392,7 @@ function build_market_week_stats(array $rows, DateTimeImmutable $weekStart, Date
         $weekRows[] = [$row, $local];
         $price = positive_number($row, 'current_price') ?? positive_number($row, 'bid') ?? positive_number($row, 'ask');
         if ($price !== null) $currentPrice = $price;
-        if (strtoupper(trim((string)($row['phase'] ?? ''))) === 'REGULAR') $regularRows[] = [$row, $local];
+        if (is_regular_market_phase($row['phase'] ?? '')) $regularRows[] = [$row, $local];
     }
     if (!$weekRows) return null;
     if (!$isCurrentWeek && !$regularRows) $regularRows = $weekRows;

@@ -59,7 +59,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-BUILD_ID = "2026-07-20-publication-lifecycle-v48.3"
+BUILD_ID = "2026-07-20-market-stats-direct-margin-v48.4"
 INSTANCE_MODE_EXECUTOR = "EXECUTOR"
 INSTANCE_MODE_PUBLISHER = "PUBLISHER"
 ACCOUNT_DEMO = "DEMO"
@@ -2881,14 +2881,11 @@ class OPPWContinuousStrategy:
             bid = trade_bid if trade_bid > 0 else float(getattr(position, "price_current", 0.0) or 0.0)
             ask = trade_ask
             entry = float(position.price_open)
-            current_position_price = float(getattr(position, "price_current", 0.0) or 0.0)
-            if current_position_price <= 0:
-                current_position_price = bid if bid > 0 else ask
-            try:
-                deposit = self.position_required_deposit(position, current_position_price)
-            except Exception as exc:
-                self.log.warning("EVENT POSITION_MARGIN_CALC_FAILED ticket=%s price=%.5f error=%s", position.ticket, current_position_price, exc, extra={"skip_mobile_publish": True})
-                deposit = 0.0
+            # The broker-reported account margin is the authoritative used
+            # deposit for the live position. Recalculating order margin at the
+            # current quote makes the displayed deposit drift with price even
+            # though the position's opening margin is already locked by MT5.
+            deposit = max(0.0, float(getattr(account, "margin", 0.0) or 0.0)) if account is not None else 0.0
             broker_leverage = self.broker_margin_leverage(account)
             raw_change = bid / entry - 1.0 if bid > 0 and entry > 0 else 0.0
             leverage = self.state.entry_leverage or self.choose_leverage()
@@ -2920,8 +2917,8 @@ class OPPWContinuousStrategy:
                 "leveragedProfitPercent": raw_change * leverage * 100.0,
                 "exposure": exposure,
                 "requiredDeposit": deposit,
-                "depositPrice": current_position_price,
-                "depositSource": "MT5 order_calc_margin(position volume, current position price)",
+                "depositPrice": entry,
+                "depositSource": "MT5 account_info().margin (broker-reported used margin)",
                 "brokerMarginLeverage": broker_leverage,
                 "effectiveLeverage": exposure / balance if balance > 0 else 0.0,
                 "stopLoss": float(position.sl),
