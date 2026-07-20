@@ -21,8 +21,8 @@ android {
         applicationId = "com.oppw.monitor"
         minSdk = 26
         targetSdk = 37
-        versionCode = 25
-        versionName = "13.3.0"
+        versionCode = 26
+        versionName = "13.4.0"
 
         buildConfigField("String", "API_BASE_URL", quoted(local("OPPW_API_BASE_URL", "https://example.com/oppw-api/")))
         buildConfigField("long", "POLL_INTERVAL_MS", "5000L")
@@ -91,5 +91,4 @@ dependencies {
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
 }
-
 

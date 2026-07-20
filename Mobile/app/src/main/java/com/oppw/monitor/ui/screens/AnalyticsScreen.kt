@@ -52,6 +52,7 @@ import com.oppw.monitor.ui.theme.DangerRed
 import com.oppw.monitor.ui.theme.PrimaryBlue
 import com.oppw.monitor.ui.theme.TextSecondary
 import com.oppw.monitor.util.duration
+import com.oppw.monitor.util.executionDateTime
 import com.oppw.monitor.util.money
 import com.oppw.monitor.util.percent
 import com.oppw.monitor.util.price
@@ -350,12 +351,14 @@ private fun LifecycleHeader(lifecycle: ExecutionLifecycle, expanded: Boolean, on
 @Composable
 private fun LifecycleStages(lifecycle: ExecutionLifecycle) {
     val expected = listOf("SIGNAL", "DECISION", "CHECKED", "SENT", "ACCEPTED", "FILLED", "POSITION_VISIBLE", "PROTECTED", "MODIFIED", "EXIT_CHECKED", "EXIT_SENT", "EXIT_ACCEPTED", "CLOSED", "PUBLISHED", "MOBILE_RECEIPT")
-    val stages = lifecycle.stages.groupBy { it.stage }.mapValues { (stage, values) -> if (stage == "PUBLISHED" || stage == "MOBILE_RECEIPT") values.first() else values.last() }
+    val stages = lifecycle.stages.groupBy { it.stage }.mapValues { (stage, values) ->
+        if (stage == "MODIFIED") values.last() else values.firstOrNull { it.result != false } ?: values.last()
+    }
     expected.forEach { name ->
         val stage = stages[name]
         Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(if (stage == null) "○ $name" else if (stage.result == false) "× $name" else "● $name", color = when { stage == null -> TextSecondary; stage.result == false -> DangerRed; else -> BrightGreen })
-            Text(stage?.let { shortDateTime(it.eventAt) } ?: "—", color = TextSecondary)
+            Text(stage?.let { executionDateTime(it.eventAt) } ?: "—", color = TextSecondary)
         }
         if (stage != null && (stage.retcode.isNotBlank() || stage.fillingMode.isNotBlank() || stage.reason.isNotBlank())) {
             Text(listOfNotNull(stage.retcode.takeIf(String::isNotBlank)?.let { "retcode $it" }, stage.fillingMode.takeIf(String::isNotBlank), stage.reason.takeIf(String::isNotBlank)).joinToString(" · "), color = TextSecondary, style = MaterialTheme.typography.labelMedium)
@@ -522,7 +525,13 @@ private fun ratioText(value: Double, available: Boolean): String = if (available
 private fun nullableRatio(value: Double?): String = if (value != null && value.isFinite()) String.format("%.2f", value) else "N/A"
 private fun ratioValue(value: Double): String = if (value.isFinite()) String.format("%.2f", value) else "∞"
 private fun formatNumber(value: Double): String = String.format("%.2f", value)
-private fun milliseconds(value: Double?): String = if (value == null || !value.isFinite()) "N/A" else if (value >= 1000) String.format("%.2fs", value / 1000.0) else String.format("%.0fms", value)
+private fun milliseconds(value: Double?): String = when {
+    value == null || !value.isFinite() -> "N/A"
+    value >= 1000.0 -> String.format("%.2fs", value / 1000.0)
+    value >= 100.0 -> String.format("%.0fms", value)
+    value >= 10.0 -> String.format("%.1fms", value)
+    else -> String.format("%.2fms", value)
+}
 private fun formatLeverage(value: Double): String = if (value <= 0) "—" else if (value % 1.0 == 0.0) "${value.toInt()}x" else String.format("%.2fx", value)
 private fun classColor(value: String): Color = classColorRaw(value)
 private fun classColorRaw(value: String): Color = when (value.uppercase()) {

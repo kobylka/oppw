@@ -35,6 +35,10 @@ fun shortDateTime(value: String): String = runCatching {
     OffsetDateTime.parse(value).toInstant().atZone(deviceZone).format(DateTimeFormatter.ofPattern("dd MMM HH:mm:ss"))
 }.getOrDefault(value.ifBlank { "—" })
 
+fun executionDateTime(value: String): String = runCatching {
+    OffsetDateTime.parse(value).toInstant().atZone(deviceZone).format(DateTimeFormatter.ofPattern("dd MMM HH:mm:ss.SSS"))
+}.getOrDefault(value.ifBlank { "—" })
+
 fun dateOnly(value: String): String = runCatching {
     OffsetDateTime.parse(value).toInstant().atZone(deviceZone).format(DateTimeFormatter.ofPattern("dd MMM yy"))
 }.getOrDefault(value.ifBlank { "—" })

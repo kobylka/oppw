@@ -17,7 +17,13 @@ $receivedAt = normalize_datetime(null);
 $snapshotGeneratedAt = trim((string)($data['snapshotGeneratedAt'] ?? ''));
 $latencyMs = null;
 if ($snapshotGeneratedAt !== '') {
-    try { $latencyMs = max(0.0,(new DateTimeImmutable($receivedAt))->format('Uv')-(new DateTimeImmutable($snapshotGeneratedAt))->format('Uv')); } catch (Throwable) {}
+    try {
+        $receivedDt = new DateTimeImmutable($receivedAt, new DateTimeZone('UTC'));
+        $snapshotDt = new DateTimeImmutable($snapshotGeneratedAt, new DateTimeZone('UTC'));
+        $receivedMs = ((float)$receivedDt->format('U') * 1000.0) + ((float)$receivedDt->format('u') / 1000.0);
+        $snapshotMs = ((float)$snapshotDt->format('U') * 1000.0) + ((float)$snapshotDt->format('u') / 1000.0);
+        $latencyMs = max(0.0, $receivedMs - $snapshotMs);
+    } catch (Throwable) {}
 }
 $details = [
     'execution_id'=>$executionId,'decision_id'=>substr((string)($data['decisionId'] ?? ''),0,64),

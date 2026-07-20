@@ -130,7 +130,7 @@ function mysql_datetime(DateTimeImmutable $value): string
 
 function atom_datetime(DateTimeImmutable $value): string
 {
-    return $value->setTimezone(new DateTimeZone('UTC'))->format(DATE_ATOM);
+    return $value->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d\\TH:i:s.vP');
 }
 
 function normalize_datetime(?string $value): string
