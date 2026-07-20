@@ -1,0 +1,1761 @@
+﻿diff --git "a/mt5\\oppw_mt5_continuous_v47_6.py" "b/mt5\\oppw_mt5_continuous_v48.py"
+index 9018f73..940eac2 100644
+--- "a/mt5\\oppw_mt5_continuous_v47_6.py"
++++ "b/mt5\\oppw_mt5_continuous_v48.py"
+@@ -1,4 +1,4 @@
+-"""
++﻿"""
+ Continuous MetaTrader 5 implementation of the OPPW strategy.
+ 
+ Key execution rules
+@@ -14,8 +14,11 @@ Key execution rules
+ * Status deposit is read directly from MT5 as float(account.margin).
+ * Terminal/account AutoTrading permissions are verified continuously before every live trade request.
+ * EXECUTOR mode is the only role permitted to submit or modify trades.
+-* PUBLISHER mode is read-only and owns backend publishing while active.
+-* EXECUTOR automatically publishes when no PUBLISHER heartbeat is active.
++* PUBLISHER mode is read-only and owns backend publishing while its global MySQL lease is active.
++* EXECUTOR automatically publishes when no global PUBLISHER lease is active.
++* EXECUTOR, PUBLISHER, and TRADE_EXECUTION ownership use MySQL leases with monotonically increasing fencing tokens.
++* Weekly BUY idempotency is enforced in MySQL before order_send; an uncertain send is never retried automatically.
++* No authoritative filesystem lock, heartbeat file, or cross-process event-spool lock is used.
+ * Status publishes an institutional-style next-trade What-if ticket; while a position is open it assumes the current position closes first and never resizes that live position.
+ * Entry volume uses the configured balance-multiplier profile. The default growth profile uses 1.765; --legacy-balance-multiplier selects 2.0 at L10 and 2.5 at L8.
+ * All runtime, strategy, timing, risk, publisher, and backend settings are loaded from the selected account config file.
+@@ -40,6 +43,7 @@ import os
+ import signal
+ import shlex
+ import shutil
++import socket
+ import sys
+ import threading
+ import time as time_module
+@@ -55,7 +59,7 @@ from typing import Any, Optional
+ from zoneinfo import ZoneInfo
+ 
+ BASE_DIR = Path(__file__).resolve().parent
+-BUILD_ID = "2026-07-20-strategy-decision-ack-dedup-v47.6"
++BUILD_ID = "2026-07-20-global-mysql-leases-v48.1"
+ INSTANCE_MODE_EXECUTOR = "EXECUTOR"
+ INSTANCE_MODE_PUBLISHER = "PUBLISHER"
+ ACCOUNT_DEMO = "DEMO"
+@@ -109,13 +113,15 @@ REQUIRED_CONFIG_FIELDS = (
+     "leverage_stop_points", "sizing_multiplier", "required_balance_multiplier",
+     "legacy_required_balance_multiplier_l10", "legacy_required_balance_multiplier_l8",
+     "max_account_stop_loss_fraction", "broker_margin_leverage_fallback", "manage_manual_position",
+-    "live_enabled", "state_file", "log_dir", "lock_file", "premarket_start", "cash_open",
++    "live_enabled", "state_file", "log_dir", "premarket_start", "cash_open",
+     "close_bar_open", "close_processing", "entry_action_lead_seconds", "non_entry_action_lead_seconds",
+-    "autotrading_reminder_seconds", "stale_tick_reminder_seconds", "publisher_heartbeat_interval_seconds",
+-    "publisher_heartbeat_stale_seconds", "publisher_presence_check_interval_seconds",
++    "autotrading_reminder_seconds", "stale_tick_reminder_seconds",
++    "coordination_url", "events_ingest_url", "coordination_timeout_seconds",
++    "role_lease_ttl_seconds", "role_lease_heartbeat_seconds", "role_lease_safety_margin_seconds",
++    "publisher_presence_check_interval_seconds", "trade_gate_ttl_seconds", "trade_gate_max_hold_seconds",
+     "account_funding_check_interval_seconds", "mysql_trade_refresh_seconds",
+     "mysql_trade_error_log_interval_seconds", "leverage_inputs_refresh_seconds",
+-    "event_spool_lock_timeout_seconds", "event_spool_lock_retry_seconds", "monitor_enabled",
++    "monitor_enabled",
+     "monitor_ingest_url", "monitor_write_token", "monitor_account_key", "monitor_publish_interval_seconds",
+     "monitor_timeout_seconds", "monitor_error_log_interval_seconds", "monitor_equity_sample_seconds",
+     "monitor_equity_history_points", "monitor_event_buffer_size", "monitor_minute_snapshot_buffer_size",
+@@ -127,8 +133,8 @@ def validate_config(config) -> None:
+     missing = [name for name in REQUIRED_CONFIG_FIELDS if not hasattr(config, name)]
+     if missing:
+         raise RuntimeError(
+-            "Selected account config is not v47.4-compatible. Missing fields: " + ", ".join(missing)
+-            + ". Replace it from the v47.4 config template and restore only local credential values."
++            "Selected account config is not v48-compatible. Missing fields: " + ", ".join(missing)
++            + ". Merge the v48 config template and restore only local credential values."
+         )
+     if not is_dataclass(config):
+         raise RuntimeError("Config must be a frozen dataclass")
+@@ -138,6 +144,22 @@ def validate_config(config) -> None:
+         raise RuntimeError("legacy required-balance multipliers must be positive")
+     if not 0 < float(config.max_account_stop_loss_fraction) <= 1:
+         raise RuntimeError("max_account_stop_loss_fraction must be in (0, 1]")
++    for field_name in ("coordination_url", "events_ingest_url", "monitor_ingest_url"):
++        value = str(getattr(config, field_name)).strip().lower()
++        if not value.startswith("https://"):
++            raise RuntimeError(f"{field_name} must use HTTPS")
++    lease_ttl = float(config.role_lease_ttl_seconds)
++    heartbeat = float(config.role_lease_heartbeat_seconds)
++    safety_margin = float(config.role_lease_safety_margin_seconds)
++    if heartbeat <= 0 or safety_margin < 0 or lease_ttl <= heartbeat + safety_margin:
++        raise RuntimeError(
++            "role_lease_ttl_seconds must exceed role_lease_heartbeat_seconds "
++            "+ role_lease_safety_margin_seconds"
++        )
++    if float(config.trade_gate_ttl_seconds) <= 0:
++        raise RuntimeError("trade_gate_ttl_seconds must be positive")
++    if not 0 < float(config.trade_gate_max_hold_seconds) < float(config.trade_gate_ttl_seconds):
++        raise RuntimeError("trade_gate_max_hold_seconds must be positive and less than trade_gate_ttl_seconds")
+ 
+ 
+ def apply_runtime_flags(config, legacy_balance_multiplier: bool):
+@@ -160,8 +182,6 @@ def scope_config_to_account(config, account: str):
+     changes: dict[str, Any] = {}
+     if hasattr(config, "state_file"):
+         changes["state_file"] = account_scoped_file(Path(config.state_file), account)
+-    if hasattr(config, "lock_file"):
+-        changes["lock_file"] = account_scoped_file(Path(config.lock_file), account)
+     if hasattr(config, "monitor_history_file"):
+         changes["monitor_history_file"] = account_scoped_file(Path(config.monitor_history_file), account)
+     if hasattr(config, "log_dir"):
+@@ -375,309 +395,339 @@ def price_changed(current: float, desired: float, tolerance: float) -> bool:
+ 
+ 
+ 
+-def derived_coordination_path(base: Path, label: str) -> Path:
+-    suffix = base.suffix or ".lock"
+-    return base.with_name(f"{base.stem}.{label}{suffix}")
+ 
++class CoordinationError(RuntimeError):
++    pass
+ 
+-class InterProcessFileLock:
+-    """OS-backed lock held for the lifetime of the open file handle."""
+ 
+-    def __init__(self, path: Path, owner: Optional[dict[str, Any]] = None):
+-        self.path = path
+-        self.owner = owner or {}
+-        self.handle = None
+-        self.acquired = False
++class LeaseLostError(CoordinationError):
++    pass
+ 
+-    @staticmethod
+-    def pid_is_running(pid: int) -> bool:
+-        if pid <= 0:
+-            return False
+-        if os.name == "nt":
+-            try:
+-                import ctypes
+-                process_query_limited_information = 0x1000
+-                still_active = 259
+-                handle = ctypes.windll.kernel32.OpenProcess(process_query_limited_information, False, pid)
+-                if not handle:
+-                    return False
+-                exit_code = ctypes.c_ulong()
+-                ok = ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
+-                ctypes.windll.kernel32.CloseHandle(handle)
+-                return bool(ok) and exit_code.value == still_active
+-            except Exception:
+-                return False
+-        try:
+-            os.kill(pid, 0)
+-            return True
+-        except PermissionError:
+-            return True
+-        except (ProcessLookupError, OSError):
+-            return False
+ 
+-    def try_acquire(self) -> bool:
+-        if self.acquired:
+-            return True
+-        self.path.parent.mkdir(parents=True, exist_ok=True)
+-        handle = self.path.open("a+b")
+-        try:
+-            handle.seek(0, os.SEEK_END)
+-            if handle.tell() == 0:
+-                handle.write(b"\0")
+-                handle.flush()
+-            handle.seek(0)
+-            if os.name == "nt":
+-                import msvcrt
+-                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+-            else:
+-                import fcntl
+-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+-        except (OSError, BlockingIOError):
+-            handle.close()
+-            return False
++@dataclass(frozen=True)
++class TradeExecutionGate:
++    owner_id: str
++    fencing_token: int
++    operation_id: str
++    operation_kind: str
++    acquired_monotonic: float
++    ttl_seconds: float
+ 
+-        self.handle = handle
+-        self.acquired = True
+-        metadata = {
+-            "pid": os.getpid(),
+-            "startedAt": datetime.now(UTC).isoformat(),
+-            **self.owner,
+-        }
+-        handle.seek(0)
+-        handle.truncate()
+-        handle.write(json.dumps(metadata, separators=(",", ":")).encode("utf-8"))
+-        handle.flush()
+-        try:
+-            os.fsync(handle.fileno())
+-        except OSError:
+-            pass
+-        return True
+ 
+-    def acquire(self) -> None:
+-        if not self.try_acquire():
+-            owner = ""
+-            try:
+-                owner = self.path.read_text(encoding="utf-8", errors="replace")[:500]
+-            except OSError:
+-                pass
+-            raise RuntimeError(f"Instance lock is already held: {self.path} owner={owner or 'unknown'}")
++class BackendLeaseCoordinator:
++    """Global MySQL-backed leadership, fencing, and trade idempotency client."""
+ 
+-    def release(self) -> None:
+-        if not self.acquired or self.handle is None:
+-            return
+-        try:
+-            self.handle.seek(0)
+-            if os.name == "nt":
+-                import msvcrt
+-                msvcrt.locking(self.handle.fileno(), msvcrt.LK_UNLCK, 1)
+-            else:
+-                import fcntl
+-                fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
+-        finally:
+-            self.handle.close()
+-            self.handle = None
+-            self.acquired = False
+-
+-    def __enter__(self) -> "InterProcessFileLock":
+-        self.acquire()
+-        return self
++    def __init__(self, config, role: str, account: str):
++        self.cfg = config
++        self.role = role
++        self.account = account.upper()
++        self.owner_id = uuid.uuid4().hex
++        self.hostname = socket.gethostname()[:120]
++        self.pid = os.getpid()
++        self.fencing_token = 0
++        self.valid_until_monotonic = 0.0
++        self.stop_event = threading.Event()
++        self.lease_lost_event = threading.Event()
++        self.thread: Optional[threading.Thread] = None
++        self.logger: Optional[logging.Logger] = None
++        self.last_publisher_check_monotonic = 0.0
++        self.cached_publisher_active = False
++        self.last_error_log_monotonic = 0.0
+ 
+-    def __exit__(self, _exc_type, _exc, _tb) -> None:
+-        self.release()
++    def set_logger(self, logger: logging.Logger) -> None:
++        self.logger = logger
+ 
++    def log(self, level: int, message: str, *args: Any) -> None:
++        if self.logger is not None:
++            self.logger.log(level, message, *args, extra={"skip_mobile_publish": True})
++        else:
++            rendered = message % args if args else message
++            print(rendered, file=sys.stderr if level >= logging.ERROR else sys.stdout, flush=True)
+ 
+-class PublisherPresence:
+-    def __init__(self, path: Path, role: str, heartbeat_interval_seconds: float, heartbeat_stale_seconds: float, check_interval_seconds: float):
+-        self.path = path
+-        self.role = role
+-        self.heartbeat_interval_seconds = max(0.05, float(heartbeat_interval_seconds))
+-        self.heartbeat_stale_seconds = max(self.heartbeat_interval_seconds, float(heartbeat_stale_seconds))
+-        self.check_interval_seconds = max(0.05, float(check_interval_seconds))
+-        self.token = uuid.uuid4().hex
+-        self.last_touch_monotonic = 0.0
+-        self.cached_active = False
+-        self.last_check_monotonic = 0.0
+-
+-    def touch(self, force: bool = False) -> None:
+-        if self.role != INSTANCE_MODE_PUBLISHER:
+-            return
+-        now = time_module.monotonic()
+-        if not force and now - self.last_touch_monotonic < self.heartbeat_interval_seconds:
+-            return
+-        self.last_touch_monotonic = now
++    def _request(self, action: str, **values: Any) -> dict[str, Any]:
+         payload = {
+-            "pid": os.getpid(),
+-            "token": self.token,
++            "action": action,
++            "accountKey": self.cfg.monitor_account_key,
+             "role": self.role,
+-            "updatedEpoch": time_module.time(),
+-            "updatedAt": datetime.now(UTC).isoformat(),
++            "ownerId": self.owner_id,
++            "hostname": self.hostname,
++            "pid": self.pid,
++            "build": BUILD_ID,
++            **values,
+         }
+-        self.path.parent.mkdir(parents=True, exist_ok=True)
+-        temporary = self.path.with_name(f"{self.path.name}.{self.token}.tmp")
+-        temporary.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+-        os.replace(temporary, self.path)
+-
+-    def dedicated_publisher_active(self) -> bool:
+-        if self.role == INSTANCE_MODE_PUBLISHER:
+-            return True
+-        now = time_module.monotonic()
+-        if now - self.last_check_monotonic < self.check_interval_seconds:
+-            return self.cached_active
+-        self.last_check_monotonic = now
++        body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
++        request = urllib.request.Request(
++            self.cfg.coordination_url,
++            data=body,
++            method="POST",
++            headers={
++                "Authorization": f"Bearer {self.cfg.monitor_write_token}",
++                "Content-Type": "application/json",
++                "Accept": "application/json",
++                "User-Agent": f"OPPW-MT5-Coordination/{BUILD_ID}",
++            },
++        )
+         try:
+-            raw = json.loads(self.path.read_text(encoding="utf-8"))
+-            pid = int(raw.get("pid", 0))
+-            updated = float(raw.get("updatedEpoch", 0.0))
+-            age = max(0.0, time_module.time() - updated)
+-            self.cached_active = age <= self.heartbeat_stale_seconds and InterProcessFileLock.pid_is_running(pid)
+-        except Exception:
+-            self.cached_active = False
+-        return self.cached_active
+-
+-    def remove_if_owner(self) -> None:
+-        if self.role != INSTANCE_MODE_PUBLISHER:
+-            return
++            with urllib.request.urlopen(request, timeout=float(self.cfg.coordination_timeout_seconds)) as response:
++                response_text = response.read().decode("utf-8", errors="replace")
++                if int(response.status) not in (200, 201):
++                    raise CoordinationError(f"coordination HTTP {response.status}")
++        except urllib.error.HTTPError as exc:
++            detail = exc.read().decode("utf-8", errors="replace")[:500]
++            raise CoordinationError(f"coordination HTTP {exc.code}: {detail}") from exc
++        except urllib.error.URLError as exc:
++            raise CoordinationError(f"coordination connection failed: {exc.reason}") from exc
+         try:
+-            raw = json.loads(self.path.read_text(encoding="utf-8"))
+-            if raw.get("token") == self.token:
+-                self.path.unlink(missing_ok=True)
+-        except Exception:
+-            pass
++            decoded = json.loads(response_text) if response_text.strip() else {}
++        except json.JSONDecodeError as exc:
++            raise CoordinationError(f"coordination response was not JSON: {response_text[:200]}") from exc
++        if not isinstance(decoded, dict) or not bool(decoded.get("ok", False)):
++            raise CoordinationError(str(decoded.get("error", "coordination request failed")) if isinstance(decoded, dict) else "coordination request failed")
++        return decoded
+ 
++    def start(self) -> None:
++        if not self.cfg.monitor_write_token or not str(self.cfg.coordination_url).lower().startswith("https://"):
++            raise CoordinationError("Global coordination requires monitor_write_token and an HTTPS coordination_url")
++        result = self._request(
++            "acquireLease",
++            leaseName=self.role,
++            ttlSeconds=float(self.cfg.role_lease_ttl_seconds),
++        )
++        if not bool(result.get("acquired", False)):
++            holder = result.get("holder") if isinstance(result.get("holder"), dict) else {}
++            raise CoordinationError(
++                f"Global {self.role} lease is already held for {self.account}: "
++                f"owner={holder.get('ownerId', 'unknown')} host={holder.get('hostname', 'unknown')} "
++                f"pid={holder.get('pid', 'unknown')} expiresAt={holder.get('expiresAt', 'unknown')}"
++            )
++        self.fencing_token = int(result.get("fencingToken", 0) or 0)
++        if self.fencing_token <= 0:
++            raise CoordinationError("Backend returned an invalid role fencing token")
++        self.valid_until_monotonic = time_module.monotonic() + float(result.get("ttlSeconds", self.cfg.role_lease_ttl_seconds))
++        self.thread = threading.Thread(target=self._renew_worker, name=f"oppw-{self.role.lower()}-lease", daemon=True)
++        self.thread.start()
++        self.log(
++            logging.INFO,
++            "EVENT GLOBAL_LEASE_ACQUIRED role=%s account=%s owner_id=%s fencing_token=%s host=%s pid=%s",
++            self.role, self.account, self.owner_id, self.fencing_token, self.hostname, self.pid,
++        )
+ 
+-class EventSpoolLockTimeout(RuntimeError):
+-    pass
++    def _renew_worker(self) -> None:
++        interval = max(0.25, float(self.cfg.role_lease_heartbeat_seconds))
++        while not self.stop_event.wait(interval):
++            try:
++                result = self._request(
++                    "renewLease",
++                    leaseName=self.role,
++                    fencingToken=self.fencing_token,
++                    ttlSeconds=float(self.cfg.role_lease_ttl_seconds),
++                )
++                if not bool(result.get("renewed", False)):
++                    raise LeaseLostError("backend rejected role lease renewal")
++                returned_token = int(result.get("fencingToken", 0) or 0)
++                if returned_token != self.fencing_token:
++                    raise LeaseLostError(
++                        f"role fencing token changed from {self.fencing_token} to {returned_token}"
++                    )
++                self.valid_until_monotonic = time_module.monotonic() + float(
++                    result.get("ttlSeconds", self.cfg.role_lease_ttl_seconds)
++                )
++            except Exception as exc:
++                now = time_module.monotonic()
++                if now >= self.valid_until_monotonic - float(self.cfg.role_lease_safety_margin_seconds):
++                    if not self.lease_lost_event.is_set():
++                        self.lease_lost_event.set()
++                        self.log(
++                            logging.CRITICAL,
++                            "EVENT GLOBAL_LEASE_LOST role=%s account=%s owner_id=%s fencing_token=%s error=%s",
++                            self.role, self.account, self.owner_id, self.fencing_token, exc,
++                        )
++                    return
++                if now - self.last_error_log_monotonic >= max(1.0, interval):
++                    self.last_error_log_monotonic = now
++                    self.log(
++                        logging.WARNING,
++                        "EVENT GLOBAL_LEASE_RENEW_DEFERRED role=%s account=%s fencing_token=%s error=%s",
++                        self.role, self.account, self.fencing_token, exc,
++                    )
+ 
++    def stop(self) -> None:
++        self.stop_event.set()
++        if self.thread is not None:
++            self.thread.join(timeout=max(1.0, float(self.cfg.coordination_timeout_seconds) + 1.0))
++            self.thread = None
++        if self.fencing_token > 0:
++            try:
++                self._request("releaseLease", leaseName=self.role, fencingToken=self.fencing_token)
++            except Exception:
++                pass
+ 
+-class SharedEventSpool:
+-    """Cross-process JSONL event queue with in-process serialization.
++    def role_lease_valid(self) -> bool:
++        return (
++            self.fencing_token > 0
++            and not self.lease_lost_event.is_set()
++            and time_module.monotonic()
++            < self.valid_until_monotonic - float(self.cfg.role_lease_safety_margin_seconds)
++        )
+ 
+-    The OS file lock protects executor and publisher processes. The RLock
+-    prevents two threads in the same Python process from opening a second
+-    Windows lock handle against a region that the process already owns.
+-    Short cross-process contention is retried instead of being reported as a
+-    backend publishing failure.
+-    """
++    def require_role_lease(self) -> None:
++        if not self.role_lease_valid():
++            raise LeaseLostError(
++                f"Global {self.role} lease is not valid for {self.account}; all role activity is disabled"
++            )
+ 
+-    def __init__(self, path: Path, limit: int, lock_timeout_seconds: float, lock_retry_seconds: float):
+-        self.path = path
+-        self.limit = max(1, limit)
+-        self.lock_timeout_seconds = max(0.1, float(lock_timeout_seconds))
+-        self.lock_retry_seconds = max(0.001, float(lock_retry_seconds))
+-        self.lock_path = path.with_suffix(path.suffix + ".lock")
+-        self.thread_lock = threading.RLock()
++    def actor_payload(self) -> dict[str, Any]:
++        self.require_role_lease()
++        return {
++            "role": self.role,
++            "ownerId": self.owner_id,
++            "fencingToken": self.fencing_token,
++        }
+ 
+-    def _read_unlocked(self) -> list[dict[str, Any]]:
+-        if not self.path.exists():
+-            return []
+-        result: list[dict[str, Any]] = []
+-        for line in self.path.read_text(encoding="utf-8", errors="replace").splitlines():
+-            if not line.strip():
+-                continue
+-            try:
+-                item = json.loads(line)
+-                if isinstance(item, dict):
+-                    result.append(item)
+-            except json.JSONDecodeError:
+-                continue
+-        return result
++    def dedicated_publisher_active(self, force: bool = False) -> bool:
++        if self.role == INSTANCE_MODE_PUBLISHER:
++            return self.role_lease_valid()
++        now = time_module.monotonic()
++        if not force and now - self.last_publisher_check_monotonic < float(self.cfg.publisher_presence_check_interval_seconds):
++            return self.cached_publisher_active
++        self.last_publisher_check_monotonic = now
++        try:
++            result = self._request("leaseStatus", leaseName=INSTANCE_MODE_PUBLISHER)
++            self.cached_publisher_active = bool(result.get("active", False))
++        except Exception as exc:
++            # Fail closed for snapshot publication while the global state is unknown.
++            self.cached_publisher_active = True
++            if now - self.last_error_log_monotonic >= max(1.0, float(self.cfg.monitor_error_log_interval_seconds)):
++                self.last_error_log_monotonic = now
++                self.log(logging.WARNING, "EVENT PUBLISHER_LEASE_STATUS_UNKNOWN account=%s error=%s", self.account, exc)
++        return self.cached_publisher_active
++
++    def acquire_trade_gate(self, operation_kind: str, operation_id: str) -> TradeExecutionGate:
++        if self.role != INSTANCE_MODE_EXECUTOR:
++            raise LeaseLostError("Only the EXECUTOR role may acquire the global trade-execution gate")
++        self.require_role_lease()
++        result = self._request(
++            "acquireTradeGate",
++            executorFencingToken=self.fencing_token,
++            operationKind=operation_kind,
++            operationId=operation_id,
++            ttlSeconds=float(self.cfg.trade_gate_ttl_seconds),
++        )
++        if not bool(result.get("acquired", False)):
++            holder = result.get("holder") if isinstance(result.get("holder"), dict) else {}
++            raise CoordinationError(
++                f"Global trade gate is busy: owner={holder.get('ownerId', 'unknown')} "
++                f"operation={holder.get('operationKind', 'unknown')} expiresAt={holder.get('expiresAt', 'unknown')}"
++            )
++        gate_token = int(result.get("fencingToken", 0) or 0)
++        if gate_token <= 0:
++            raise CoordinationError("Backend returned an invalid trade-gate fencing token")
++        return TradeExecutionGate(
++            owner_id=self.owner_id,
++            fencing_token=gate_token,
++            operation_id=operation_id,
++            operation_kind=operation_kind,
++            acquired_monotonic=time_module.monotonic(),
++            ttl_seconds=float(result.get("ttlSeconds", self.cfg.trade_gate_ttl_seconds)),
++        )
+ 
+-    def _write_unlocked(self, events: list[dict[str, Any]]) -> None:
+-        self.path.parent.mkdir(parents=True, exist_ok=True)
+-        temporary = self.path.with_name(
+-            f"{self.path.name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp"
++    def validate_trade_gate(self, gate: TradeExecutionGate) -> None:
++        self.require_role_lease()
++        held = time_module.monotonic() - gate.acquired_monotonic
++        if held > min(gate.ttl_seconds, float(self.cfg.trade_gate_max_hold_seconds)):
++            raise LeaseLostError(
++                f"Trade gate for {gate.operation_kind} exceeded its safe local hold time ({held:.3f}s)"
++            )
++        result = self._request(
++            "validateTradeGate",
++            executorFencingToken=self.fencing_token,
++            gateFencingToken=gate.fencing_token,
++            operationKind=gate.operation_kind,
++            operationId=gate.operation_id,
+         )
+-        text = "".join(json.dumps(item, separators=(",", ":"), ensure_ascii=False) + "\n" for item in events)
++        if not bool(result.get("valid", False)):
++            raise LeaseLostError(f"Global trade gate is no longer valid for {gate.operation_kind}")
++
++    def release_trade_gate(self, gate: TradeExecutionGate) -> None:
+         try:
+-            temporary.write_text(text, encoding="utf-8")
+-            os.replace(temporary, self.path)
+-        finally:
+-            try:
+-                temporary.unlink(missing_ok=True)
+-            except OSError:
+-                pass
++            self._request(
++                "releaseTradeGate",
++                executorFencingToken=self.fencing_token,
++                gateFencingToken=gate.fencing_token,
++                operationKind=gate.operation_kind,
++                operationId=gate.operation_id,
++            )
++        except Exception as exc:
++            self.log(
++                logging.WARNING,
++                "EVENT TRADE_GATE_RELEASE_DEFERRED operation=%s operation_id=%s error=%s",
++                gate.operation_kind, gate.operation_id, exc,
++            )
++
++    def claim_weekly_entry(self, week_key: str, execution_id: str, decision_id: str, gate: TradeExecutionGate) -> dict[str, Any]:
++        self.validate_trade_gate(gate)
++        return self._request(
++            "claimWeeklyEntry",
++            executorFencingToken=self.fencing_token,
++            gateFencingToken=gate.fencing_token,
++            gateOperationId=gate.operation_id,
++            weekKey=week_key,
++            executionId=execution_id,
++            decisionId=decision_id,
++        )
++
++    def complete_weekly_entry(
++        self,
++        week_key: str,
++        execution_id: str,
++        status: str,
++        result: Any = None,
++        error: str = "",
++    ) -> None:
++        try:
++            self._request(
++                "completeWeeklyEntry",
++                executorFencingToken=self.fencing_token,
++                weekKey=week_key,
++                executionId=execution_id,
++                status=status,
++                orderTicket=int(getattr(result, "order", 0) or 0) if result is not None else 0,
++                dealTicket=int(getattr(result, "deal", 0) or 0) if result is not None else 0,
++                retcode=int(getattr(result, "retcode", -1)) if result is not None else -1,
++                error=error[:500],
++            )
++        except Exception as exc:
++            self.log(
++                logging.CRITICAL,
++                "EVENT WEEKLY_ENTRY_RESULT_PERSIST_FAILED week=%s execution_id=%s status=%s error=%s",
++                week_key, execution_id, status, exc,
++            )
++
+ 
+-    def _acquire_file_lock(self) -> InterProcessFileLock:
+-        lock = InterProcessFileLock(self.lock_path, {
+-            "purpose": "monitor-event-spool",
+-            "pid": os.getpid(),
+-            "thread": threading.get_ident(),
+-        })
+-        deadline = time_module.monotonic() + self.lock_timeout_seconds
+-        while not lock.try_acquire():
+-            if time_module.monotonic() >= deadline:
+-                owner = ""
+-                try:
+-                    owner = self.lock_path.read_text(encoding="utf-8", errors="replace")[:500]
+-                except OSError:
+-                    pass
+-                raise EventSpoolLockTimeout(
+-                    f"Event spool lock timed out after {self.lock_timeout_seconds:.1f}s: "
+-                    f"{self.lock_path} owner={owner or 'unknown'}"
+-                )
+-            time_module.sleep(self.lock_retry_seconds)
+-        return lock
+ 
+-    def append(self, event: dict[str, Any]) -> None:
+-        with self.thread_lock:
+-            lock = self._acquire_file_lock()
+-            try:
+-                events = self._read_unlocked()
+-                item = dict(event)
+-                item.setdefault("_spoolId", uuid.uuid4().hex)
+-                item.setdefault("_sourcePid", os.getpid())
+-                events.append(item)
+-                self._write_unlocked(events[-self.limit:])
+-            finally:
+-                lock.release()
+-
+-    def claim(self, maximum: int) -> list[dict[str, Any]]:
+-        with self.thread_lock:
+-            lock = self._acquire_file_lock()
+-            try:
+-                events = self._read_unlocked()
+-                claimed = events[:max(0, maximum)]
+-                self._write_unlocked(events[len(claimed):])
+-                return claimed
+-            finally:
+-                lock.release()
+-
+-    def requeue_front(self, events: list[dict[str, Any]]) -> None:
+-        if not events:
+-            return
+-        with self.thread_lock:
+-            lock = self._acquire_file_lock()
+-            try:
+-                current = self._read_unlocked()
+-                seen: set[str] = set()
+-                merged: list[dict[str, Any]] = []
+-                for item in [*events, *current]:
+-                    key = str(item.get("_spoolId", ""))
+-                    if key and key in seen:
+-                        continue
+-                    if key:
+-                        seen.add(key)
+-                    merged.append(item)
+-                self._write_unlocked(merged[:self.limit])
+-            finally:
+-                lock.release()
+ 
+ class MobileMonitorPublisher:
+-    """Asynchronous monitor publisher with cross-process role coordination."""
++    """Asynchronous publisher coordinated exclusively by global MySQL leases."""
+ 
+-    def __init__(self, config: Config, logger: logging.Logger, timezone: ZoneInfo, role: str, publisher_presence: PublisherPresence, event_spool: SharedEventSpool, publish_lock_path: Path):
++    def __init__(self, config, logger: logging.Logger, timezone: ZoneInfo, role: str, coordinator: BackendLeaseCoordinator):
+         self.cfg = config
+         self.log = logger
+         self.timezone = timezone
+         self.role = role
+-        self.publisher_presence = publisher_presence
+-        self.event_spool = event_spool
+-        self.publish_lock_path = publish_lock_path
++        self.coordinator = coordinator
+         self.enabled = bool(config.monitor_enabled)
+-        self.ready = self.enabled and bool(config.monitor_ingest_url and config.monitor_write_token and config.monitor_account_key)
++        self.ready = self.enabled and bool(
++            config.monitor_ingest_url
++            and config.events_ingest_url
++            and config.monitor_write_token
++            and config.monitor_account_key
++        )
+         self.condition = threading.Condition()
+-        self.guaranteed_snapshots: deque[dict[str, Any]] = deque(maxlen=max(1, config.monitor_minute_snapshot_buffer_size))
++        self.guaranteed_snapshots: deque[dict[str, Any]] = deque(
++            maxlen=max(1, config.monitor_minute_snapshot_buffer_size)
++        )
+         self.latest_snapshot: Optional[dict[str, Any]] = None
++        self.events: deque[dict[str, Any]] = deque(maxlen=max(1, config.monitor_event_buffer_size))
+         self.publish_requested = False
+         self.stopping = False
+         self.thread: Optional[threading.Thread] = None
+@@ -687,29 +737,42 @@ class MobileMonitorPublisher:
+         self.last_publish_permission: Optional[bool] = None
+         self.weekend_idle = False
+         self.published_execution_ids: set[str] = set()
+-        # Keep the full strategyDecision object in every snapshot for the mobile
+-        # app, but submit it to the backend persistence path only until that
+-        # decision ID has been acknowledged successfully.
+         self.acknowledged_strategy_decision_ids: set[str] = set()
+         self.acknowledged_strategy_decision_order: deque[str] = deque()
+         self.acknowledged_strategy_decision_limit = 256
+ 
+         if self.enabled and not self.ready:
+-            self.local_log(logging.WARNING, "EVENT MONITOR_DISABLED reason=missing_configuration required=OPPW_MONITOR_INGEST_URL,OPPW_MONITOR_WRITE_TOKEN,OPPW_MONITOR_ACCOUNT_KEY")
+-        elif self.ready and not config.monitor_ingest_url.lower().startswith("https://"):
++            self.local_log(
++                logging.WARNING,
++                "EVENT MONITOR_DISABLED reason=missing_configuration "
++                "required=OPPW_MONITOR_INGEST_URL,OPPW_EVENTS_INGEST_URL,"
++                "OPPW_MONITOR_WRITE_TOKEN,OPPW_MONITOR_ACCOUNT_KEY",
++            )
++        elif self.ready and (
++            not config.monitor_ingest_url.lower().startswith("https://")
++            or not config.events_ingest_url.lower().startswith("https://")
++        ):
+             self.ready = False
+-            self.local_log(logging.ERROR, "EVENT MONITOR_DISABLED reason=endpoint_must_use_https")
++            self.local_log(logging.ERROR, "EVENT MONITOR_DISABLED reason=endpoints_must_use_https")
+ 
+     def local_log(self, level: int, message: str, *args: Any) -> None:
+         self.log.log(level, message, *args, extra={"skip_mobile_publish": True})
+ 
+     def allowed_to_publish(self) -> bool:
+-        dedicated_active = self.publisher_presence.dedicated_publisher_active()
+-        allowed = self.role == INSTANCE_MODE_PUBLISHER or not dedicated_active
++        if not self.coordinator.role_lease_valid():
++            allowed = False
++            reason = "role_lease_invalid"
++        else:
++            dedicated_active = self.coordinator.dedicated_publisher_active()
++            allowed = self.role == INSTANCE_MODE_PUBLISHER or not dedicated_active
++            reason = "dedicated_publisher" if dedicated_active else "executor_fallback"
+         if self.last_publish_permission is None or self.last_publish_permission != allowed:
+             self.last_publish_permission = allowed
+-            reason = "dedicated_publisher" if dedicated_active else "executor_fallback"
+-            self.local_log(logging.INFO, "EVENT BACKEND_PUBLISHING_STATE role=%s active=%s reason=%s", self.role, allowed, reason)
++            self.local_log(
++                logging.INFO,
++                "EVENT BACKEND_PUBLISHING_STATE role=%s active=%s reason=%s fencing_token=%s",
++                self.role, allowed, reason, self.coordinator.fencing_token,
++            )
+         return allowed
+ 
+     def load_equity_history(self) -> list[dict[str, Any]]:
+@@ -721,7 +784,11 @@ class MobileMonitorPublisher:
+                 return []
+             result: list[dict[str, Any]] = []
+             for item in raw[-max(1, self.cfg.monitor_equity_history_points):]:
+-                if isinstance(item, dict) and isinstance(item.get("time"), str) and isinstance(item.get("value"), (int, float)):
++                if (
++                    isinstance(item, dict)
++                    and isinstance(item.get("time"), str)
++                    and isinstance(item.get("value"), (int, float))
++                ):
+                     result.append({"time": item["time"], "value": float(item["value"])})
+             return result
+         except Exception:
+@@ -732,7 +799,10 @@ class MobileMonitorPublisher:
+             path = self.cfg.monitor_history_file
+             path.parent.mkdir(parents=True, exist_ok=True)
+             temporary = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
+-            temporary.write_text(json.dumps(self.equity_history, separators=(",", ":")), encoding="utf-8")
++            temporary.write_text(
++                json.dumps(self.equity_history, separators=(",", ":")),
++                encoding="utf-8",
++            )
+             os.replace(temporary, path)
+         except Exception as exc:
+             self.rate_limited_error("EVENT MONITOR_HISTORY_SAVE_FAILED error=%s", exc)
+@@ -742,28 +812,53 @@ class MobileMonitorPublisher:
+             self.weekend_idle = bool(active)
+             if self.weekend_idle:
+                 self.guaranteed_snapshots = deque(
+-                    (snapshot for snapshot in self.guaranteed_snapshots if str(snapshot.get("statusUpdate", {}).get("kind", "")) in {"WEEKEND_STARTUP", "ACCOUNT_FUNDING_CHANGE"}),
++                    (
++                        snapshot
++                        for snapshot in self.guaranteed_snapshots
++                        if str(snapshot.get("statusUpdate", {}).get("kind", ""))
++                        in {"WEEKEND_STARTUP", "ACCOUNT_FUNDING_CHANGE"}
++                    ),
+                     maxlen=max(1, self.cfg.monitor_minute_snapshot_buffer_size),
+                 )
+-                if self.latest_snapshot is not None and str(self.latest_snapshot.get("statusUpdate", {}).get("kind", "")) not in {"WEEKEND_STARTUP", "ACCOUNT_FUNDING_CHANGE"}:
++                if (
++                    self.latest_snapshot is not None
++                    and str(self.latest_snapshot.get("statusUpdate", {}).get("kind", ""))
++                    not in {"WEEKEND_STARTUP", "ACCOUNT_FUNDING_CHANGE"}
++                ):
+                     self.latest_snapshot = None
+-                self.publish_requested = bool(self.guaranteed_snapshots) or self.latest_snapshot is not None
++            self.publish_requested = bool(
++                self.guaranteed_snapshots or self.latest_snapshot is not None or self.events
++            )
+             self.condition.notify_all()
+ 
+     def start(self) -> None:
+         if not self.ready or self.thread is not None:
+             return
+-        self.thread = threading.Thread(target=self.worker, name=f"oppw-monitor-{self.role.lower()}", daemon=True)
++        self.thread = threading.Thread(
++            target=self.worker,
++            name=f"oppw-monitor-{self.role.lower()}",
++            daemon=True,
++        )
+         self.thread.start()
+-        self.local_log(logging.INFO, "EVENT MONITOR_PUBLISHER_STARTED role=%s account_key=%s interval=%.1fs endpoint=%s", self.role, self.cfg.monitor_account_key, self.cfg.monitor_publish_interval_seconds, self.cfg.monitor_ingest_url)
++        self.local_log(
++            logging.INFO,
++            "EVENT MONITOR_PUBLISHER_STARTED role=%s account_key=%s interval=%.1fs endpoint=%s "
++            "coordination=mysql fencing_token=%s",
++            self.role,
++            self.cfg.monitor_account_key,
++            self.cfg.monitor_publish_interval_seconds,
++            self.cfg.monitor_ingest_url,
++            self.coordinator.fencing_token,
++        )
+ 
+     def stop(self) -> None:
+         if self.thread is None:
+             return
+         with self.condition:
+             self.stopping = True
+-            if self.allowed_to_publish() and (self.latest_snapshot is not None or self.guaranteed_snapshots):
+-                self.publish_requested = True
++            self.publish_requested = bool(
++                self.latest_snapshot is not None or self.guaranteed_snapshots or self.events
++            )
+             self.condition.notify_all()
+         self.thread.join(timeout=max(1.0, self.cfg.monitor_timeout_seconds + 2.0))
+         self.thread = None
+@@ -771,10 +866,13 @@ class MobileMonitorPublisher:
+     def enqueue_event(self, event: dict[str, Any]) -> None:
+         if not self.ready:
+             return
+-        try:
+-            self.event_spool.append(event)
+-        except Exception as exc:
+-            self.rate_limited_error("EVENT MONITOR_EVENT_SPOOL_FAILED error=%s", exc)
++        item = dict(event)
++        item.setdefault("_eventId", uuid.uuid4().hex)
++        item.setdefault("_sourceOwnerId", self.coordinator.owner_id)
++        with self.condition:
++            self.events.append(item)
++            self.publish_requested = True
++            self.condition.notify_all()
+ 
+     def submit_snapshot(self, snapshot: dict[str, Any], guaranteed: bool = False) -> None:
+         if not self.ready:
+@@ -783,7 +881,7 @@ class MobileMonitorPublisher:
+         if self.weekend_idle and kind not in {"WEEKEND_STARTUP", "ACCOUNT_FUNDING_CHANGE"}:
+             return
+         with self.condition:
+-            if guaranteed and self.allowed_to_publish():
++            if guaranteed:
+                 self.guaranteed_snapshots.append(snapshot)
+             else:
+                 self.latest_snapshot = snapshot
+@@ -792,12 +890,20 @@ class MobileMonitorPublisher:
+ 
+     def rate_limited_error(self, message: str, *args: Any) -> None:
+         now = time_module.monotonic()
+-        if now - self.last_error_log_monotonic >= max(5.0, self.cfg.monitor_error_log_interval_seconds):
++        if now - self.last_error_log_monotonic >= max(
++            5.0, self.cfg.monitor_error_log_interval_seconds
++        ):
+             self.last_error_log_monotonic = now
+             self.local_log(logging.ERROR, message, *args)
+ 
+-    def strategy_decision_for_persistence(self, snapshot: dict[str, Any]) -> Optional[dict[str, Any]]:
+-        decision = snapshot.get("strategyDecision") if isinstance(snapshot.get("strategyDecision"), dict) else None
++    def strategy_decision_for_persistence(
++        self, snapshot: dict[str, Any]
++    ) -> Optional[dict[str, Any]]:
++        decision = (
++            snapshot.get("strategyDecision")
++            if isinstance(snapshot.get("strategyDecision"), dict)
++            else None
++        )
+         if decision is None:
+             return None
+         decision_id = str(decision.get("decisionId", "")).strip()
+@@ -809,7 +915,10 @@ class MobileMonitorPublisher:
+         decision_id = str(decision_id).strip()
+         if not decision_id or decision_id in self.acknowledged_strategy_decision_ids:
+             return False
+-        while len(self.acknowledged_strategy_decision_order) >= self.acknowledged_strategy_decision_limit:
++        while (
++            len(self.acknowledged_strategy_decision_order)
++            >= self.acknowledged_strategy_decision_limit
++        ):
+             expired = self.acknowledged_strategy_decision_order.popleft()
+             self.acknowledged_strategy_decision_ids.discard(expired)
+         self.acknowledged_strategy_decision_order.append(decision_id)
+@@ -824,158 +933,273 @@ class MobileMonitorPublisher:
+         equity = account.get("equity")
+         if not isinstance(equity, (int, float)):
+             return
+-
+         should_append = not self.equity_history
+         if self.equity_history:
+             try:
+-                previous = datetime.fromisoformat(str(self.equity_history[-1]["time"]).replace("Z", "+00:00"))
++                previous = datetime.fromisoformat(
++                    str(self.equity_history[-1]["time"]).replace("Z", "+00:00")
++                )
+                 current = datetime.fromisoformat(captured_at.replace("Z", "+00:00"))
+-                should_append = (current - previous).total_seconds() >= self.cfg.monitor_equity_sample_seconds
++                should_append = (
++                    current - previous
++                ).total_seconds() >= self.cfg.monitor_equity_sample_seconds
+             except Exception:
+                 should_append = True
+-
+         if should_append:
+             self.equity_history.append({"time": captured_at, "value": float(equity)})
+-            self.equity_history = self.equity_history[-max(1, self.cfg.monitor_equity_history_points):]
++            self.equity_history = self.equity_history[
++                -max(1, self.cfg.monitor_equity_history_points):
++            ]
+             self.save_equity_history()
+         snapshot["equityHistory"] = list(self.equity_history)
+ 
++    @staticmethod
++    def public_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
++        return [
++            {
++                key: value
++                for key, value in event.items()
++                if not key.startswith("_")
++            }
++            for event in events
++        ]
++
++    def _post_json(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
++        body = json.dumps(
++            payload, separators=(",", ":"), ensure_ascii=False
++        ).encode("utf-8")
++        request = urllib.request.Request(
++            url,
++            data=body,
++            method="POST",
++            headers={
++                "Authorization": f"Bearer {self.cfg.monitor_write_token}",
++                "Content-Type": "application/json",
++                "Accept": "application/json",
++                "User-Agent": f"OPPW-MT5-Publisher/{BUILD_ID}",
++            },
++        )
++        try:
++            with urllib.request.urlopen(
++                request, timeout=self.cfg.monitor_timeout_seconds
++            ) as response:
++                response_text = response.read().decode("utf-8", errors="replace")
++                if int(response.status) not in (200, 201):
++                    raise RuntimeError(f"HTTP {response.status}")
++        except urllib.error.HTTPError as exc:
++            detail = exc.read().decode("utf-8", errors="replace")[:500]
++            raise RuntimeError(f"HTTP {exc.code}: {detail}") from exc
++        except urllib.error.URLError as exc:
++            raise RuntimeError(f"connection failed: {exc.reason}") from exc
++        try:
++            decoded = json.loads(response_text) if response_text.strip() else {}
++        except json.JSONDecodeError as exc:
++            raise RuntimeError(
++                f"Backend response was not JSON: {response_text[:200]}"
++            ) from exc
++        if not isinstance(decoded, dict) or not bool(decoded.get("ok", False)):
++            raise RuntimeError(
++                str(decoded.get("error", "backend rejected request"))
++                if isinstance(decoded, dict)
++                else "backend rejected request"
++            )
++        return decoded
++
+     def send(self, snapshot: dict[str, Any], events: list[dict[str, Any]]) -> None:
+         captured_at = datetime.now(UTC).isoformat()
+         snapshot_copy = json.loads(json.dumps(snapshot, separators=(",", ":")))
+         self.update_equity_history(snapshot_copy, captured_at)
+-        public_events = [{key: value for key, value in event.items() if not key.startswith("_spool") and key != "_sourcePid"} for event in events]
+         strategy_decision = self.strategy_decision_for_persistence(snapshot_copy)
+-        payload = {
+-            "accountKey": self.cfg.monitor_account_key, "capturedAt": captured_at,
+-            "snapshot": snapshot_copy, "events": public_events,
++        payload: dict[str, Any] = {
++            "accountKey": self.cfg.monitor_account_key,
++            "capturedAt": captured_at,
++            "snapshot": snapshot_copy,
++            "events": self.public_events(events),
++            "coordination": self.coordinator.actor_payload(),
+         }
+-        # The full decision remains inside snapshot_copy for Android/status.php.
+-        # Only an unacknowledged decision is duplicated at the top level, which
+-        # is the explicit persistence command consumed by ingest.php v47.6.
+         if strategy_decision is not None:
+             payload["strategyDecision"] = strategy_decision
+-        body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+-        request = urllib.request.Request(self.cfg.monitor_ingest_url, data=body, method="POST", headers={"Authorization": f"Bearer {self.cfg.monitor_write_token}", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": f"OPPW-MT5-Publisher/{BUILD_ID}"})
+-        try:
+-            with urllib.request.urlopen(request, timeout=self.cfg.monitor_timeout_seconds) as response:
+-                if int(response.status) not in (200, 201):
+-                    raise RuntimeError(f"HTTP {response.status}")
+-                response_text = response.read().decode("utf-8", errors="replace")
+-            try:
+-                response_payload = json.loads(response_text) if response_text.strip() else {}
+-            except json.JSONDecodeError as exc:
+-                raise RuntimeError(f"Backend response was not JSON: {response_text[:200]}") from exc
+-            if strategy_decision is not None:
+-                expected_decision_id = str(strategy_decision.get("decisionId", ""))
+-                stored = bool(response_payload.get("strategyDecisionStored", False))
+-                stored_id = str(response_payload.get("strategyDecisionId", ""))
+-                if not stored or stored_id != expected_decision_id:
+-                    raise RuntimeError(
+-                        "Backend did not acknowledge strategy_decisions persistence; deploy the v47.4 ingest patch "
+-                        f"(expected={expected_decision_id or 'none'} stored={stored_id or 'none'})"
+-                    )
+-                if self.remember_acknowledged_strategy_decision(stored_id):
+-                    self.local_log(logging.INFO, "EVENT STRATEGY_DECISION_PERSISTED decision_id=%s backend=%s", stored_id, self.cfg.monitor_ingest_url)
+-            execution = snapshot_copy.get("execution") if isinstance(snapshot_copy.get("execution"), dict) else {}
+-            execution_id = str(execution.get("executionId", ""))
+-            if execution_id and execution_id not in self.published_execution_ids:
+-                self.published_execution_ids.add(execution_id)
+-                self.event_spool.append({
+-                    "time": datetime.now(UTC).isoformat(), "level": "INFO", "name": "EXECUTION_STAGE", "result": True,
+-                    "message": f"EVENT EXECUTION_STAGE execution_id={execution_id} stage=PUBLISHED",
++        response_payload = self._post_json(self.cfg.monitor_ingest_url, payload)
++        if strategy_decision is not None:
++            expected_decision_id = str(strategy_decision.get("decisionId", ""))
++            stored = bool(response_payload.get("strategyDecisionStored", False))
++            stored_id = str(response_payload.get("strategyDecisionId", ""))
++            if not stored or stored_id != expected_decision_id:
++                raise RuntimeError(
++                    "Backend did not acknowledge strategy_decisions persistence "
++                    f"(expected={expected_decision_id or 'none'} stored={stored_id or 'none'})"
++                )
++            if self.remember_acknowledged_strategy_decision(stored_id):
++                self.local_log(
++                    logging.INFO,
++                    "EVENT STRATEGY_DECISION_PERSISTED decision_id=%s backend=%s",
++                    stored_id,
++                    self.cfg.monitor_ingest_url,
++                )
++        execution = (
++            snapshot_copy.get("execution")
++            if isinstance(snapshot_copy.get("execution"), dict)
++            else {}
++        )
++        execution_id = str(execution.get("executionId", ""))
++        if execution_id and execution_id not in self.published_execution_ids:
++            self.published_execution_ids.add(execution_id)
++            self.enqueue_event(
++                {
++                    "time": datetime.now(UTC).isoformat(),
++                    "level": "INFO",
++                    "name": "EXECUTION_STAGE",
++                    "result": True,
++                    "message": (
++                        f"EVENT EXECUTION_STAGE execution_id={execution_id} "
++                        "stage=PUBLISHED"
++                    ),
+                     "details": {
+-                        "execution_id": execution_id, "decision_id": str(execution.get("decisionId", "")),
+-                        "position_ticket": int(execution.get("positionTicket", 0) or 0), "stage": "PUBLISHED",
+-                        "event_at": datetime.now(UTC).isoformat(), "snapshot_generated_at": str(snapshot_copy.get("statusUpdate", {}).get("generatedAt", "")),
++                        "execution_id": execution_id,
++                        "decision_id": str(execution.get("decisionId", "")),
++                        "position_ticket": int(
++                            execution.get("positionTicket", 0) or 0
++                        ),
++                        "stage": "PUBLISHED",
++                        "event_at": datetime.now(UTC).isoformat(),
++                        "snapshot_generated_at": str(
++                            snapshot_copy.get("statusUpdate", {}).get(
++                                "generatedAt", ""
++                            )
++                        ),
+                     },
+-                })
+-        except urllib.error.HTTPError as exc:
+-            detail = exc.read().decode("utf-8", errors="replace")[:300]
+-            raise RuntimeError(f"HTTP {exc.code}: {detail}") from exc
+-        except urllib.error.URLError as exc:
+-            raise RuntimeError(f"connection failed: {exc.reason}") from exc
++                }
++            )
++
++    def send_events_only(self, events: list[dict[str, Any]]) -> None:
++        if not events:
++            return
++        payload = {
++            "accountKey": self.cfg.monitor_account_key,
++            "events": self.public_events(events),
++            "coordination": self.coordinator.actor_payload(),
++        }
++        self._post_json(self.cfg.events_ingest_url, payload)
++
++    def _take_events(self) -> list[dict[str, Any]]:
++        maximum = max(1, self.cfg.monitor_event_buffer_size)
++        result: list[dict[str, Any]] = []
++        while self.events and len(result) < maximum:
++            result.append(self.events.popleft())
++        return result
++
++    def _requeue_events(self, events: list[dict[str, Any]]) -> None:
++        if not events:
++            return
++        existing_ids = {
++            str(item.get("_eventId", ""))
++            for item in self.events
++            if str(item.get("_eventId", ""))
++        }
++        for item in reversed(events):
++            event_id = str(item.get("_eventId", ""))
++            if event_id and event_id in existing_ids:
++                continue
++            self.events.appendleft(item)
++            if event_id:
++                existing_ids.add(event_id)
+ 
+     def worker(self) -> None:
+         while True:
+             with self.condition:
+-                while not self.publish_requested and not self.stopping:
+-                    self.condition.wait()
+-                if self.stopping and not self.publish_requested and not self.guaranteed_snapshots:
++                while (
++                    not self.publish_requested
++                    and not self.events
++                    and not self.stopping
++                ):
++                    self.condition.wait(timeout=0.5)
++                if (
++                    self.stopping
++                    and not self.publish_requested
++                    and not self.guaranteed_snapshots
++                    and not self.events
++                ):
+                     return
+-                guaranteed = bool(self.guaranteed_snapshots)
+-                snapshot = self.guaranteed_snapshots.popleft() if guaranteed else self.latest_snapshot
+-                self.publish_requested = bool(self.guaranteed_snapshots)
+ 
+-            if snapshot is None:
+-                if self.stopping:
+-                    return
+-                continue
++            # This may perform an HTTPS lease-status request and may log a
++            # BACKEND_PUBLISHING_STATE transition. It must remain outside the
++            # condition lock: logging handlers enqueue mobile events and would
++            # otherwise invert the logger/queue lock order with another thread.
++            allowed = self.allowed_to_publish()
+ 
+-            if self.weekend_idle and str(snapshot.get("statusUpdate", {}).get("kind", "")) not in {"WEEKEND_STARTUP", "ACCOUNT_FUNDING_CHANGE"}:
+-                continue
++            with self.condition:
++                guaranteed = bool(self.guaranteed_snapshots)
++                snapshot: Optional[dict[str, Any]] = None
++                if allowed:
++                    if guaranteed:
++                        snapshot = self.guaranteed_snapshots.popleft()
++                    elif self.latest_snapshot is not None:
++                        snapshot = self.latest_snapshot
++                        self.latest_snapshot = None
++                events = self._take_events()
++                self.publish_requested = bool(
++                    self.guaranteed_snapshots
++                    or self.latest_snapshot is not None
++                    or self.events
++                )
+ 
+-            if not self.allowed_to_publish():
+-                with self.condition:
+-                    self.guaranteed_snapshots.clear()
+-                    self.latest_snapshot = snapshot
+-                    self.publish_requested = False
+-                if self.stopping:
+-                    return
+-                continue
++            if not self.coordinator.role_lease_valid():
++                self._requeue_events(events)
++                return
+ 
+-            publish_lock = InterProcessFileLock(self.publish_lock_path, {"purpose": "backend-publish", "role": self.role})
+-            if not publish_lock.try_acquire():
+-                with self.condition:
+-                    self.latest_snapshot = snapshot
+-                    self.publish_requested = not self.stopping
+-                if self.stopping:
+-                    return
+-                time_module.sleep(0.2)
+-                continue
++            if (
++                snapshot is not None
++                and self.weekend_idle
++                and str(snapshot.get("statusUpdate", {}).get("kind", ""))
++                not in {"WEEKEND_STARTUP", "ACCOUNT_FUNDING_CHANGE"}
++            ):
++                snapshot = None
+ 
+-            events: list[dict[str, Any]] = []
+             succeeded = False
+             try:
+-                if not self.allowed_to_publish():
++                if snapshot is not None:
++                    self.send(snapshot, events)
++                elif events:
++                    # Executor events are persisted even while a dedicated
++                    # publisher owns snapshot publication.
++                    self.send_events_only(events)
++                else:
++                    if self.stopping:
++                        return
++                    time_module.sleep(0.2)
+                     continue
+-                events = self.event_spool.claim(max(1, self.cfg.monitor_event_buffer_size))
+-                self.send(snapshot, events)
+                 succeeded = True
+                 self.last_success_utc = datetime.now(UTC).isoformat()
+-            except EventSpoolLockTimeout as exc:
+-                self.rate_limited_error("EVENT MONITOR_EVENT_SPOOL_BUSY error=%s", exc)
+-                if not self.stopping:
+-                    with self.condition:
++            except Exception as exc:
++                with self.condition:
++                    self._requeue_events(events)
++                    if snapshot is not None:
+                         if guaranteed:
+                             self.guaranteed_snapshots.appendleft(snapshot)
+                         else:
+                             self.latest_snapshot = snapshot
+-                        self.publish_requested = True
+-                    time_module.sleep(0.1)
+-            except Exception as exc:
+-                if events:
+-                    try:
+-                        self.event_spool.requeue_front(events)
+-                    except Exception as spool_exc:
+-                        self.rate_limited_error("EVENT MONITOR_EVENT_REQUEUE_FAILED error=%s", spool_exc)
+-                self.rate_limited_error("EVENT MONITOR_PUBLISH_FAILED error=%s queued_events=%s", exc, len(events))
+-                if guaranteed and not self.stopping:
+-                    with self.condition:
+-                        self.guaranteed_snapshots.appendleft(snapshot)
+-                        self.publish_requested = False
+-            finally:
+-                publish_lock.release()
+-
+-            if self.stopping:
+-                if not succeeded:
++                    self.publish_requested = True
++                self.rate_limited_error(
++                    "EVENT MONITOR_PUBLISH_FAILED error=%s queued_events=%s",
++                    exc,
++                    len(events),
++                )
++                if self.stopping:
+                     return
++                time_module.sleep(0.5)
++
++            if self.stopping and succeeded:
+                 with self.condition:
+-                    if not self.guaranteed_snapshots:
++                    if (
++                        not self.guaranteed_snapshots
++                        and self.latest_snapshot is None
++                        and not self.events
++                    ):
+                         return
+                     self.publish_requested = True
+ 
+ 
++
+ class MobileEventHandler(logging.Handler):
+     def __init__(self, publisher: MobileMonitorPublisher):
+         super().__init__(logging.INFO)
+@@ -1058,12 +1282,12 @@ class MobileEventHandler(logging.Handler):
+ 
+ 
+ class OPPWContinuousStrategy:
+-    def __init__(self, config, role: str, account: str, publisher_presence: PublisherPresence, event_spool: SharedEventSpool, publish_lock_path: Path):
++    def __init__(self, config, role: str, account: str, coordinator: BackendLeaseCoordinator):
+         self.cfg = config
+         self.role = role
+         self.account = account.upper()
+         self.is_executor = role == INSTANCE_MODE_EXECUTOR
+-        self.publisher_presence = publisher_presence
++        self.coordinator = coordinator
+         self.tz = ZoneInfo(config.timezone_name)
+         self.market_tz = ZoneInfo(config.market_timezone_name)
+         self.log = setup_logging(config.log_dir, self.tz, role, self.account)
+@@ -1101,7 +1325,8 @@ class OPPWContinuousStrategy:
+         self.last_account_funding_signature: Optional[tuple[float, float]] = None
+         self.weekend_idle = False
+         self.started_at = datetime.now(self.tz)
+-        self.monitor_publisher = MobileMonitorPublisher(config, self.log, self.tz, role, publisher_presence, event_spool, publish_lock_path)
++        self.coordinator.set_logger(self.log)
++        self.monitor_publisher = MobileMonitorPublisher(config, self.log, self.tz, role, coordinator)
+         self.monitor_event_handler = MobileEventHandler(self.monitor_publisher)
+         if self.monitor_publisher.ready:
+             self.log.addHandler(self.monitor_event_handler)
+@@ -1220,6 +1445,15 @@ class OPPWContinuousStrategy:
+         reset = "\033[0m"
+         print(f"\n{color}{text.center(width)}{reset}\n", flush=True)
+ 
++    def print_live_enabled_banner(self, now: datetime) -> None:
++        enabled = bool(self.cfg.live_enabled)
++        status = "LIVE_ENABLED" if enabled else "LIVE_DISABLED"
++        text = f"{now:%Y-%m-%d %H:%M:%S} {status}"
++        width = max(len(text), shutil.get_terminal_size((120, 20)).columns)
++        color = "\033[1;92m" if enabled else "\033[1;91m"
++        reset = "\033[0m"
++        print(f"{color}{text.center(width)}{reset}\n", flush=True)
++
+     def print_instance_banner(self, now: datetime) -> None:
+         status = f"INSTANCE_{self.role} [{self.account}]"
+         text = f"{now:%Y-%m-%d %H:%M:%S} {status}"
+@@ -1778,7 +2012,7 @@ class OPPWContinuousStrategy:
+         distance = abs(difference)
+         distance_pct = distance / bid * 100.0
+         direction = "at current price" if abs(difference) <= tolerance else "above" if difference > 0 else "below"
+-        return f"{name} @ {price:.5f} — {distance:.5f} points {direction} ({distance_pct:.4f}%)"
++        return f"{name} @ {price:.5f} â€” {distance:.5f} points {direction} ({distance_pct:.4f}%)"
+ 
+ 
+     def m1_bar_near(self, symbol: str, local_day: date, target_time: time, before_minutes: int = 5, after_minutes: int = 0) -> Optional[M1Bar]:
+@@ -2190,7 +2424,7 @@ class OPPWContinuousStrategy:
+                 "nextVolumeStepAffordable": bool(sizing["nextVolumeStepAffordable"]),
+                 "sizingMethod": "MAX_VOLUME_BY_REQUIRED_BALANCE", "balanceMultiplierProfile": self.balance_multiplier_profile(),
+                 "brokerMarginLeverage": broker_leverage,
+-                "depositSource": f"MT5 order_calc_margin(volume, current BUY price); required balance = deposit × {required_balance_multiplier:.3f}",
++                "depositSource": f"MT5 order_calc_margin(volume, current BUY price); required balance = deposit Ă— {required_balance_multiplier:.3f}",
+                 "balance": balance, "equity": equity, "freeMargin": free_margin, "sizingFreeMargin": sizing_free_margin,
+                 "freeMarginAfter": sizing_free_margin - required_deposit,
+                 "marginUsagePercent": required_deposit / balance * 100.0 if balance > 0 else 0.0,
+@@ -2326,10 +2560,10 @@ class OPPWContinuousStrategy:
+                 potential_lines = [
+                     f"next potential position: BUY {float(preview['volume']):.2f} lot {preview['symbol']} @ {float(preview['price']):.5f}",
+                     f"required deposit: {float(preview['requiredDeposit']):.2f}{currency_suffix}",
+-                    f"required balance: {float(preview['requiredBalance']):.2f}{currency_suffix} ({float(preview.get('requiredBalanceMultiplier') or self.required_balance_multiplier(int(preview.get('strategyLeverage') or self.cfg.base_leverage))):.3f} × deposit)",
++                    f"required balance: {float(preview['requiredBalance']):.2f}{currency_suffix} ({float(preview.get('requiredBalanceMultiplier') or self.required_balance_multiplier(int(preview.get('strategyLeverage') or self.cfg.base_leverage))):.3f} Ă— deposit)",
+                     f"balance headroom: {float(preview['requiredBalanceHeadroom']):.2f}{currency_suffix}",
+                     f"next volume step: {float(preview['nextVolumeStep']):.2f} lot requires balance {float(preview['nextVolumeStepRequiredBalance']):.2f}{currency_suffix}",
+-                    f"effective leverage: {float(preview['effectiveLeverage']):.4f}x ({float(self.cfg.sizing_multiplier):g} × required deposit / balance)",
++                    f"effective leverage: {float(preview['effectiveLeverage']):.4f}x ({float(self.cfg.sizing_multiplier):g} Ă— required deposit / balance)",
+                     f"potential hard SL: {float(preview['potentialStopLossPrice']):.5f} ({float(preview['potentialStopLossPercent']):.4f}%)",
+                     f"potential SL cash P/L: {float(preview['potentialStopLossCash']):.2f}{currency_suffix}",
+                     f"free margin after: {float(preview['freeMarginAfter']):.2f}{currency_suffix}",
+@@ -2344,7 +2578,7 @@ class OPPWContinuousStrategy:
+                 f"==================== TRADE STATUS - {reason} ====================",
+                 f"phase: {phase} protection regime: {regime}",
+                 f"time: {now:%Y-%m-%d %H:%M:%S %Z} week: {iso_week_key(now.date())}",
+-                "closest condition: none — no open position",
++                "closest condition: none â€” no open position",
+                 "position: FLAT",
+                 *potential_lines,
+                 f"chosen leverage: {leverage}x",
+@@ -2988,7 +3222,7 @@ class OPPWContinuousStrategy:
+             raise RuntimeError(
+                 f"Minimum volume {minimum_candidate['volume']:.8f} requires deposit "
+                 f"{minimum_candidate['requiredDeposit']:.2f} and balance {minimum_candidate['requiredBalance']:.2f} "
+-                f"(deposit × {required_balance_multiplier:.3f}); available balance={balance:.2f} "
++                f"(deposit Ă— {required_balance_multiplier:.3f}); available balance={balance:.2f} "
+                 f"available margin={available_margin:.2f}"
+             )
+ 
+@@ -3067,6 +3301,14 @@ class OPPWContinuousStrategy:
+         if not self.selected_account_matches():
+             self.log.critical("EVENT TRADE_BLOCKED_BY_ACCOUNT_MISMATCH selected_account=%s expected_login=%s event=%s action=none", self.account, getattr(self.cfg, "login", 0), event)
+             return False
++        if not self.coordinator.role_lease_valid():
++            self.log.critical(
++                "EVENT TRADE_BLOCKED_BY_GLOBAL_LEASE account=%s event=%s "
++                "owner_id=%s fencing_token=%s action=none",
++                self.account, event, self.coordinator.owner_id,
++                self.coordinator.fencing_token,
++            )
++            return False
+         return True
+ 
+     def send_buy(self, current_day: date) -> bool:
+@@ -3163,12 +3405,65 @@ class OPPWContinuousStrategy:
+             self.log.error("EVENT BUY_CHECK_REJECTED retcode=%s comment=%s", getattr(check, "retcode", None), getattr(check, "comment", mt5.last_error()))
+             return False
+ 
+-        self.execution_stage("SENT", reference_price=ask, filling_mode=self.filling_mode_name(request.get("type_filling", -1)), scheduled_at=scheduled.isoformat())
+-        sent_monotonic = time_module.monotonic()
+-        result = mt5.order_send(request)
+-        acknowledgement_ms = (time_module.monotonic() - sent_monotonic) * 1000.0
++        execution_id = self.state.active_execution_id or uuid.uuid4().hex
++        decision_id = self.state.active_decision_id or str(
++            (self.last_strategy_decision_payload or {}).get("decisionId", "")
++        )
++        week_key = iso_week_key(current_day)
++        gate: Optional[TradeExecutionGate] = None
++        weekly_entry_claimed = False
++        order_send_started = False
++        try:
++            gate = self.coordinator.acquire_trade_gate("BUY", execution_id)
++            claim = self.coordinator.claim_weekly_entry(
++                week_key, execution_id, decision_id, gate,
++            )
++            if not bool(claim.get("claimed", False)):
++                existing = claim.get("entry") if isinstance(claim.get("entry"), dict) else {}
++                self.log.error(
++                    "EVENT BUY_SKIPPED reason=weekly_entry_globally_claimed week=%s "
++                    "existing_status=%s existing_execution_id=%s existing_order=%s",
++                    week_key, existing.get("status", "unknown"),
++                    existing.get("executionId", "unknown"), existing.get("orderTicket", 0),
++                )
++                return False
++            weekly_entry_claimed = True
++            if self.managed_position() is not None:
++                self.coordinator.complete_weekly_entry(
++                    week_key, execution_id, "REJECTED", error="position appeared before order_send",
++                )
++                self.log.error("EVENT BUY_SKIPPED reason=position_appeared_before_send week=%s", week_key)
++                return False
++            self.coordinator.validate_trade_gate(gate)
++            self.execution_stage("SENT", reference_price=ask, filling_mode=self.filling_mode_name(request.get("type_filling", -1)), scheduled_at=scheduled.isoformat())
++            sent_monotonic = time_module.monotonic()
++            order_send_started = True
++            result = mt5.order_send(request)
++            acknowledgement_ms = (time_module.monotonic() - sent_monotonic) * 1000.0
++        except Exception as exc:
++            if weekly_entry_claimed:
++                self.coordinator.complete_weekly_entry(
++                    week_key,
++                    execution_id,
++                    "UNKNOWN" if order_send_started else "REJECTED",
++                    error=str(exc),
++                )
++            self.log.error(
++                "EVENT BUY_BLOCKED_BY_GLOBAL_COORDINATION week=%s execution_id=%s error=%s",
++                week_key, execution_id, exc,
++            )
++            return False
++        finally:
++            if gate is not None:
++                self.coordinator.release_trade_gate(gate)
+         accepted = {getattr(mt5, "TRADE_RETCODE_DONE", 10009), getattr(mt5, "TRADE_RETCODE_PLACED", 10008), getattr(mt5, "TRADE_RETCODE_DONE_PARTIAL", 10010)}
+         if result is None or int(result.retcode) not in accepted:
++            self.coordinator.complete_weekly_entry(
++                week_key, execution_id,
++                "UNKNOWN" if result is None else "REJECTED",
++                result=result,
++                error="order_send returned None" if result is None else str(getattr(result, "comment", "rejected")),
++            )
+             if int(getattr(result, "retcode", -1)) == int(getattr(mt5, "TRADE_RETCODE_CLIENT_DISABLES_AT", 10027)):
+                 self.ensure_autotrading_enabled("BUY_RETCODE_10027", force_log=True)
+             self.execution_stage("ACCEPTED", result=False, reference_price=ask, retcode=int(getattr(result, "retcode", -1)) if result is not None else None,
+@@ -3176,6 +3471,10 @@ class OPPWContinuousStrategy:
+             self.log.error("EVENT BUY_REJECTED retcode=%s comment=%s", getattr(result, "retcode", None), getattr(result, "comment", mt5.last_error()))
+             return False
+ 
++        self.coordinator.complete_weekly_entry(
++            week_key, execution_id, "ACCEPTED", result=result,
++        )
++
+         self.state.entry_pending_until_utc = int(datetime.now(UTC).timestamp()) + 10
+         self.state.open_date = current_day.isoformat()
+         self.state.entry_price = ask
+@@ -3246,7 +3545,21 @@ class OPPWContinuousStrategy:
+             "action": mt5.TRADE_ACTION_SLTP, "symbol": position.symbol, "position": int(position.ticket),
+             "sl": desired_sl, "tp": desired_tp, "magic": self.cfg.magic,
+         }
+-        result = mt5.order_send(request)
++        operation_id = f"SLTP-{int(position.ticket)}-{uuid.uuid4().hex}"
++        gate: Optional[TradeExecutionGate] = None
++        try:
++            gate = self.coordinator.acquire_trade_gate("SLTP", operation_id)
++            self.coordinator.validate_trade_gate(gate)
++            result = mt5.order_send(request)
++        except Exception as exc:
++            self.log.error(
++                "EVENT SLTP_BLOCKED_BY_GLOBAL_COORDINATION reason=%s ticket=%s error=%s",
++                reason, position.ticket, exc,
++            )
++            return False
++        finally:
++            if gate is not None:
++                self.coordinator.release_trade_gate(gate)
+         accepted = {getattr(mt5, "TRADE_RETCODE_DONE", 10009), getattr(mt5, "TRADE_RETCODE_NO_CHANGES", 10025)}
+         if result is None or int(result.retcode) not in accepted:
+             if int(getattr(result, "retcode", -1)) == int(getattr(mt5, "TRADE_RETCODE_CLIENT_DISABLES_AT", 10027)):
+@@ -3302,9 +3615,23 @@ class OPPWContinuousStrategy:
+         self.state.save(self.cfg.state_file)
+         self.log.info("EVENT SELL_REQUEST reason=%s ticket=%s volume=%s bid=%.5f", reason, position.ticket, position.volume, bid)
+         self.execution_stage("EXIT_SENT", position_ticket=int(position.ticket), reference_price=bid, reason=reason)
+-        exit_sent_monotonic = time_module.monotonic()
+-        result = mt5.order_send(request)
+-        exit_ack_ms = (time_module.monotonic() - exit_sent_monotonic) * 1000.0
++        operation_id = f"SELL-{reason}-{int(position.ticket)}-{uuid.uuid4().hex}"
++        gate: Optional[TradeExecutionGate] = None
++        try:
++            gate = self.coordinator.acquire_trade_gate(f"SELL_{reason}", operation_id)
++            self.coordinator.validate_trade_gate(gate)
++            exit_sent_monotonic = time_module.monotonic()
++            result = mt5.order_send(request)
++            exit_ack_ms = (time_module.monotonic() - exit_sent_monotonic) * 1000.0
++        except Exception as exc:
++            self.log.error(
++                "EVENT SELL_BLOCKED_BY_GLOBAL_COORDINATION reason=%s ticket=%s error=%s",
++                reason, position.ticket, exc,
++            )
++            return False
++        finally:
++            if gate is not None:
++                self.coordinator.release_trade_gate(gate)
+         accepted = {getattr(mt5, "TRADE_RETCODE_DONE", 10009), getattr(mt5, "TRADE_RETCODE_PLACED", 10008), getattr(mt5, "TRADE_RETCODE_DONE_PARTIAL", 10010)}
+         if result is None or int(result.retcode) not in accepted:
+             if int(getattr(result, "retcode", -1)) == int(getattr(mt5, "TRADE_RETCODE_CLIENT_DISABLES_AT", 10027)):
+@@ -3620,6 +3947,7 @@ class OPPWContinuousStrategy:
+             self.emit_status("MINUTE", position, now, current_bar)
+             self.print_instance_banner(now)
+             self.print_autotrading_banner(now)
++            self.print_live_enabled_banner(now)
+             self.log_minute_condition_report(position, now, current_bar)
+ 
+         if position is None:
+@@ -3785,6 +4113,7 @@ class OPPWContinuousStrategy:
+         self.emit_status("STARTUP", position, now, current_bar)
+         self.print_instance_banner(now)
+         self.print_autotrading_banner(now)
++        self.print_live_enabled_banner(now)
+         self.last_minute_status = now.strftime("%Y-%m-%d %H:%M")
+         self.last_meaningful_signature = self.status_signature(position, now)
+         if position is None:
+@@ -3796,6 +4125,7 @@ class OPPWContinuousStrategy:
+             return
+         if not self.is_executor:
+             raise RuntimeError("cycle is executor-only")
++        self.coordinator.require_role_lease()
+         now = datetime.now(self.tz)
+         self.ensure_autotrading_enabled("CYCLE")
+         self.log_week_plan(now.date())
+@@ -3850,7 +4180,7 @@ class OPPWContinuousStrategy:
+     def publisher_startup(self) -> None:
+         if not self.monitor_publisher.ready:
+             raise RuntimeError("Publisher mode requires valid monitor configuration")
+-        self.publisher_presence.touch(force=True)
++        self.coordinator.require_role_lease()
+         self.reload_state_read_only()
+         now = datetime.now(self.tz)
+         position = self.managed_position()
+@@ -3868,7 +4198,7 @@ class OPPWContinuousStrategy:
+     def publisher_cycle(self) -> None:
+         if self.is_weekend(datetime.now(self.tz)):
+             return
+-        self.publisher_presence.touch()
++        self.coordinator.require_role_lease()
+         self.reload_state_read_only()
+         now = datetime.now(self.tz)
+         position = self.managed_position()
+@@ -3896,6 +4226,7 @@ class OPPWContinuousStrategy:
+             self.startup_reconcile()
+         while self.running:
+             try:
++                self.coordinator.require_role_lease()
+                 now = datetime.now(self.tz)
+                 if self.is_weekend(now):
+                     if not self.weekend_idle:
+@@ -3917,13 +4248,16 @@ class OPPWContinuousStrategy:
+                 self.cycle()
+             except KeyboardInterrupt:
+                 self.running = False
++            except LeaseLostError:
++                self.log.exception("EVENT EXECUTOR_STOPPED_LEASE_LOST account=%s", self.account)
++                self.running = False
+             except Exception:
+                 self.log.exception("EVENT STRATEGY_CYCLE_FAILED role=EXECUTOR")
+             time_module.sleep(self.cfg.poll_seconds)
+         self.log.info("EVENT STRATEGY_STOPPED role=EXECUTOR")
+ 
+     def run_publisher(self) -> None:
+-        self.publisher_presence.touch(force=True)
++        self.coordinator.require_role_lease()
+         self.connect()
+         started_on_weekend = self.is_weekend(datetime.now(self.tz))
+         if started_on_weekend:
+@@ -3932,17 +4266,18 @@ class OPPWContinuousStrategy:
+             self.publisher_startup()
+         while self.running:
+             try:
++                self.coordinator.require_role_lease()
+                 now = datetime.now(self.tz)
+                 if self.is_weekend(now):
+                     # Market-idle coordination plus an account-funding watcher that also covers carried positions.
+-                    self.publisher_presence.touch()
++                    self.coordinator.require_role_lease()
+                     if not self.weekend_idle:
+                         self.enter_weekend_idle_without_publish("PUBLISHER")
+                     weekend_position = self.managed_position()
+                     self.publish_account_change_if_needed(weekend_position, now, None, "PUBLISHER")
+                     time_module.sleep(max(1.0, self.cfg.poll_seconds))
+                     continue
+-                self.publisher_presence.touch()
++                self.coordinator.require_role_lease()
+                 if self.weekend_idle:
+                     self.weekend_idle = False
+                     self.monitor_publisher.set_weekend_idle(False)
+@@ -3951,12 +4286,15 @@ class OPPWContinuousStrategy:
+                     self.log.error("EVENT CONNECTION_LOST role=PUBLISHER reconnecting=true")
+                     self.disconnect()
+                     time_module.sleep(self.cfg.reconnect_seconds)
+-                    self.publisher_presence.touch(force=True)
++                    self.coordinator.require_role_lease()
+                     self.connect()
+                     self.publisher_startup()
+                 self.publisher_cycle()
+             except KeyboardInterrupt:
+                 self.running = False
++            except LeaseLostError:
++                self.log.exception("EVENT PUBLISHER_STOPPED_LEASE_LOST account=%s", self.account)
++                self.running = False
+             except Exception:
+                 self.log.exception("EVENT PUBLISHER_CYCLE_FAILED role=PUBLISHER")
+             time_module.sleep(self.cfg.poll_seconds)
+@@ -3999,42 +4337,6 @@ def parse_arguments(argv: Optional[list[str]] = None) -> argparse.Namespace:
+     return parser.parse_args(argv)
+ 
+ 
+-def legacy_live_pid(path: Path) -> int:
+-    try:
+-        text = path.read_text(encoding="utf-8").strip()
+-        if not text or not text.lstrip("-").isdigit():
+-            return 0
+-        pid = int(text)
+-        return pid if InterProcessFileLock.pid_is_running(pid) else 0
+-    except OSError:
+-        return 0
+-
+-
+-
+-
+-def ensure_unscoped_instances_stopped(original_config, scoped_config) -> None:
+-    if not hasattr(original_config, "lock_file") or not hasattr(scoped_config, "lock_file"):
+-        return
+-    original_lock = Path(original_config.lock_file)
+-    scoped_lock = Path(scoped_config.lock_file)
+-    if original_lock == scoped_lock:
+-        return
+-
+-    old_pid = legacy_live_pid(original_lock)
+-    if old_pid:
+-        raise RuntimeError(f"Legacy OPPW instance PID {old_pid} is still running with lock {original_lock}")
+-
+-    legacy_paths = (original_lock, derived_coordination_path(original_lock, "publisher"))
+-    for path in legacy_paths:
+-        probe = InterProcessFileLock(path, {"purpose": "v40-legacy-instance-probe"})
+-        if not probe.try_acquire():
+-            owner = "unknown"
+-            try:
+-                owner = path.read_text(encoding="utf-8", errors="replace")[:500]
+-            except OSError:
+-                pass
+-            raise RuntimeError(f"A v39 or older instance is still running with lock {path}: {owner}")
+-        probe.release()
+ 
+ def main() -> int:
+     args = parse_arguments()
+@@ -4042,35 +4344,25 @@ def main() -> int:
+     account = str(args.account).upper()
+     original_cfg, config_path = load_account_config(account)
+     validate_config(original_cfg)
+-    original_cfg = apply_runtime_flags(original_cfg, bool(args.legacy_balance_multiplier))
++    original_cfg = apply_runtime_flags(
++        original_cfg, bool(args.legacy_balance_multiplier)
++    )
+     cfg = scope_config_to_account(original_cfg, account)
+-    ensure_unscoped_instances_stopped(original_cfg, cfg)
+     migrate_legacy_demo_runtime_files(original_cfg, cfg, account)
+ 
+-    old_pid = legacy_live_pid(cfg.lock_file)
+-    if old_pid:
+-        print(
+-            f"FATAL: legacy OPPW instance PID {old_pid} is still running. Stop all v39/older instances before starting v40 roles.",
+-            file=sys.stderr,
+-        )
+-        return 1
+-
+-    publisher_lock_path = derived_coordination_path(cfg.lock_file, "publisher")
+-    role_lock_path = cfg.lock_file if role == INSTANCE_MODE_EXECUTOR else publisher_lock_path
+-    heartbeat_path = cfg.lock_file.with_name(f"{cfg.lock_file.stem}.publisher.heartbeat.json")
+-    publish_lock_path = derived_coordination_path(cfg.lock_file, "backend-publish")
+-    event_spool_path = cfg.monitor_history_file.with_name(f"{cfg.monitor_history_file.stem}.events.jsonl")
+-
+-    role_lock = InterProcessFileLock(role_lock_path, {"role": role, "account": account, "config": str(config_path), "build": BUILD_ID})
+-    publisher_presence = PublisherPresence(heartbeat_path, role, cfg.publisher_heartbeat_interval_seconds, cfg.publisher_heartbeat_stale_seconds, cfg.publisher_presence_check_interval_seconds)
+-    event_spool = SharedEventSpool(event_spool_path, cfg.monitor_event_buffer_size, cfg.event_spool_lock_timeout_seconds, cfg.event_spool_lock_retry_seconds)
++    coordinator = BackendLeaseCoordinator(cfg, role, account)
+     strategy: Optional[OPPWContinuousStrategy] = None
+-
+     try:
+-        role_lock.acquire()
+-        strategy = OPPWContinuousStrategy(cfg, role, account, publisher_presence, event_spool, publish_lock_path)
+-        if role == INSTANCE_MODE_PUBLISHER and not strategy.monitor_publisher.ready:
+-            raise RuntimeError("Publisher mode cannot start because backend monitor publishing is not configured")
++        coordinator.start()
++        strategy = OPPWContinuousStrategy(cfg, role, account, coordinator)
++        if (
++            role == INSTANCE_MODE_PUBLISHER
++            and not strategy.monitor_publisher.ready
++        ):
++            raise RuntimeError(
++                "Publisher mode cannot start because backend monitor publishing "
++                "is not configured"
++            )
+         signal.signal(signal.SIGINT, strategy.stop)
+         if hasattr(signal, "SIGTERM"):
+             signal.signal(signal.SIGTERM, strategy.stop)
+@@ -4078,18 +4370,30 @@ def main() -> int:
+         return 0
+     except Exception:
+         if strategy is not None:
+-            strategy.log.exception("EVENT FATAL_STARTUP_FAILURE role=%s account=%s", role, account)
++            strategy.log.exception(
++                "EVENT FATAL_STARTUP_FAILURE role=%s account=%s",
++                role,
++                account,
++            )
+         else:
+             logging.basicConfig(level=logging.ERROR)
+-            logging.exception("FATAL_STARTUP_FAILURE role=%s account=%s", role, account)
++            logging.exception(
++                "FATAL_STARTUP_FAILURE role=%s account=%s config=%s",
++                role,
++                account,
++                config_path,
++            )
+         return 1
+     finally:
+         if strategy is not None:
+             strategy.shutdown_mobile_publisher()
+             strategy.disconnect()
+-        publisher_presence.remove_if_owner()
+-        role_lock.release()
++        coordinator.stop()
++
+ 
+ 
+ if __name__ == "__main__":
+     sys.exit(main())
++
++
++

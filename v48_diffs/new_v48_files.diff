@@ -1,0 +1,954 @@
+﻿diff --git "a/Mobile\\backend\\coordination.php" "b/Mobile\\backend\\coordination.php"
+new file mode 100644
+index 0000000..99655ab
+--- /dev/null
++++ "b/Mobile\\backend\\coordination.php"
+@@ -0,0 +1,476 @@
++<?php
++declare(strict_types=1);
++
++require __DIR__ . '/lib.php';
++require_method('POST');
++require_write_token();
++
++$data = request_json(65536);
++$db = pdo();
++$action = trim((string)($data['action'] ?? ''));
++$accountKey = strtoupper(trim((string)($data['accountKey'] ?? '')));
++$role = strtoupper(trim((string)($data['role'] ?? '')));
++$ownerId = strtolower(trim((string)($data['ownerId'] ?? '')));
++$hostname = substr(trim((string)($data['hostname'] ?? '')), 0, 120);
++$pid = (int)($data['pid'] ?? 0);
++$build = substr(trim((string)($data['build'] ?? '')), 0, 160);
++
++if ($accountKey === '' || !preg_match('/^[A-Z0-9_:-]{1,64}$/', $accountKey)) {
++    json_response(['ok' => false, 'error' => 'valid accountKey required'], 400);
++}
++if (!preg_match('/^[a-f0-9]{32}$/', $ownerId)) {
++    json_response(['ok' => false, 'error' => 'valid ownerId required'], 400);
++}
++if (!in_array($role, ['EXECUTOR', 'PUBLISHER'], true)) {
++    json_response(['ok' => false, 'error' => 'valid role required'], 400);
++}
++
++$accountStmt = $db->prepare(
++    'SELECT 1 FROM monitor_accounts WHERE account_key = ? AND enabled = TRUE LIMIT 1'
++);
++$accountStmt->execute([$accountKey]);
++if (!$accountStmt->fetchColumn()) {
++    json_response(['ok' => false, 'error' => 'Unknown or disabled account'], 400);
++}
++
++$clampTtl = static function (mixed $value, int $minimum, int $maximum, int $fallback): int {
++    $ttl = is_numeric($value) ? (int)ceil((float)$value) : $fallback;
++    return max($minimum, min($maximum, $ttl));
++};
++$parseDbTime = static fn(string $value): DateTimeImmutable =>
++    new DateTimeImmutable($value, new DateTimeZone('UTC'));
++$dbNow = static function (PDO $db) use ($parseDbTime): DateTimeImmutable {
++    $value = (string)$db->query('SELECT UTC_TIMESTAMP(3)')->fetchColumn();
++    return $parseDbTime($value);
++};
++$leaseForUpdate = static function (PDO $db, string $account, string $name): array|false {
++    $stmt = $db->prepare(
++        'SELECT strategy_key, lease_name, owner_id, fencing_token, hostname,
++                process_id, build_id, operation_id, operation_kind,
++                acquired_at, heartbeat_at, expires_at, released_at
++           FROM strategy_runtime_leases
++          WHERE strategy_key = ? AND lease_name = ?
++          FOR UPDATE'
++    );
++    $stmt->execute([$account, $name]);
++    return $stmt->fetch();
++};
++$holderPayload = static function (array $row): array {
++    return [
++        'ownerId' => (string)$row['owner_id'],
++        'fencingToken' => (int)$row['fencing_token'],
++        'hostname' => (string)$row['hostname'],
++        'pid' => (int)$row['process_id'],
++        'build' => (string)$row['build_id'],
++        'operationId' => (string)$row['operation_id'],
++        'operationKind' => (string)$row['operation_kind'],
++        'acquiredAt' => (string)$row['acquired_at'],
++        'heartbeatAt' => (string)$row['heartbeat_at'],
++        'expiresAt' => (string)$row['expires_at'],
++    ];
++};
++$isActive = static function (array $row, DateTimeImmutable $now) use ($parseDbTime): bool {
++    return $parseDbTime((string)$row['expires_at']) > $now;
++};
++$requireExecutor = static function (
++    PDO $db,
++    string $account,
++    string $owner,
++    int $token,
++    DateTimeImmutable $now,
++    bool $forUpdate = false
++) use ($isActive): array {
++    $sql = 'SELECT * FROM strategy_runtime_leases
++             WHERE strategy_key = ? AND lease_name = "EXECUTOR"'
++        . ($forUpdate ? ' FOR UPDATE' : '');
++    $stmt = $db->prepare($sql);
++    $stmt->execute([$account]);
++    $row = $stmt->fetch();
++    if (!is_array($row)
++        || !$isActive($row, $now)
++        || !hash_equals((string)$row['owner_id'], $owner)
++        || (int)$row['fencing_token'] !== $token) {
++        throw new RuntimeException('stale or invalid executor fencing token');
++    }
++    return $row;
++};
++$requireGate = static function (
++    PDO $db,
++    string $account,
++    string $owner,
++    int $gateToken,
++    string $operationId,
++    DateTimeImmutable $now,
++    bool $forUpdate = false
++) use ($isActive): array {
++    $sql = 'SELECT * FROM strategy_runtime_leases
++             WHERE strategy_key = ? AND lease_name = "TRADE_EXECUTION"'
++        . ($forUpdate ? ' FOR UPDATE' : '');
++    $stmt = $db->prepare($sql);
++    $stmt->execute([$account]);
++    $row = $stmt->fetch();
++    if (!is_array($row)
++        || !$isActive($row, $now)
++        || !hash_equals((string)$row['owner_id'], $owner)
++        || (int)$row['fencing_token'] !== $gateToken
++        || !hash_equals((string)$row['operation_id'], $operationId)) {
++        throw new RuntimeException('stale or invalid trade-execution gate');
++    }
++    return $row;
++};
++
++try {
++    if ($action === 'acquireLease') {
++        $leaseName = strtoupper(trim((string)($data['leaseName'] ?? '')));
++        if (!in_array($leaseName, ['EXECUTOR', 'PUBLISHER'], true) || $leaseName !== $role) {
++            json_response(['ok' => false, 'error' => 'role leaseName mismatch'], 400);
++        }
++        $ttl = $clampTtl($data['ttlSeconds'] ?? null, 5, 120, 15);
++        $db->beginTransaction();
++        $now = $dbNow($db);
++        $expires = $now->modify('+' . $ttl . ' seconds');
++        $row = $leaseForUpdate($db, $accountKey, $leaseName);
++        if ($row === false) {
++            $token = 1;
++            $insert = $db->prepare(
++                'INSERT INTO strategy_runtime_leases(
++                    strategy_key, lease_name, owner_id, fencing_token, hostname,
++                    process_id, build_id, acquired_at, heartbeat_at, expires_at
++                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
++            );
++            $insert->execute([
++                $accountKey, $leaseName, $ownerId, $token, $hostname, $pid, $build,
++                mysql_datetime($now), mysql_datetime($now), mysql_datetime($expires),
++            ]);
++            $acquired = true;
++        } else {
++            $active = $isActive($row, $now);
++            $sameOwner = hash_equals((string)$row['owner_id'], $ownerId);
++            if ($active && !$sameOwner) {
++                $db->commit();
++                json_response([
++                    'ok' => true,
++                    'acquired' => false,
++                    'holder' => $holderPayload($row),
++                    'serverTime' => atom_datetime($now),
++                ]);
++            }
++            $token = $sameOwner && $active
++                ? (int)$row['fencing_token']
++                : (int)$row['fencing_token'] + 1;
++            $acquiredAt = $sameOwner && $active
++                ? (string)$row['acquired_at']
++                : mysql_datetime($now);
++            $update = $db->prepare(
++                'UPDATE strategy_runtime_leases
++                    SET owner_id=?, fencing_token=?, hostname=?, process_id=?, build_id=?,
++                        operation_id="", operation_kind="", acquired_at=?, heartbeat_at=?,
++                        expires_at=?, released_at=NULL, metadata=NULL
++                  WHERE strategy_key=? AND lease_name=?'
++            );
++            $update->execute([
++                $ownerId, $token, $hostname, $pid, $build, $acquiredAt,
++                mysql_datetime($now), mysql_datetime($expires), $accountKey, $leaseName,
++            ]);
++            $acquired = true;
++        }
++        $db->commit();
++        json_response([
++            'ok' => true,
++            'acquired' => $acquired,
++            'fencingToken' => $token,
++            'ttlSeconds' => $ttl,
++            'expiresAt' => atom_datetime($expires),
++            'serverTime' => atom_datetime($now),
++        ]);
++    }
++
++    if ($action === 'renewLease') {
++        $leaseName = strtoupper(trim((string)($data['leaseName'] ?? '')));
++        $token = (int)($data['fencingToken'] ?? 0);
++        $ttl = $clampTtl($data['ttlSeconds'] ?? null, 5, 120, 15);
++        if (!in_array($leaseName, ['EXECUTOR', 'PUBLISHER'], true) || $leaseName !== $role || $token <= 0) {
++            json_response(['ok' => false, 'error' => 'invalid renewal request'], 400);
++        }
++        $now = $dbNow($db);
++        $expires = $now->modify('+' . $ttl . ' seconds');
++        $stmt = $db->prepare(
++            'UPDATE strategy_runtime_leases
++                SET heartbeat_at=?, expires_at=?, hostname=?, process_id=?, build_id=?, released_at=NULL
++              WHERE strategy_key=? AND lease_name=? AND owner_id=? AND fencing_token=?
++                AND expires_at > ?'
++        );
++        $stmt->execute([
++            mysql_datetime($now), mysql_datetime($expires), $hostname, $pid, $build,
++            $accountKey, $leaseName, $ownerId, $token, mysql_datetime($now),
++        ]);
++        json_response([
++            'ok' => true,
++            'renewed' => $stmt->rowCount() === 1,
++            'fencingToken' => $token,
++            'ttlSeconds' => $ttl,
++            'expiresAt' => atom_datetime($expires),
++        ]);
++    }
++
++    if ($action === 'releaseLease') {
++        $leaseName = strtoupper(trim((string)($data['leaseName'] ?? '')));
++        $token = (int)($data['fencingToken'] ?? 0);
++        if (!in_array($leaseName, ['EXECUTOR', 'PUBLISHER'], true)
++            || $leaseName !== $role
++            || $token <= 0) {
++            json_response(['ok' => false, 'error' => 'invalid release request'], 400);
++        }
++        $now = $dbNow($db);
++        $stmt = $db->prepare(
++            'UPDATE strategy_runtime_leases
++                SET expires_at=?, released_at=?, heartbeat_at=?
++              WHERE strategy_key=? AND lease_name=? AND owner_id=? AND fencing_token=?'
++        );
++        $stmt->execute([
++            mysql_datetime($now), mysql_datetime($now), mysql_datetime($now),
++            $accountKey, $leaseName, $ownerId, $token,
++        ]);
++        json_response(['ok' => true, 'released' => $stmt->rowCount() === 1]);
++    }
++
++    if ($action === 'leaseStatus') {
++        $leaseName = strtoupper(trim((string)($data['leaseName'] ?? '')));
++        if (!in_array($leaseName, ['EXECUTOR', 'PUBLISHER', 'TRADE_EXECUTION'], true)) {
++            json_response(['ok' => false, 'error' => 'invalid leaseName'], 400);
++        }
++        $now = $dbNow($db);
++        $stmt = $db->prepare(
++            'SELECT * FROM strategy_runtime_leases
++              WHERE strategy_key=? AND lease_name=? LIMIT 1'
++        );
++        $stmt->execute([$accountKey, $leaseName]);
++        $row = $stmt->fetch();
++        json_response([
++            'ok' => true,
++            'active' => is_array($row) && $isActive($row, $now),
++            'holder' => is_array($row) ? $holderPayload($row) : null,
++            'serverTime' => atom_datetime($now),
++        ]);
++    }
++
++    if ($action === 'acquireTradeGate') {
++        $executorToken = (int)($data['executorFencingToken'] ?? 0);
++        $operationId = substr(trim((string)($data['operationId'] ?? '')), 0, 96);
++        $operationKind = substr(strtoupper(trim((string)($data['operationKind'] ?? ''))), 0, 64);
++        $ttl = $clampTtl($data['ttlSeconds'] ?? null, 2, 30, 10);
++        if ($role !== 'EXECUTOR' || $executorToken <= 0 || $operationId === '' || $operationKind === '') {
++            json_response(['ok' => false, 'error' => 'invalid trade-gate request'], 400);
++        }
++        $db->beginTransaction();
++        $now = $dbNow($db);
++        $requireExecutor($db, $accountKey, $ownerId, $executorToken, $now, true);
++        $expires = $now->modify('+' . $ttl . ' seconds');
++        $row = $leaseForUpdate($db, $accountKey, 'TRADE_EXECUTION');
++        if ($row !== false && $isActive($row, $now)) {
++            $sameOperation = hash_equals((string)$row['owner_id'], $ownerId)
++                && hash_equals((string)$row['operation_id'], $operationId);
++            if (!$sameOperation) {
++                $db->commit();
++                json_response([
++                    'ok' => true,
++                    'acquired' => false,
++                    'holder' => $holderPayload($row),
++                    'serverTime' => atom_datetime($now),
++                ]);
++            }
++            $gateToken = (int)$row['fencing_token'];
++        } elseif ($row === false) {
++            $gateToken = 1;
++            $insert = $db->prepare(
++                'INSERT INTO strategy_runtime_leases(
++                    strategy_key, lease_name, owner_id, fencing_token, hostname,
++                    process_id, build_id, operation_id, operation_kind,
++                    acquired_at, heartbeat_at, expires_at
++                 ) VALUES (?, "TRADE_EXECUTION", ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
++            );
++            $insert->execute([
++                $accountKey, $ownerId, $gateToken, $hostname, $pid, $build,
++                $operationId, $operationKind, mysql_datetime($now),
++                mysql_datetime($now), mysql_datetime($expires),
++            ]);
++        } else {
++            $gateToken = (int)$row['fencing_token'] + 1;
++        }
++        if ($row !== false) {
++            $update = $db->prepare(
++                'UPDATE strategy_runtime_leases
++                    SET owner_id=?, fencing_token=?, hostname=?, process_id=?, build_id=?,
++                        operation_id=?, operation_kind=?, acquired_at=?, heartbeat_at=?,
++                        expires_at=?, released_at=NULL
++                  WHERE strategy_key=? AND lease_name="TRADE_EXECUTION"'
++            );
++            $update->execute([
++                $ownerId, $gateToken, $hostname, $pid, $build, $operationId,
++                $operationKind, mysql_datetime($now), mysql_datetime($now),
++                mysql_datetime($expires), $accountKey,
++            ]);
++        }
++        $db->commit();
++        json_response([
++            'ok' => true,
++            'acquired' => true,
++            'fencingToken' => $gateToken,
++            'ttlSeconds' => $ttl,
++            'expiresAt' => atom_datetime($expires),
++        ]);
++    }
++
++    if ($action === 'validateTradeGate') {
++        $executorToken = (int)($data['executorFencingToken'] ?? 0);
++        $gateToken = (int)($data['gateFencingToken'] ?? 0);
++        $operationId = substr(trim((string)($data['operationId'] ?? '')), 0, 96);
++        $operationKind = substr(strtoupper(trim((string)($data['operationKind'] ?? ''))), 0, 64);
++        $now = $dbNow($db);
++        $requireExecutor($db, $accountKey, $ownerId, $executorToken, $now);
++        $gate = $requireGate($db, $accountKey, $ownerId, $gateToken, $operationId, $now);
++        $valid = hash_equals((string)$gate['operation_kind'], $operationKind);
++        json_response([
++            'ok' => true,
++            'valid' => $valid,
++            'executorFencingToken' => $executorToken,
++            'gateFencingToken' => $gateToken,
++        ]);
++    }
++
++    if ($action === 'releaseTradeGate') {
++        $executorToken = (int)($data['executorFencingToken'] ?? 0);
++        $gateToken = (int)($data['gateFencingToken'] ?? 0);
++        $operationId = substr(trim((string)($data['operationId'] ?? '')), 0, 96);
++        $now = $dbNow($db);
++        $requireExecutor($db, $accountKey, $ownerId, $executorToken, $now);
++        $stmt = $db->prepare(
++            'UPDATE strategy_runtime_leases
++                SET expires_at=?, released_at=?, heartbeat_at=?
++              WHERE strategy_key=? AND lease_name="TRADE_EXECUTION"
++                AND owner_id=? AND fencing_token=? AND operation_id=?'
++        );
++        $stmt->execute([
++            mysql_datetime($now), mysql_datetime($now), mysql_datetime($now),
++            $accountKey, $ownerId, $gateToken, $operationId,
++        ]);
++        json_response(['ok' => true, 'released' => $stmt->rowCount() === 1]);
++    }
++
++    if ($action === 'claimWeeklyEntry') {
++        $executorToken = (int)($data['executorFencingToken'] ?? 0);
++        $gateToken = (int)($data['gateFencingToken'] ?? 0);
++        $gateOperationId = substr(trim((string)($data['gateOperationId'] ?? '')), 0, 96);
++        $weekKey = strtoupper(substr(trim((string)($data['weekKey'] ?? '')), 0, 10));
++        $executionId = substr(trim((string)($data['executionId'] ?? '')), 0, 96);
++        $decisionId = substr(trim((string)($data['decisionId'] ?? '')), 0, 64);
++        if (!preg_match('/^\d{4}-W\d{2}$/', $weekKey) || $executionId === '') {
++            json_response(['ok' => false, 'error' => 'invalid weekly-entry claim'], 400);
++        }
++        $db->beginTransaction();
++        $now = $dbNow($db);
++        $requireExecutor($db, $accountKey, $ownerId, $executorToken, $now, true);
++        $requireGate($db, $accountKey, $ownerId, $gateToken, $gateOperationId, $now, true);
++        $stmt = $db->prepare(
++            'SELECT * FROM strategy_weekly_entries
++              WHERE strategy_key=? AND week_key=? FOR UPDATE'
++        );
++        $stmt->execute([$accountKey, $weekKey]);
++        $entry = $stmt->fetch();
++        $claimed = false;
++        if ($entry === false) {
++            $insert = $db->prepare(
++                'INSERT INTO strategy_weekly_entries(
++                    strategy_key, week_key, execution_id, decision_id, owner_id,
++                    executor_fencing_token, gate_fencing_token, status, attempt_count,
++                    claimed_at, updated_at
++                 ) VALUES (?, ?, ?, ?, ?, ?, ?, "CLAIMED", 1, ?, ?)'
++            );
++            $insert->execute([
++                $accountKey, $weekKey, $executionId, $decisionId, $ownerId,
++                $executorToken, $gateToken, mysql_datetime($now), mysql_datetime($now),
++            ]);
++            $claimed = true;
++        } elseif ((string)$entry['status'] === 'REJECTED') {
++            $update = $db->prepare(
++                'UPDATE strategy_weekly_entries
++                    SET execution_id=?, decision_id=?, owner_id=?,
++                        executor_fencing_token=?, gate_fencing_token=?,
++                        status="CLAIMED", attempt_count=attempt_count+1,
++                        claimed_at=?, completed_at=NULL, order_ticket=0, deal_ticket=0,
++                        retcode=-1, error_text="", updated_at=?
++                  WHERE strategy_key=? AND week_key=?'
++            );
++            $update->execute([
++                $executionId, $decisionId, $ownerId, $executorToken, $gateToken,
++                mysql_datetime($now), mysql_datetime($now), $accountKey, $weekKey,
++            ]);
++            $claimed = true;
++        } elseif (
++            (string)$entry['status'] === 'CLAIMED'
++            && hash_equals((string)$entry['execution_id'], $executionId)
++            && (int)$entry['gate_fencing_token'] === $gateToken
++        ) {
++            $claimed = true;
++        }
++        $viewStmt = $db->prepare(
++            'SELECT week_key, execution_id, decision_id, status, attempt_count,
++                    order_ticket, deal_ticket, retcode, claimed_at, completed_at
++               FROM strategy_weekly_entries
++              WHERE strategy_key=? AND week_key=?'
++        );
++        $viewStmt->execute([$accountKey, $weekKey]);
++        $view = $viewStmt->fetch();
++        $db->commit();
++        json_response([
++            'ok' => true,
++            'claimed' => $claimed,
++            'entry' => is_array($view) ? [
++                'weekKey' => (string)$view['week_key'],
++                'executionId' => (string)$view['execution_id'],
++                'decisionId' => (string)$view['decision_id'],
++                'status' => (string)$view['status'],
++                'attemptCount' => (int)$view['attempt_count'],
++                'orderTicket' => (int)$view['order_ticket'],
++                'dealTicket' => (int)$view['deal_ticket'],
++                'retcode' => (int)$view['retcode'],
++                'claimedAt' => (string)$view['claimed_at'],
++                'completedAt' => $view['completed_at'],
++            ] : null,
++        ]);
++    }
++
++    if ($action === 'completeWeeklyEntry') {
++        $executorToken = (int)($data['executorFencingToken'] ?? 0);
++        $weekKey = strtoupper(substr(trim((string)($data['weekKey'] ?? '')), 0, 10));
++        $executionId = substr(trim((string)($data['executionId'] ?? '')), 0, 96);
++        $status = strtoupper(trim((string)($data['status'] ?? 'UNKNOWN')));
++        if (!in_array($status, ['ACCEPTED', 'REJECTED', 'UNKNOWN'], true)) {
++            json_response(['ok' => false, 'error' => 'invalid weekly-entry completion status'], 400);
++        }
++        $now = $dbNow($db);
++        $requireExecutor($db, $accountKey, $ownerId, $executorToken, $now);
++        $stmt = $db->prepare(
++            'UPDATE strategy_weekly_entries
++                SET status=?, completed_at=?, order_ticket=?, deal_ticket=?,
++                    retcode=?, error_text=?, updated_at=?
++              WHERE strategy_key=? AND week_key=? AND execution_id=?
++                AND status="CLAIMED"'
++        );
++        $stmt->execute([
++            $status, mysql_datetime($now), max(0, (int)($data['orderTicket'] ?? 0)),
++            max(0, (int)($data['dealTicket'] ?? 0)), (int)($data['retcode'] ?? -1),
++            substr((string)($data['error'] ?? ''), 0, 500), mysql_datetime($now),
++            $accountKey, $weekKey, $executionId,
++        ]);
++        json_response(['ok' => true, 'updated' => $stmt->rowCount() === 1]);
++    }
++
++    json_response(['ok' => false, 'error' => 'Unknown coordination action'], 400);
++} catch (Throwable $e) {
++    if ($db->inTransaction()) {
++        $db->rollBack();
++    }
++    error_log('OPPW coordination failed: ' . $e->getMessage());
++    json_response(['ok' => false, 'error' => $e->getMessage()], 409);
++}
+diff --git "a/Mobile\\backend\\events-ingest.php" "b/Mobile\\backend\\events-ingest.php"
+new file mode 100644
+index 0000000..ae19334
+--- /dev/null
++++ "b/Mobile\\backend\\events-ingest.php"
+@@ -0,0 +1,115 @@
++<?php
++declare(strict_types=1);
++
++require __DIR__ . '/lib.php';
++require_method('POST');
++require_write_token();
++
++$data = request_json(524288);
++$db = pdo();
++$accountKey = trim((string)($data['accountKey'] ?? $data['strategyKey'] ?? ''));
++if ($accountKey === '') {
++    json_response(['ok' => false, 'error' => 'accountKey required'], 400);
++}
++
++$accountStmt = $db->prepare(
++    'SELECT account_key, display_name
++       FROM monitor_accounts
++      WHERE account_key = ? AND enabled = TRUE'
++);
++$accountStmt->execute([$accountKey]);
++$monitorAccount = $accountStmt->fetch();
++if (!$monitorAccount) {
++    json_response(['ok' => false, 'error' => 'Unknown or disabled account'], 400);
++}
++
++require_coordination_actor($db, $accountKey, $data['coordination'] ?? null, 'events');
++$events = isset($data['events']) && is_array($data['events']) ? $data['events'] : null;
++if ($events === null) {
++    json_response(['ok' => false, 'error' => 'events array required'], 400);
++}
++
++$normalized = [];
++foreach (array_slice($events, 0, 5000) as $event) {
++    if (!is_array($event)) continue;
++    $name = strtoupper(trim((string)($event['name'] ?? 'EVENT')));
++    if (in_array($name, [
++        'STRATEGY_DECISION_RECORDED',
++        'STRATEGY_DECISION_CALCULATED',
++        'STRATEGY_DECISION_PERSISTED',
++    ], true)) continue;
++
++    $eventTime = normalize_datetime($event['time'] ?? null);
++    $message = substr((string)($event['message'] ?? ''), 0, 1000);
++    $normalized[] = [
++        'time' => $eventTime,
++        'level' => substr((string)($event['level'] ?? 'INFO'), 0, 16),
++        'name' => substr($name, 0, 100),
++        'result' => array_key_exists('result', $event) && $event['result'] !== null
++            ? (int)(bool)$event['result']
++            : null,
++        'message' => $message,
++        'details' => is_array($event['details'] ?? null) ? $event['details'] : [],
++        'hash' => hash('sha256', $accountKey . '|' . $eventTime . '|' . $name . '|' . $message),
++    ];
++}
++
++$inserted = 0;
++$critical = [];
++$db->beginTransaction();
++try {
++    $stmt = $db->prepare(
++        'INSERT IGNORE INTO strategy_events(
++            strategy_key, event_time, level, name, result, message, details, event_hash
++         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
++    );
++    foreach ($normalized as $event) {
++        $detailsJson = $event['details']
++            ? json_encode($event['details'], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)
++            : null;
++        $stmt->execute([
++            $accountKey,
++            $event['time'],
++            $event['level'],
++            $event['name'],
++            $event['result'],
++            $event['message'],
++            $detailsJson,
++            $event['hash'],
++        ]);
++        if ($stmt->rowCount() <= 0) continue;
++        $inserted++;
++        if (in_array($event['name'], [
++            'CONNECTION_LOST',
++            'STRATEGY_CYCLE_FAILED',
++            'POSITION_DISAPPEARED',
++            'SLTP_REJECTED',
++        ], true) || str_starts_with($event['name'], 'PROTECTION_')) {
++            $critical[] = $event;
++        }
++    }
++    $db->commit();
++} catch (Throwable $e) {
++    if ($db->inTransaction()) $db->rollBack();
++    error_log('OPPW events ingest failed: ' . $e->getMessage());
++    json_response(['ok' => false, 'error' => 'Database write failed'], 500);
++}
++
++$displayName = (string)$monitorAccount['display_name'];
++foreach ($critical as $event) {
++    send_account_push(
++        $db,
++        $accountKey,
++        'event:' . $event['hash'],
++        $displayName . ': ' . $event['name'],
++        $event['message'],
++        ['type' => $event['name']]
++    );
++}
++
++json_response([
++    'ok' => true,
++    'accountKey' => $accountKey,
++    'receivedEvents' => count($normalized),
++    'storedEvents' => $inserted,
++], 201);
+diff --git "a/Mobile\\backend\\sql\\migrate_v48_global_leases.sql" "b/Mobile\\backend\\sql\\migrate_v48_global_leases.sql"
+new file mode 100644
+index 0000000..c265a41
+--- /dev/null
++++ "b/Mobile\\backend\\sql\\migrate_v48_global_leases.sql"
+@@ -0,0 +1,93 @@
++-- OPPW MT5 v48: global MySQL coordination, fencing, and weekly-entry idempotency.
++-- Run once after backing up the database.
++
++CREATE TABLE IF NOT EXISTS strategy_runtime_leases (
++    strategy_key VARCHAR(64) NOT NULL,
++    lease_name VARCHAR(32) NOT NULL,
++    owner_id CHAR(32) NOT NULL,
++    fencing_token BIGINT UNSIGNED NOT NULL,
++    hostname VARCHAR(120) NOT NULL DEFAULT '',
++    process_id BIGINT NOT NULL DEFAULT 0,
++    build_id VARCHAR(160) NOT NULL DEFAULT '',
++    operation_id VARCHAR(96) NOT NULL DEFAULT '',
++    operation_kind VARCHAR(64) NOT NULL DEFAULT '',
++    acquired_at DATETIME(3) NOT NULL,
++    heartbeat_at DATETIME(3) NOT NULL,
++    expires_at DATETIME(3) NOT NULL,
++    released_at DATETIME(3) NULL,
++    metadata JSON NULL,
++    PRIMARY KEY (strategy_key, lease_name),
++    INDEX idx_runtime_lease_expiry (expires_at),
++    CONSTRAINT fk_runtime_lease_account
++        FOREIGN KEY (strategy_key)
++        REFERENCES monitor_accounts(account_key)
++        ON DELETE CASCADE
++) ENGINE=InnoDB;
++
++CREATE TABLE IF NOT EXISTS strategy_weekly_entries (
++    strategy_key VARCHAR(64) NOT NULL,
++    week_key VARCHAR(10) NOT NULL,
++    execution_id VARCHAR(96) NOT NULL,
++    decision_id VARCHAR(64) NOT NULL DEFAULT '',
++    owner_id CHAR(32) NOT NULL,
++    executor_fencing_token BIGINT UNSIGNED NOT NULL,
++    gate_fencing_token BIGINT UNSIGNED NOT NULL,
++    status VARCHAR(16) NOT NULL,
++    attempt_count INT UNSIGNED NOT NULL DEFAULT 1,
++    claimed_at DATETIME(3) NOT NULL,
++    completed_at DATETIME(3) NULL,
++    order_ticket BIGINT UNSIGNED NOT NULL DEFAULT 0,
++    deal_ticket BIGINT UNSIGNED NOT NULL DEFAULT 0,
++    retcode INT NOT NULL DEFAULT -1,
++    error_text VARCHAR(500) NOT NULL DEFAULT '',
++    updated_at DATETIME(3) NOT NULL,
++    PRIMARY KEY (strategy_key, week_key),
++    UNIQUE KEY uq_weekly_entry_execution (strategy_key, execution_id),
++    INDEX idx_weekly_entry_status (strategy_key, status, updated_at),
++    CONSTRAINT fk_weekly_entry_account
++        FOREIGN KEY (strategy_key)
++        REFERENCES monitor_accounts(account_key)
++        ON DELETE CASCADE
++) ENGINE=InnoDB;
++
++-- Backfill accepted entry claims from existing trade history. This prevents a
++-- missing local state file from causing another BUY in a historically traded week.
++INSERT IGNORE INTO strategy_weekly_entries (
++    strategy_key,
++    week_key,
++    execution_id,
++    decision_id,
++    owner_id,
++    executor_fencing_token,
++    gate_fencing_token,
++    status,
++    attempt_count,
++    claimed_at,
++    completed_at,
++    order_ticket,
++    deal_ticket,
++    retcode,
++    error_text,
++    updated_at
++)
++SELECT
++    strategy_key,
++    DATE_FORMAT(opened_at, '%x-W%v'),
++    CONCAT('MIGRATED-', position_ticket),
++    COALESCE(decision_id, ''),
++    '00000000000000000000000000000000',
++    0,
++    0,
++    'ACCEPTED',
++    1,
++    opened_at,
++    COALESCE(closed_at, opened_at),
++    position_ticket,
++    0,
++    10009,
++    'Backfilled from strategy_trades by v48 migration',
++    COALESCE(closed_at, opened_at)
++FROM strategy_trades
++WHERE opened_at IS NOT NULL
++  AND position_ticket > 0;
++
+diff --git a/install_v48.ps1 b/install_v48.ps1
+new file mode 100644
+index 0000000..9d19723
+--- /dev/null
++++ b/install_v48.ps1
+@@ -0,0 +1,88 @@
++param(
++    [Parameter(Mandatory = $false)]
++    [string]$RepoRoot = "D:\oppw",
++
++    [Parameter(Mandatory = $false)]
++    [string]$SourceRoot = ""
++)
++
++$ErrorActionPreference = "Stop"
++
++if ([string]::IsNullOrWhiteSpace($SourceRoot)) {
++    $SourceRoot = Split-Path -Parent $PSCommandPath
++}
++if (-not (Test-Path -LiteralPath $RepoRoot -PathType Container)) {
++    throw "Repository root does not exist: $RepoRoot"
++}
++if (-not (Test-Path -LiteralPath $SourceRoot -PathType Container)) {
++    throw "Package source root does not exist: $SourceRoot"
++}
++$repo = (Resolve-Path -LiteralPath $RepoRoot).Path
++$source = (Resolve-Path -LiteralPath $SourceRoot).Path
++
++$loopSource = Join-Path $source "mt5\oppw_mt5_continuous_v48.py"
++if (-not (Test-Path -LiteralPath $loopSource -PathType Leaf)) {
++    throw "v48 source not found: $loopSource"
++}
++
++$copies = @(
++    @{ Source = $loopSource; Target = (Join-Path $repo "mt5\oppw_mt5_continuous_v48.py") },
++    @{ Source = $loopSource; Target = (Join-Path $repo "mt5\oppw_mt5_continuous_v48_1.py") },
++    @{ Source = $loopSource; Target = (Join-Path $repo "mt5\oppw_mt5_continuous.py") },
++    @{ Source = $loopSource; Target = (Join-Path $repo "mt5\demo\oppw_mt5_continuous_v48.py") },
++    @{ Source = $loopSource; Target = (Join-Path $repo "mt5\demo\oppw_mt5_continuous_v48_1.py") },
++    @{ Source = $loopSource; Target = (Join-Path $repo "mt5\demo\oppw_mt5_continuous.py") },
++    @{ Source = $loopSource; Target = (Join-Path $repo "mt5\real\oppw_mt5_continuous_v48.py") },
++    @{ Source = $loopSource; Target = (Join-Path $repo "mt5\real\oppw_mt5_continuous_v48_1.py") },
++    @{ Source = $loopSource; Target = (Join-Path $repo "mt5\real\oppw_mt5_continuous.py") },
++    @{ Source = (Join-Path $source "mt5\oppw_mt5_config.example.py"); Target = (Join-Path $repo "mt5\oppw_mt5_config.example.py") },
++    @{ Source = (Join-Path $source "mt5\demo\oppw_mt5_config.example.py"); Target = (Join-Path $repo "mt5\demo\oppw_mt5_config.example.py") },
++    @{ Source = (Join-Path $source "mt5\real\oppw_mt5_config.example.py"); Target = (Join-Path $repo "mt5\real\oppw_mt5_config.example.py") },
++    @{ Source = (Join-Path $source "Mobile\backend\lib.php"); Target = (Join-Path $repo "Mobile\backend\lib.php") },
++    @{ Source = (Join-Path $source "Mobile\backend\ingest.php"); Target = (Join-Path $repo "Mobile\backend\ingest.php") },
++    @{ Source = (Join-Path $source "Mobile\backend\coordination.php"); Target = (Join-Path $repo "Mobile\backend\coordination.php") },
++    @{ Source = (Join-Path $source "Mobile\backend\events-ingest.php"); Target = (Join-Path $repo "Mobile\backend\events-ingest.php") },
++    @{ Source = (Join-Path $source "Mobile\backend\sql\migrate_v48_global_leases.sql"); Target = (Join-Path $repo "Mobile\backend\sql\migrate_v48_global_leases.sql") }
++)
++
++foreach ($item in $copies) {
++    if (-not (Test-Path -LiteralPath $item.Source -PathType Leaf)) {
++        throw "Required package file is missing: $($item.Source)"
++    }
++    $targetDirectory = Split-Path -Parent $item.Target
++    New-Item -ItemType Directory -Path $targetDirectory -Force | Out-Null
++    Copy-Item -LiteralPath $item.Source -Destination $item.Target -Force
++}
++
++# Old coordination files are not used by v48. Preserve them for audit instead
++# of deleting them. Private configs and strategy state files are never moved.
++$mt5Root = [System.IO.Path]::GetFullPath((Join-Path $repo "mt5"))
++$archive = Join-Path $mt5Root ("legacy-v47-coordination-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
++$legacyFiles = Get-ChildItem -LiteralPath $mt5Root -Recurse -File -ErrorAction SilentlyContinue |
++    Where-Object {
++        $_.Name -like "oppw_mt5*.lock" -or
++        $_.Name -like "oppw_mt5*.publisher.heartbeat.json" -or
++        $_.Name -like "oppw_monitor_equity_history*.events.jsonl" -or
++        $_.Name -like "oppw_monitor_equity_history*.events.jsonl.lock"
++    }
++
++foreach ($legacy in $legacyFiles) {
++    $resolved = [System.IO.Path]::GetFullPath($legacy.FullName)
++    if (-not $resolved.StartsWith($mt5Root + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
++        throw "Refusing to move a path outside the MT5 workspace: $resolved"
++    }
++    New-Item -ItemType Directory -Path $archive -Force | Out-Null
++    $relative = $resolved.Substring($mt5Root.Length).TrimStart(
++        [System.IO.Path]::DirectorySeparatorChar,
++        [System.IO.Path]::AltDirectorySeparatorChar
++    )
++    $safeName = $relative.Replace([System.IO.Path]::DirectorySeparatorChar, "__")
++    Move-Item -LiteralPath $resolved -Destination (Join-Path $archive $safeName) -Force
++}
++
++Write-Host "v48 source and backend files installed in $repo"
++Write-Host "Private account configs were not overwritten. Merge the new v48 coordination fields manually."
++Write-Host "Run the SQL migration before starting either process:"
++Write-Host "  Mobile\backend\sql\migrate_v48_global_leases.sql"
++Write-Host "Upload lib.php, ingest.php, coordination.php, and events-ingest.php to the backend."
++Write-Host "Start PUBLISHER first, then EXECUTOR."
+diff --git "a/tools\\validate_v48.py" "b/tools\\validate_v48.py"
+new file mode 100644
+index 0000000..ebb80d4
+--- /dev/null
++++ "b/tools\\validate_v48.py"
+@@ -0,0 +1,152 @@
++"""Offline structural validation for the OPPW MT5 v48 package."""
++
++from __future__ import annotations
++
++import ast
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[1]
++LOOP = ROOT / "mt5" / "oppw_mt5_continuous_v48.py"
++CONFIGS = [
++    ROOT / "mt5" / "oppw_mt5_config.example.py",
++    ROOT / "mt5" / "demo" / "oppw_mt5_config.example.py",
++    ROOT / "mt5" / "real" / "oppw_mt5_config.example.py",
++]
++
++
++def require(condition: bool, message: str) -> None:
++    if not condition:
++        raise AssertionError(message)
++
++
++for path in [LOOP, *CONFIGS]:
++    compile(path.read_text(encoding="utf-8-sig"), str(path), "exec")
++
++loop_text = LOOP.read_text(encoding="utf-8-sig")
++for forbidden in (
++    "InterProcessFileLock",
++    "PublisherPresence",
++    "SharedEventSpool",
++    "lock_file",
++    "event_spool_lock_timeout_seconds",
++    "publisher_heartbeat_interval_seconds",
++):
++    require(forbidden not in loop_text, f"obsolete filesystem coordination remains: {forbidden}")
++
++tree = ast.parse(loop_text)
++order_send_calls = [
++    node
++    for node in ast.walk(tree)
++    if isinstance(node, ast.Call)
++    and isinstance(node.func, ast.Attribute)
++    and isinstance(node.func.value, ast.Name)
++    and node.func.value.id == "mt5"
++    and node.func.attr == "order_send"
++]
++require(len(order_send_calls) == 3, f"expected 3 order_send surfaces, found {len(order_send_calls)}")
++
++functions = {
++    node.name: ast.get_source_segment(loop_text, node) or ""
++    for node in ast.walk(tree)
++    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
++}
++for function_name in ("send_buy", "modify_sltp", "close_position_market"):
++    source = functions.get(function_name, "")
++    require("acquire_trade_gate" in source, f"{function_name} does not acquire the trade gate")
++    require("validate_trade_gate" in source, f"{function_name} does not validate the trade gate")
++    require("mt5.order_send" in source, f"{function_name} has no MT5 send")
++
++send_buy = functions["send_buy"]
++require("claim_weekly_entry" in send_buy, "BUY has no durable weekly claim")
++require('"UNKNOWN" if order_send_started else "REJECTED"' in send_buy, "BUY ambiguity policy missing")
++
++worker_node = next(
++    node for node in ast.walk(tree)
++    if isinstance(node, ast.FunctionDef) and node.name == "worker"
++)
++for node in ast.walk(worker_node):
++    if not isinstance(node, (ast.With, ast.AsyncWith)):
++        continue
++    is_condition_lock = any(
++        isinstance(item.context_expr, ast.Attribute)
++        and isinstance(item.context_expr.value, ast.Name)
++        and item.context_expr.value.id == "self"
++        and item.context_expr.attr == "condition"
++        for item in node.items
++    )
++    if not is_condition_lock:
++        continue
++    require(
++        not any(
++            isinstance(child, ast.Call)
++            and isinstance(child.func, ast.Attribute)
++            and child.func.attr == "allowed_to_publish"
++            for child in ast.walk(node)
++        ),
++        "publisher ownership check/logging occurs while the event condition lock is held",
++    )
++
++for function_name in ("startup_reconcile", "log_status_if_needed"):
++    source = functions.get(function_name, "")
++    require(
++        "print_autotrading_banner" in source and "print_live_enabled_banner" in source,
++        f"{function_name} is missing AutoTrading/LIVE banners",
++    )
++    require(
++        source.index("print_autotrading_banner") < source.index("print_live_enabled_banner"),
++        f"{function_name} prints LIVE before AutoTrading",
++    )
++
++required_config_names = {
++    "coordination_url",
++    "events_ingest_url",
++    "coordination_timeout_seconds",
++    "role_lease_ttl_seconds",
++    "role_lease_heartbeat_seconds",
++    "role_lease_safety_margin_seconds",
++    "publisher_presence_check_interval_seconds",
++    "trade_gate_ttl_seconds",
++    "trade_gate_max_hold_seconds",
++}
++for config_path in CONFIGS:
++    config_text = config_path.read_text(encoding="utf-8")
++    config_tree = ast.parse(config_text)
++    config_class = next(
++        node for node in config_tree.body if isinstance(node, ast.ClassDef) and node.name == "Config"
++    )
++    fields = {
++        node.target.id
++        for node in config_class.body
++        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
++    }
++    require(required_config_names <= fields, f"{config_path.name} lacks v48 fields")
++    require("lock_file" not in fields, f"{config_path.name} still defines lock_file")
++
++backend_requirements = {
++    ROOT / "Mobile" / "backend" / "coordination.php": (
++        "acquireLease",
++        "renewLease",
++        "acquireTradeGate",
++        "validateTradeGate",
++        "claimWeeklyEntry",
++        "completeWeeklyEntry",
++    ),
++    ROOT / "Mobile" / "backend" / "events-ingest.php": (
++        "require_coordination_actor",
++        "strategy_events",
++    ),
++    ROOT / "Mobile" / "backend" / "ingest.php": ("require_coordination_actor",),
++    ROOT / "Mobile" / "backend" / "lib.php": ("strategy_runtime_leases",),
++}
++for path, markers in backend_requirements.items():
++    text = path.read_text(encoding="utf-8")
++    require(text.lstrip().startswith("<?php"), f"{path.name} is not a PHP endpoint")
++    for marker in markers:
++        require(marker in text, f"{path.name} lacks {marker}")
++
++migration = (ROOT / "Mobile" / "backend" / "sql" / "migrate_v48_global_leases.sql").read_text(encoding="utf-8")
++for marker in ("strategy_runtime_leases", "strategy_weekly_entries", "uq_weekly_entry_execution"):
++    require(marker in migration, f"migration lacks {marker}")
++
++print("OPPW v48 structural validation passed")
