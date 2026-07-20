@@ -59,7 +59,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-BUILD_ID = "2026-07-20-conservative-multiplier-v48.2"
+BUILD_ID = "2026-07-20-publication-lifecycle-v48.3"
 INSTANCE_MODE_EXECUTOR = "EXECUTOR"
 INSTANCE_MODE_PUBLISHER = "PUBLISHER"
 ACCOUNT_DEMO = "DEMO"
@@ -1012,11 +1012,39 @@ class MobileMonitorPublisher:
         snapshot_copy = json.loads(json.dumps(snapshot, separators=(",", ":")))
         self.update_equity_history(snapshot_copy, captured_at)
         strategy_decision = self.strategy_decision_for_persistence(snapshot_copy)
+        execution = (
+            snapshot_copy.get("execution")
+            if isinstance(snapshot_copy.get("execution"), dict)
+            else {}
+        )
+        execution_id = str(execution.get("executionId", ""))
+        publication_event: Optional[dict[str, Any]] = None
+        outbound_events = list(events)
+        if execution_id and execution_id not in self.published_execution_ids:
+            publication_event = {
+                "time": captured_at,
+                "level": "INFO",
+                "name": "EXECUTION_STAGE",
+                "result": True,
+                "message": (
+                    f"EVENT EXECUTION_STAGE execution_id={execution_id} "
+                    "stage=PUBLISHED"
+                ),
+                "details": {
+                    "execution_id": execution_id,
+                    "decision_id": str(execution.get("decisionId", "")),
+                    "position_ticket": int(execution.get("positionTicket", 0) or 0),
+                    "stage": "PUBLISHED",
+                    "event_at": captured_at,
+                    "reason": "snapshot_persisted",
+                },
+            }
+            outbound_events.append(publication_event)
         payload: dict[str, Any] = {
             "accountKey": self.cfg.monitor_account_key,
             "capturedAt": captured_at,
             "snapshot": snapshot_copy,
-            "events": self.public_events(events),
+            "events": self.public_events(outbound_events),
             "coordination": self.coordinator.actor_payload(),
         }
         if strategy_decision is not None:
@@ -1038,40 +1066,8 @@ class MobileMonitorPublisher:
                     stored_id,
                     self.cfg.monitor_ingest_url,
                 )
-        execution = (
-            snapshot_copy.get("execution")
-            if isinstance(snapshot_copy.get("execution"), dict)
-            else {}
-        )
-        execution_id = str(execution.get("executionId", ""))
-        if execution_id and execution_id not in self.published_execution_ids:
+        if publication_event is not None:
             self.published_execution_ids.add(execution_id)
-            self.enqueue_event(
-                {
-                    "time": datetime.now(UTC).isoformat(),
-                    "level": "INFO",
-                    "name": "EXECUTION_STAGE",
-                    "result": True,
-                    "message": (
-                        f"EVENT EXECUTION_STAGE execution_id={execution_id} "
-                        "stage=PUBLISHED"
-                    ),
-                    "details": {
-                        "execution_id": execution_id,
-                        "decision_id": str(execution.get("decisionId", "")),
-                        "position_ticket": int(
-                            execution.get("positionTicket", 0) or 0
-                        ),
-                        "stage": "PUBLISHED",
-                        "event_at": datetime.now(UTC).isoformat(),
-                        "snapshot_generated_at": str(
-                            snapshot_copy.get("statusUpdate", {}).get(
-                                "generatedAt", ""
-                            )
-                        ),
-                    },
-                }
-            )
 
     def send_events_only(self, events: list[dict[str, Any]]) -> None:
         if not events:
