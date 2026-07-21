@@ -191,7 +191,7 @@ fun PositionScreen(state: UiState, onRetry: () -> Unit) {
                         )
                         if (breakEvenCheck.threshold > 0.0) {
                             Text(
-                                "Arms if completed signal close is below ${price(breakEvenCheck.threshold)} " +
+                                "Arms immediately after CH if the live signal price is below ${price(breakEvenCheck.threshold)} " +
                                     "(reference ${price(breakEvenCheck.signalReference)}).",
                                 color = TextSecondary,
                                 style = MaterialTheme.typography.labelMedium,

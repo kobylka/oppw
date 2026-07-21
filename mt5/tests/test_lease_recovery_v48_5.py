@@ -93,7 +93,7 @@ class LeaseRecoveryTests(unittest.TestCase):
 
 
 class BreakEvenScheduleTests(unittest.TestCase):
-    def strategy(self, *, armed=False, last_processed=""):
+    def strategy(self, *, armed=False, last_processed="", last_action=""):
         warsaw = ZoneInfo("Europe/Warsaw")
         state = SimpleNamespace(
             entry_price=29_000.0,
@@ -101,6 +101,7 @@ class BreakEvenScheduleTests(unittest.TestCase):
             break_even=armed,
             open_date="2026-07-20",
             last_close_processed_date=last_processed,
+            last_close_action_date=last_action,
         )
         strategy = SimpleNamespace(
             state=state,
@@ -108,7 +109,8 @@ class BreakEvenScheduleTests(unittest.TestCase):
             final_trading_day=lambda _opened: date(2026, 7, 24),
             is_trading_session_day=lambda day: day.weekday() < 5,
             session_times=lambda day: SimpleNamespace(
-                close_processing=datetime.combine(day, datetime_time(22, 1), warsaw)
+                close_processing=datetime.combine(day, datetime_time(22, 1), warsaw),
+                weekly_close=datetime.combine(day, datetime_time(21, 59, 57), warsaw),
             ),
             mt5_timestamp_to_local=lambda value: datetime.fromtimestamp(value, warsaw),
         )
@@ -120,7 +122,7 @@ class BreakEvenScheduleTests(unittest.TestCase):
         now = datetime(2026, 7, 20, 16, 0, tzinfo=ZoneInfo("Europe/Warsaw"))
         result = MODULE.OPPWContinuousStrategy.break_even_check_payload(strategy, position, now)
         self.assertEqual(result["status"], "SCHEDULED")
-        self.assertEqual(result["nextCheckAt"], "2026-07-21T22:01:00+02:00")
+        self.assertEqual(result["nextCheckAt"], "2026-07-21T21:59:57+02:00")
         self.assertAlmostEqual(result["threshold"], 29_100.0 * 0.996)
 
     def test_processed_close_advances_to_following_session(self):
@@ -128,7 +130,15 @@ class BreakEvenScheduleTests(unittest.TestCase):
         position = SimpleNamespace(price_open=29_000.0, time=0)
         now = datetime(2026, 7, 21, 22, 2, tzinfo=ZoneInfo("Europe/Warsaw"))
         result = MODULE.OPPWContinuousStrategy.break_even_check_payload(strategy, position, now)
-        self.assertEqual(result["nextCheckAt"], "2026-07-22T22:01:00+02:00")
+        self.assertEqual(result["nextCheckAt"], "2026-07-22T21:59:57+02:00")
+
+    def test_completed_post_ch_check_advances_immediately(self):
+        strategy = self.strategy(last_action="2026-07-21")
+        position = SimpleNamespace(price_open=29_000.0, time=0)
+        now = datetime(2026, 7, 21, 21, 59, 58, tzinfo=ZoneInfo("Europe/Warsaw"))
+        result = MODULE.OPPWContinuousStrategy.break_even_check_payload(strategy, position, now)
+        self.assertEqual(result["status"], "SCHEDULED")
+        self.assertEqual(result["nextCheckAt"], "2026-07-22T21:59:57+02:00")
 
     def test_armed_state_has_no_future_arming_check(self):
         strategy = self.strategy(armed=True)
@@ -137,6 +147,66 @@ class BreakEvenScheduleTests(unittest.TestCase):
         result = MODULE.OPPWContinuousStrategy.break_even_check_payload(strategy, position, now)
         self.assertEqual(result["status"], "ARMED")
         self.assertEqual(result["nextCheckAt"], "")
+
+
+class BreakEvenAfterChTests(unittest.TestCase):
+    def strategy(self, signal_price: float, *, final_day=False):
+        warsaw = ZoneInfo("Europe/Warsaw")
+        state = SimpleNamespace(
+            last_close_action_date="",
+            entry_signal_daily_open=100.0,
+            entry_price=100.0,
+            open_date="2026-07-20",
+            break_even=False,
+            save=lambda _path: None,
+        )
+        closed = []
+        emitted = []
+        strategy = SimpleNamespace(
+            state=state,
+            cfg=SimpleNamespace(
+                tpps=(0.007, 0.02, 0.05, 0.05, 0.05),
+                break_even_ratio=0.996,
+                state_file=Path("unused.json"),
+            ),
+            session_times=lambda day: SimpleNamespace(
+                weekly_close=datetime.combine(day, datetime_time(21, 59, 57), warsaw)
+            ),
+            final_trading_day=lambda day: day if final_day else date(2026, 7, 24),
+            live_signal_price=lambda: signal_price,
+            close_position_market=lambda _position, reason, _now: closed.append(reason) or True,
+            emit_status=lambda reason, _position, _now: emitted.append(reason),
+            log=SimpleNamespace(info=lambda *_args, **_kwargs: None),
+        )
+        return strategy, state, closed, emitted
+
+    def test_break_even_runs_after_false_ch(self):
+        strategy, state, closed, emitted = self.strategy(99.5)
+        now = datetime(2026, 7, 21, 21, 59, 57, tzinfo=ZoneInfo("Europe/Warsaw"))
+        result = MODULE.OPPWContinuousStrategy.maybe_execute_close_action(strategy, object(), now)
+        self.assertFalse(result)
+        self.assertEqual(closed, [])
+        self.assertTrue(state.break_even)
+        self.assertEqual(state.last_close_action_date, "2026-07-21")
+        self.assertEqual(emitted, ["BREAK_EVEN_ARMED"])
+
+    def test_ch_has_priority_over_break_even(self):
+        strategy, state, closed, emitted = self.strategy(103.0)
+        now = datetime(2026, 7, 21, 21, 59, 57, tzinfo=ZoneInfo("Europe/Warsaw"))
+        result = MODULE.OPPWContinuousStrategy.maybe_execute_close_action(strategy, object(), now)
+        self.assertTrue(result)
+        self.assertEqual(closed, ["CH"])
+        self.assertFalse(state.break_even)
+        self.assertEqual(emitted, [])
+
+    def test_weekly_to_has_priority_over_break_even(self):
+        strategy, state, closed, emitted = self.strategy(99.5, final_day=True)
+        now = datetime(2026, 7, 24, 21, 59, 57, tzinfo=ZoneInfo("Europe/Warsaw"))
+        result = MODULE.OPPWContinuousStrategy.maybe_execute_close_action(strategy, object(), now)
+        self.assertTrue(result)
+        self.assertEqual(closed, ["TO"])
+        self.assertFalse(state.break_even)
+        self.assertEqual(emitted, [])
 
 
 if __name__ == "__main__":

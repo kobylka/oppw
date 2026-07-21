@@ -60,7 +60,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-BUILD_ID = "2026-07-21-break-even-schedule-v48.6"
+BUILD_ID = "2026-07-21-break-even-after-ch-v48.7"
 INSTANCE_MODE_EXECUTOR = "EXECUTOR"
 INSTANCE_MODE_PUBLISHER = "PUBLISHER"
 ACCOUNT_DEMO = "DEMO"
@@ -1657,15 +1657,18 @@ class OPPWContinuousStrategy:
                 break
             if not self.is_trading_session_day(candidate):
                 continue
-            if self.state.last_close_processed_date == candidate.isoformat():
+            if (
+                self.state.last_close_action_date == candidate.isoformat()
+                or self.state.last_close_processed_date == candidate.isoformat()
+            ):
                 continue
-            check_at = self.session_times(candidate).close_processing
+            check_at = self.session_times(candidate).weekly_close
             return {
                 "status": "DUE" if check_at <= now else "SCHEDULED",
                 "nextCheckAt": check_at.isoformat(),
                 "signalReference": signal_reference,
                 "threshold": threshold,
-                "condition": "Arms when the completed signal close is below the threshold.",
+                "condition": "Runs immediately after CH and arms when the live signal price is below the threshold.",
             }
 
         return {
@@ -3885,7 +3888,11 @@ class OPPWContinuousStrategy:
         if self.state.exit_latched_reason:
             return
         entry = float(position.price_open)
-        if self.state.break_even and bar.high > entry * self.cfg.break_even_ratio:
+        # A break-even state armed immediately after today's CH check applies
+        # from the following session. Do not use an earlier high from the same
+        # day's already-forming M1 candle to trigger BH retroactively.
+        armed_during_today_close = self.state.last_close_action_date == bar.local_datetime.date().isoformat()
+        if self.state.break_even and not armed_during_today_close and bar.high > entry * self.cfg.break_even_ratio:
             self.arm_exit(position, "BH", now)
 
     def process_completed_close(self, current_day: date, now: datetime, position) -> None:
@@ -3903,15 +3910,6 @@ class OPPWContinuousStrategy:
         if self.state.prev_open > 0 and self.final_trading_day(current_day) == current_day:
             self.state.prev_full_week_change = trade_close_bar.close / self.state.prev_open - 1.0
             self.log.info("EVENT FULL_WEEK_CHANGE_UPDATED value=%.5f day=%s", self.state.prev_full_week_change, current_day)
-
-        if position is not None and not self.state.exit_latched_reason:
-            signal_reference = self.state.entry_signal_daily_open or self.state.entry_price
-            opened = parse_date(self.state.open_date)
-            if not self.state.break_even and opened is not None and current_day != opened and signal_close_bar.close < signal_reference * self.cfg.break_even_ratio:
-                self.state.break_even = True
-                self.state.save(self.cfg.state_file)
-                self.log.info("EVENT BREAK_EVEN_ARMED day=%s signal_close=%.5f threshold=%.5f", current_day, signal_close_bar.close, signal_reference * self.cfg.break_even_ratio)
-                self.emit_status("BREAK_EVEN_ARMED", position, now)
 
         self.state.last_trading_date = day_key
         self.state.last_close_processed_date = day_key
@@ -4021,6 +4019,29 @@ class OPPWContinuousStrategy:
                 self.state.save(self.cfg.state_file)
                 return True
             return False
+
+        opened = parse_date(self.state.open_date)
+        be_threshold = signal_reference * self.cfg.break_even_ratio
+        break_even = (
+            not self.state.break_even
+            and opened is not None
+            and current_day != opened
+            and signal_price < be_threshold
+        )
+        self.log.info(
+            "EVENT SCHEDULED_CHECK name=BREAK_EVEN result=%s time=%s scheduled=%s "
+            "signal_price=%.5f signal_open=%.5f ratio=%.6f threshold=%.5f after_ch=true",
+            break_even, now.isoformat(), session.weekly_close.isoformat(),
+            signal_price, signal_reference, self.cfg.break_even_ratio, be_threshold,
+        )
+        if break_even:
+            self.state.break_even = True
+            self.state.save(self.cfg.state_file)
+            self.log.info(
+                "EVENT BREAK_EVEN_ARMED day=%s signal_price=%.5f threshold=%.5f source=AFTER_CH",
+                current_day, signal_price, be_threshold,
+            )
+            self.emit_status("BREAK_EVEN_ARMED", position, now)
 
         self.state.last_close_action_date = day_key
         self.state.save(self.cfg.state_file)
