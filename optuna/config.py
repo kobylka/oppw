@@ -62,13 +62,13 @@ STUDY_NAME = (
 )
 
 INITIAL_BALANCE = 30_000.0
-LEVERAGE = 8.0
+LEVERAGE = 3.0
 
 # Existing general/disaster stop expressed as price ratio.
 # Example: 0.95 means exit at 5% below entry.
 DISASTER_STOP_RATIO = 0.9375
 
-BREAK_EVEN_RATIO = 0.9965
+BREAK_EVEN_RATIO = 0.996
 
 # Keep taxes and deposits disabled during parameter comparison.
 ALLOW_DEPOSITS = False
@@ -85,18 +85,18 @@ MIN_WORST_YEAR_CAGR = -0.9
 MIN_NEIGHBORHOOD_P10_CAGR = 0.0
 
 # Parameter ranges expressed in 0.001 increments.
-P1_RANGE = (5, 30)
-P2_RANGE = (5, 30)
-P3_RANGE = (5, 50)
-P4_RANGE = (5, 50)
-P5_RANGE = (5, 50)
+P1_RANGE = (7, 7)
+P2_RANGE = (7, 35)
+P3_RANGE = (50, 50)
+P4_RANGE = (50, 50)
+P5_RANGE = (50, 50)
 
-THURSDAY_STOP = (5, 15)
-FRIDAY_STOP = (5, 15)
+THURSDAY_STOP = (4, 4)
+FRIDAY_STOP = (4, 4)
 
 
-MINUTE_OPEN = (4, 1320)
-MINUTE_CLOSE = (4, 1334)
+MINUTE_OPEN = (934, 934)
+MINUTE_CLOSE = (1324, 1324)
 
 # This makes targets non-decreasing through the week.
 ENFORCE_NONDECREASING_TARGETS = True

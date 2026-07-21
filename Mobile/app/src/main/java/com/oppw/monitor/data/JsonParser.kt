@@ -369,6 +369,7 @@ object JsonParser {
         name = json.optString("name"), targetPrice = json.optDouble("targetPrice"), currentPrice = json.optDouble("currentPrice"),
         distancePoints = json.optDouble("distancePoints"), distancePercent = json.optDouble("distancePercent"), direction = json.optString("direction"),
         active = json.optBoolean("active", true), source = json.optString("source", "US100"),
+        potentialTpPercent = json.optNullableFiniteDouble("potentialTpPercent"),
     )
 
     private fun parseConditions(array: JSONArray): List<PriceCondition> = buildList { for (i in 0 until array.length()) add(parseCondition(array.getJSONObject(i))) }

@@ -1,0 +1,57 @@
+﻿diff --git a/Mobile/app/build.gradle.kts b/Mobile/app/build.gradle.kts
+index 9d4229c..d0cd74b 100644
+--- a/Mobile/app/build.gradle.kts
++++ b/Mobile/app/build.gradle.kts
+@@ -21,8 +21,8 @@ android {
+         applicationId = "com.oppw.monitor"
+         minSdk = 26
+         targetSdk = 37
+-        versionCode = 30
+-        versionName = "14.3.0"
++        versionCode = 31
++        versionName = "14.3.1"
+ 
+         buildConfigField("String", "API_BASE_URL", quoted(local("OPPW_API_BASE_URL", "https://example.com/oppw-api/")))
+         buildConfigField("long", "POLL_INTERVAL_MS", "5000L")
+diff --git a/Mobile/app/src/main/java/com/oppw/monitor/data/JsonParser.kt b/Mobile/app/src/main/java/com/oppw/monitor/data/JsonParser.kt
+index 87fc7fa..fb0c977 100644
+--- a/Mobile/app/src/main/java/com/oppw/monitor/data/JsonParser.kt
++++ b/Mobile/app/src/main/java/com/oppw/monitor/data/JsonParser.kt
+@@ -369,6 +369,7 @@ object JsonParser {
+         name = json.optString("name"), targetPrice = json.optDouble("targetPrice"), currentPrice = json.optDouble("currentPrice"),
+         distancePoints = json.optDouble("distancePoints"), distancePercent = json.optDouble("distancePercent"), direction = json.optString("direction"),
+         active = json.optBoolean("active", true), source = json.optString("source", "US100"),
++        potentialTpPercent = json.optNullableFiniteDouble("potentialTpPercent"),
+     )
+ 
+     private fun parseConditions(array: JSONArray): List<PriceCondition> = buildList { for (i in 0 until array.length()) add(parseCondition(array.getJSONObject(i))) }
+diff --git a/Mobile/app/src/main/java/com/oppw/monitor/data/Models.kt b/Mobile/app/src/main/java/com/oppw/monitor/data/Models.kt
+index 5172167..28eab27 100644
+--- a/Mobile/app/src/main/java/com/oppw/monitor/data/Models.kt
++++ b/Mobile/app/src/main/java/com/oppw/monitor/data/Models.kt
+@@ -190,6 +190,7 @@ data class PriceCondition(
+     val direction: String,
+     val active: Boolean,
+     val source: String,
++    val potentialTpPercent: Double? = null,
+ )
+ 
+ data class MarketWeekStats(
+diff --git a/Mobile/app/src/main/java/com/oppw/monitor/ui/screens/PositionScreen.kt b/Mobile/app/src/main/java/com/oppw/monitor/ui/screens/PositionScreen.kt
+index 7c84e4a..3a06091 100644
+--- a/Mobile/app/src/main/java/com/oppw/monitor/ui/screens/PositionScreen.kt
++++ b/Mobile/app/src/main/java/com/oppw/monitor/ui/screens/PositionScreen.kt
+@@ -245,6 +245,13 @@ private fun ConditionCard(title: String, condition: PriceCondition?, nearest: Bo
+             if (nearest) StatusChip("NEAREST")
+         }
+         MetricRow("Target price", price(condition.targetPrice), "Distance", "${price(condition.distancePoints)} pts\n(${String.format("%.2f", condition.distancePercent)}%)", if (nearest) PrimaryBlue else MaterialTheme.colorScheme.onSurface)
++        if (condition.name.equals("PRE H", true) && condition.potentialTpPercent != null) {
++            Text(
++                "Current potential TP level: ${percent(condition.potentialTpPercent)}",
++                color = if (nearest) PrimaryBlue else MaterialTheme.colorScheme.onSurface,
++                style = MaterialTheme.typography.titleMedium,
++            )
++        }
+         MetricRow("Current price", price(condition.currentPrice), "Direction", condition.direction.replaceFirstChar { it.uppercase() })
+     }
+ }

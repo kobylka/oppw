@@ -21,6 +21,42 @@ def date_diff(date_str1, date_str2):
         # Calculate the difference in days
         return (date2 - date1).days
 
+def weekly_trading_day_indices(quote_dates):
+        """Return each quote date's zero-based trading-session index in its ISO week."""
+        indices = {}
+        session_counts = {}
+
+        for date in sorted(quote_dates):
+                date_obj = datetime.strptime(date, "%Y%m%d").date()
+
+                if date_obj.weekday() > 4:
+                        continue
+
+                iso_year, iso_week, _ = date_obj.isocalendar()
+                week_key = (iso_year, iso_week)
+                session_index = session_counts.get(week_key, 0)
+                indices[date] = session_index
+                session_counts[week_key] = session_index + 1
+
+        return indices
+
+def interpolated_premarket_tpp(
+        start_tpp,
+        end_tpp,
+        bar_index,
+        first_bar_index=4,
+        cash_open_index=934,
+):
+        """Linearly scale TPP from midnight to the cash-session open."""
+        interval = cash_open_index - first_bar_index
+
+        if interval <= 0:
+                raise ValueError("cash_open_index must be greater than first_bar_index")
+
+        progress = (bar_index - first_bar_index) / interval
+        progress = min(max(progress, 0.0), 1.0)
+        return start_tpp + (end_tpp - start_tpp) * progress
+
 def plotting(equity_history,deposit_history):
         y = np.array(equity_history)
         z = np.array(deposit_history)
@@ -418,6 +454,11 @@ class Sim:
             
         thursday_SL = 1-thursday_stop
         friday_SL = 1-friday_stop
+
+        # TPP levels follow the order of actual trading sessions in each ISO
+        # week. For example, when Monday is absent, Tuesday receives tpps[0],
+        # Wednesday tpps[1], and subsequent sessions advance from there.
+        trading_day_indices = weekly_trading_day_indices(self.quotes.keys())
         
         for date in sorted(self.quotes):
             if date < start_date: continue
@@ -443,7 +484,8 @@ class Sim:
             opon = quotes[934][0]
             close = quotes[1324][3]
 
-            tpp = tpps[weekday_index]
+            trading_day_index = trading_day_indices[date]
+            tpp = tpps[min(trading_day_index, len(tpps) - 1)]
 
             close_price = 0
             close_date = date
@@ -557,6 +599,21 @@ class Sim:
                         close_price = o
                         trade_type = "BEPRE"
                         break
+                    elif(
+                        trading_day_index == 1
+                        and (is_tuesday or is_wednesday)
+                        and date_diff(open_date, date) == 1
+                    ):
+                        premarket_tpp = interpolated_premarket_tpp(
+                            tpps[0],
+                            tpps[1],
+                            i,
+                        )
+                        if(o > open_price * (1 + premarket_tpp)):
+                            close_date = date
+                            close_price = o
+                            trade_type = "PREOH"
+                            break
 
 
             if close_price > 0 and open_price > 0:
@@ -813,7 +870,7 @@ if __name__ == "__main__":
     
     tpps = [0.007,0.02,0.05,0.05,0.05]
     print(tpps)
-    result = sim.process(sim_i.quotes, "QQQ","20180413", "20260716", LEVERAGE, tpps, SL, BE, 0.004,0.004, 30000, False,False,True,True)
+    result = sim.process(sim_i.quotes, "QQQ","20220103", "20260716", LEVERAGE, tpps, SL, BE, 0.004,0.004, 30000, False,False,True,True)
     print(result)
     
     #1,79216 125

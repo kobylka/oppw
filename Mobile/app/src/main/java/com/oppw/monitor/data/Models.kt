@@ -190,6 +190,7 @@ data class PriceCondition(
     val direction: String,
     val active: Boolean,
     val source: String,
+    val potentialTpPercent: Double? = null,
 )
 
 data class MarketWeekStats(

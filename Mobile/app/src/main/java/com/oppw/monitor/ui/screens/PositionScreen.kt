@@ -245,6 +245,13 @@ private fun ConditionCard(title: String, condition: PriceCondition?, nearest: Bo
             if (nearest) StatusChip("NEAREST")
         }
         MetricRow("Target price", price(condition.targetPrice), "Distance", "${price(condition.distancePoints)} pts\n(${String.format("%.2f", condition.distancePercent)}%)", if (nearest) PrimaryBlue else MaterialTheme.colorScheme.onSurface)
+        if (condition.name.equals("PRE H", true) && condition.potentialTpPercent != null) {
+            Text(
+                "Current potential TP level: ${percent(condition.potentialTpPercent)}",
+                color = if (nearest) PrimaryBlue else MaterialTheme.colorScheme.onSurface,
+                style = MaterialTheme.typography.titleMedium,
+            )
+        }
         MetricRow("Current price", price(condition.currentPrice), "Direction", condition.direction.replaceFirstChar { it.uppercase() })
     }
 }

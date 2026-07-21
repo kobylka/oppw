@@ -535,6 +535,22 @@ class Sim:
                         close_price = o
                         trade_type = "BEPRE"
                         break
+                        
+                    elif(
+                        trading_day_index == 1
+                        and (is_tuesday or is_wednesday)
+                        and date_diff(open_date, date) == 1
+                    ):
+                        premarket_tpp = interpolated_premarket_tpp(
+                            tpps[0],
+                            tpps[1],
+                            i,
+                        )
+                        if(o > open_price * (1 + premarket_tpp)):
+                            close_date = date
+                            close_price = o
+                            trade_type = "PREOH"
+                            break
 
             if close_price > 0 and open_price > 0:
                 self.sell(i,open_price,close_price,open_date,close_date,trade_type,LEVERAGE,debug)
