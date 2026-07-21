@@ -86,7 +86,7 @@ MIN_NEIGHBORHOOD_P10_CAGR = 0.0
 
 # Parameter ranges expressed in 0.001 increments.
 P1_RANGE = (7, 7)
-P2_RANGE = (7, 35)
+P2_RANGE = (7, 43)
 P3_RANGE = (50, 50)
 P4_RANGE = (50, 50)
 P5_RANGE = (50, 50)
