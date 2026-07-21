@@ -17,6 +17,7 @@ Key execution rules
 * PUBLISHER mode is read-only and owns backend publishing while its global MySQL lease is active.
 * EXECUTOR automatically publishes when no global PUBLISHER lease is active.
 * EXECUTOR, PUBLISHER, and TRADE_EXECUTION ownership use MySQL leases with monotonically increasing fencing tokens.
+* Transport failures trigger fast lease-renewal retries; role activity is suspended and automatically reacquired after a longer outage.
 * Weekly BUY idempotency is enforced in MySQL before order_send; an uncertain send is never retried automatically.
 * No authoritative filesystem lock, heartbeat file, or cross-process event-spool lock is used.
 * Status publishes an institutional-style next-trade What-if ticket; while a position is open it assumes the current position closes first and never resizes that live position.
@@ -59,7 +60,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-BUILD_ID = "2026-07-20-market-stats-direct-margin-v48.4"
+BUILD_ID = "2026-07-21-lease-outage-recovery-v48.5"
 INSTANCE_MODE_EXECUTOR = "EXECUTOR"
 INSTANCE_MODE_PUBLISHER = "PUBLISHER"
 ACCOUNT_DEMO = "DEMO"
@@ -502,21 +503,45 @@ class BackendLeaseCoordinator:
                 f"owner={holder.get('ownerId', 'unknown')} host={holder.get('hostname', 'unknown')} "
                 f"pid={holder.get('pid', 'unknown')} expiresAt={holder.get('expiresAt', 'unknown')}"
             )
-        self.fencing_token = int(result.get("fencingToken", 0) or 0)
-        if self.fencing_token <= 0:
-            raise CoordinationError("Backend returned an invalid role fencing token")
-        self.valid_until_monotonic = time_module.monotonic() + float(result.get("ttlSeconds", self.cfg.role_lease_ttl_seconds))
-        self.thread = threading.Thread(target=self._renew_worker, name=f"oppw-{self.role.lower()}-lease", daemon=True)
-        self.thread.start()
+        self._activate_acquired_lease(result)
         self.log(
             logging.INFO,
             "EVENT GLOBAL_LEASE_ACQUIRED role=%s account=%s owner_id=%s fencing_token=%s host=%s pid=%s",
             self.role, self.account, self.owner_id, self.fencing_token, self.hostname, self.pid,
         )
 
+    def _activate_acquired_lease(self, result: dict[str, Any]) -> None:
+        fencing_token = int(result.get("fencingToken", 0) or 0)
+        if fencing_token <= 0:
+            raise CoordinationError("Backend returned an invalid role fencing token")
+        self.fencing_token = fencing_token
+        self.valid_until_monotonic = time_module.monotonic() + float(
+            result.get("ttlSeconds", self.cfg.role_lease_ttl_seconds)
+        )
+        self.lease_lost_event.clear()
+        self.thread = threading.Thread(
+            target=self._renew_worker,
+            name=f"oppw-{self.role.lower()}-lease",
+            daemon=True,
+        )
+        self.thread.start()
+
+    def _mark_role_lease_lost(self, error: Exception) -> None:
+        if self.lease_lost_event.is_set():
+            return
+        self.lease_lost_event.set()
+        self.log(
+            logging.CRITICAL,
+            "EVENT GLOBAL_LEASE_LOST role=%s account=%s owner_id=%s fencing_token=%s error=%s",
+            self.role, self.account, self.owner_id, self.fencing_token, error,
+        )
+
     def _renew_worker(self) -> None:
         interval = max(0.25, float(self.cfg.role_lease_heartbeat_seconds))
-        while not self.stop_event.wait(interval):
+        retry_interval = max(0.10, min(0.50, interval / 4.0))
+        next_delay = interval
+        while not self.stop_event.wait(next_delay):
+            next_delay = interval
             try:
                 result = self._request(
                     "renewLease",
@@ -534,24 +559,87 @@ class BackendLeaseCoordinator:
                 self.valid_until_monotonic = time_module.monotonic() + float(
                     result.get("ttlSeconds", self.cfg.role_lease_ttl_seconds)
                 )
+            except LeaseLostError as exc:
+                # An explicit backend rejection or changed fencing token is
+                # authoritative and must stop role activity immediately.
+                self._mark_role_lease_lost(exc)
+                return
             except Exception as exc:
                 now = time_module.monotonic()
                 if now >= self.valid_until_monotonic - float(self.cfg.role_lease_safety_margin_seconds):
-                    if not self.lease_lost_event.is_set():
-                        self.lease_lost_event.set()
-                        self.log(
-                            logging.CRITICAL,
-                            "EVENT GLOBAL_LEASE_LOST role=%s account=%s owner_id=%s fencing_token=%s error=%s",
-                            self.role, self.account, self.owner_id, self.fencing_token, exc,
-                        )
+                    self._mark_role_lease_lost(exc)
                     return
+                # Retry quickly after a transport timeout. Waiting another
+                # complete heartbeat here can consume the remaining TTL even
+                # when the backend has already recovered.
+                next_delay = retry_interval
                 if now - self.last_error_log_monotonic >= max(1.0, interval):
                     self.last_error_log_monotonic = now
+                    remaining = max(
+                        0.0,
+                        self.valid_until_monotonic
+                        - float(self.cfg.role_lease_safety_margin_seconds)
+                        - now,
+                    )
                     self.log(
                         logging.WARNING,
-                        "EVENT GLOBAL_LEASE_RENEW_DEFERRED role=%s account=%s fencing_token=%s error=%s",
-                        self.role, self.account, self.fencing_token, exc,
+                        "EVENT GLOBAL_LEASE_RENEW_DEFERRED role=%s account=%s fencing_token=%s "
+                        "retry_in=%.2fs safe_for=%.2fs error=%s",
+                        self.role, self.account, self.fencing_token, next_delay, remaining, exc,
                     )
+
+    def recover_role_lease(self, retry_seconds: float) -> bool:
+        """Suspend role work and reacquire global ownership without local locks."""
+        retry_delay = max(0.50, float(retry_seconds))
+        last_log = 0.0
+        while not self.stop_event.is_set():
+            if self.role_lease_valid():
+                return True
+
+            # A renewal request may still be in flight when the main loop
+            # reaches the safety boundary. Let it finish before attempting a
+            # second acquisition from this process.
+            if self.thread is not None and self.thread.is_alive():
+                self.thread.join(timeout=min(0.25, retry_delay))
+                continue
+            self.thread = None
+
+            try:
+                result = self._request(
+                    "acquireLease",
+                    leaseName=self.role,
+                    ttlSeconds=float(self.cfg.role_lease_ttl_seconds),
+                )
+                if bool(result.get("acquired", False)):
+                    old_token = self.fencing_token
+                    self._activate_acquired_lease(result)
+                    self.log(
+                        logging.INFO,
+                        "EVENT GLOBAL_LEASE_REACQUIRED role=%s account=%s owner_id=%s "
+                        "old_fencing_token=%s fencing_token=%s",
+                        self.role, self.account, self.owner_id, old_token, self.fencing_token,
+                    )
+                    return True
+                holder = result.get("holder") if isinstance(result.get("holder"), dict) else {}
+                detail = (
+                    f"held by owner={holder.get('ownerId', 'unknown')} "
+                    f"host={holder.get('hostname', 'unknown')} pid={holder.get('pid', 'unknown')} "
+                    f"expiresAt={holder.get('expiresAt', 'unknown')}"
+                )
+            except Exception as exc:
+                detail = str(exc)
+
+            now = time_module.monotonic()
+            if now - last_log >= max(5.0, retry_delay):
+                last_log = now
+                self.log(
+                    logging.WARNING,
+                    "EVENT GLOBAL_LEASE_REACQUIRE_WAIT role=%s account=%s retry_in=%.2fs reason=%s",
+                    self.role, self.account, retry_delay, detail,
+                )
+            if self.stop_event.wait(retry_delay):
+                break
+        return False
 
     def stop(self) -> None:
         self.stop_event.set()
@@ -4244,7 +4332,14 @@ class OPPWContinuousStrategy:
             except KeyboardInterrupt:
                 self.running = False
             except LeaseLostError:
-                self.log.exception("EVENT EXECUTOR_STOPPED_LEASE_LOST account=%s", self.account)
+                self.log.exception("EVENT EXECUTOR_SUSPENDED_LEASE_INVALID account=%s", self.account)
+                if self.coordinator.recover_role_lease(self.cfg.reconnect_seconds):
+                    self.log.info(
+                        "EVENT EXECUTOR_RESUMED_LEASE_REACQUIRED account=%s fencing_token=%s",
+                        self.account, self.coordinator.fencing_token,
+                    )
+                    self.startup_reconcile()
+                    continue
                 self.running = False
             except Exception:
                 self.log.exception("EVENT STRATEGY_CYCLE_FAILED role=EXECUTOR")
@@ -4288,7 +4383,14 @@ class OPPWContinuousStrategy:
             except KeyboardInterrupt:
                 self.running = False
             except LeaseLostError:
-                self.log.exception("EVENT PUBLISHER_STOPPED_LEASE_LOST account=%s", self.account)
+                self.log.exception("EVENT PUBLISHER_SUSPENDED_LEASE_INVALID account=%s", self.account)
+                if self.coordinator.recover_role_lease(self.cfg.reconnect_seconds):
+                    self.log.info(
+                        "EVENT PUBLISHER_RESUMED_LEASE_REACQUIRED account=%s fencing_token=%s",
+                        self.account, self.coordinator.fencing_token,
+                    )
+                    self.publisher_startup()
+                    continue
                 self.running = False
             except Exception:
                 self.log.exception("EVENT PUBLISHER_CYCLE_FAILED role=PUBLISHER")
@@ -4303,6 +4405,7 @@ class OPPWContinuousStrategy:
 
     def stop(self, *_args: Any) -> None:
         self.running = False
+        self.coordinator.stop_event.set()
 
 
 # -----------------------------------------------------------------------------

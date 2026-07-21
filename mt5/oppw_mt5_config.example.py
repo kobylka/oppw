@@ -137,9 +137,9 @@ class Config:
         "https://eloski.eu/oppw-backend/events-ingest.php",
     )
     coordination_timeout_seconds: float = env_float("OPPW_COORDINATION_TIMEOUT_SECONDS", 5.0)
-    role_lease_ttl_seconds: float = env_float("OPPW_ROLE_LEASE_TTL_SECONDS", 15.0)
+    role_lease_ttl_seconds: float = env_float("OPPW_ROLE_LEASE_TTL_SECONDS", 30.0)
     role_lease_heartbeat_seconds: float = env_float("OPPW_ROLE_LEASE_HEARTBEAT_SECONDS", 3.0)
-    role_lease_safety_margin_seconds: float = env_float("OPPW_ROLE_LEASE_SAFETY_MARGIN_SECONDS", 2.0)
+    role_lease_safety_margin_seconds: float = env_float("OPPW_ROLE_LEASE_SAFETY_MARGIN_SECONDS", 5.0)
     publisher_presence_check_interval_seconds: float = env_float(
         "OPPW_PUBLISHER_PRESENCE_CHECK_INTERVAL_SECONDS",
         1.0,
