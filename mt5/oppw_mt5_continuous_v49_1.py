@@ -65,7 +65,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-BUILD_ID = "2026-07-21-deferred-tsl-install-v49.2"
+BUILD_ID = "2026-07-21-tsl-cross-market-exit-v49.1"
 INSTANCE_MODE_EXECUTOR = "EXECUTOR"
 INSTANCE_MODE_PUBLISHER = "PUBLISHER"
 ACCOUNT_DEMO = "DEMO"
@@ -1415,7 +1415,6 @@ class OPPWContinuousStrategy:
         self.last_autotrading_signature: Optional[tuple[Any, ...]] = None
         self.last_autotrading_log_monotonic = 0.0
         self.last_stale_tick_log_monotonic: dict[str, float] = {}
-        self.tsl_install_deferred = False
         self._session_times_cache: dict[date, SessionTimes] = {}
         self.last_monitor_publish_monotonic = 0.0
         self.last_monitor_minute_key = ""
@@ -3790,18 +3789,13 @@ class OPPWContinuousStrategy:
         digits = int(info.digits)
         desired_sl = ceil_step(ceil_whole_sl(desired_sl), tick_size) if desired_sl else 0.0
         desired_tp = round(desired_tp, digits) if desired_tp else 0.0
-        tolerance = max(tick_size * 0.5, float(info.point) * 0.5)
-        sl_already_installed = (
-            desired_sl > 0
-            and float(getattr(position, "sl", 0.0) or 0.0) > 0
-            and not price_changed(float(position.sl), desired_sl, tolerance)
-        )
-        if desired_sl > 0 and not sl_already_installed:
+        if desired_sl > 0:
             tick = self.latest_tick(position.symbol)
             maximum_valid_sl = float(getattr(tick, "bid", 0.0) or 0.0) - self.broker_minimum_distance(info)
             if maximum_valid_sl > 0 and desired_sl >= maximum_valid_sl:
                 desired_sl = floor_step(math.floor(maximum_valid_sl - 1e-9), tick_size)
-        desired_sl = round(desired_sl, digits) if desired_sl > 0 else 0.0
+            desired_sl = round(desired_sl, digits)
+        tolerance = max(tick_size * 0.5, float(info.point) * 0.5)
 
         if not price_changed(float(position.sl), desired_sl, tolerance) and not price_changed(float(position.tp), desired_tp, tolerance):
             self.record_active_protection(position, desired_sl, desired_tp, sl_reason, tp_reason)
@@ -3991,11 +3985,6 @@ class OPPWContinuousStrategy:
         desired_sl, sl_reason = self.weekday_sl_target(position, now)
         desired_tp = float(position.price_open) * self.cfg.break_even_ratio if self.state.break_even else 0.0
         tp_reason = "BH" if desired_tp > 0 else ""
-        tolerance = max(tick_size * 0.5, float(info.point) * 0.5)
-        current_broker_sl = float(getattr(position, "sl", 0.0) or 0.0)
-        desired_sl = ceil_step(ceil_whole_sl(desired_sl), tick_size)
-        max_valid_sl = bid - distance
-        desired_sl_already_installed = False
 
         # TSL is an executable price threshold, not merely a desired broker
         # modification. If a gap or any other move places the live bid at or
@@ -4012,54 +4001,21 @@ class OPPWContinuousStrategy:
                     int(position.ticket), bid, tsl_threshold,
                     float(position.price_open), self.cfg.tsl_ratio,
                 )
-                self.tsl_install_deferred = False
                 return self.close_position_market(position, "TSL", now)
-
-            tsl_already_installed = (
-                current_broker_sl > 0
-                and current_broker_sl >= tsl_threshold - tolerance
-            )
-            if tsl_already_installed:
-                desired_sl = current_broker_sl
-                desired_sl_already_installed = True
-                self.tsl_install_deferred = False
-            elif desired_sl >= max_valid_sl:
-                if not self.tsl_install_deferred:
-                    self.log.warning(
-                        "EVENT TSL_INSTALL_DEFERRED ticket=%s bid=%.5f threshold=%.5f "
-                        "max_valid_sl=%.5f existing_sl=%.5f retry=next_cycle",
-                        int(position.ticket), bid, tsl_threshold, max_valid_sl, current_broker_sl,
-                    )
-                self.tsl_install_deferred = True
-                return True
-            else:
-                if self.tsl_install_deferred:
-                    self.log.info(
-                        "EVENT TSL_INSTALL_RETRY_READY ticket=%s bid=%.5f threshold=%.5f max_valid_sl=%.5f",
-                        int(position.ticket), bid, tsl_threshold, max_valid_sl,
-                    )
-                self.tsl_install_deferred = False
-        else:
-            self.tsl_install_deferred = False
 
         # Never weaken protection already present at the broker. The immutable
         # baseline is the floor; TSL and any existing tighter broker SL are the
         # only values allowed to raise it.
+        current_broker_sl = float(getattr(position, "sl", 0.0) or 0.0)
         if self.state.first_protection_confirmed and current_broker_sl > desired_sl:
             desired_sl = current_broker_sl
-            desired_sl_already_installed = True
             if sl_reason == "SL":
                 sl_reason = self.state.active_sl_reason or "BROKER_TIGHTER_SL"
 
-        if (
-            self.state.first_protection_confirmed
-            and current_broker_sl > 0
-            and not price_changed(current_broker_sl, desired_sl, tolerance)
-        ):
-            desired_sl_already_installed = True
-
+        max_valid_sl = bid - distance
         min_valid_tp = ask + distance
-        if not desired_sl_already_installed and desired_sl >= max_valid_sl:
+        desired_sl = ceil_step(ceil_whole_sl(desired_sl), tick_size)
+        if desired_sl >= max_valid_sl:
             self.arm_exit(position, "PROTECTION_SL_ALREADY_CROSSED", now)
             return False
         if desired_tp > 0 and desired_tp <= min_valid_tp:

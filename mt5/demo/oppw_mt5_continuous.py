@@ -7,7 +7,12 @@ Key execution rules
 * OH is always evaluated exactly once at cash open minus three seconds, independent of any BUY test offset.
 * CH and final-week TO are always evaluated at XNYS session close minus three seconds.
 * Every outgoing SL is normalized to a whole index point by rounding upward, then constrained to a broker-valid long-position level.
-* Hard SL and weekday SL levels are maintained with TRADE_ACTION_SLTP.
+* BUY carries a provisional hard SL calculated from the requested ask. Once the actual fill becomes visible, one definitive
+  hard SL is calculated from the actual fill price, filled volume, balance, leverage, and account-currency profit conversion.
+* The definitive hard SL and all calculation inputs are persisted immutably for that position. Routine cycles, deposits,
+  withdrawals, and later currency-conversion changes cannot recalculate or weaken it.
+* Hard SL restoration and deliberate Thursday TSL tightening are maintained with TRADE_ACTION_SLTP.
+* BEPRE, BEO, and BH submit fenced market SELL requests; they do not create an exit bracket as their primary action.
 * One configurable TSL is active continuously from Thursday date change through Friday and the weekend if needed.
 * TSL is a broker-side SL label; candle lows do not latch it.
 * Closed-trade leverage inputs come exclusively from the OPPW MySQL trade history through the authenticated backend endpoint.
@@ -60,7 +65,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-BUILD_ID = "2026-07-21-break-even-after-ch-v48.7"
+BUILD_ID = "2026-07-21-deferred-tsl-install-v49.2"
 INSTANCE_MODE_EXECUTOR = "EXECUTOR"
 INSTANCE_MODE_PUBLISHER = "PUBLISHER"
 ACCOUNT_DEMO = "DEMO"
@@ -219,7 +224,7 @@ def migrate_legacy_demo_runtime_files(original, scoped, account: str) -> None:
 
 @dataclass
 class StrategyState:
-    version: int = 6
+    version: int = 7
 
     last_trading_date: str = ""
     last_close_processed_date: str = ""
@@ -247,6 +252,23 @@ class StrategyState:
     active_tp_price: float = 0.0
     active_protection_updated_at: str = ""
     active_protection_position_identifier: int = 0
+
+    # Definitive filled-position hard-stop invariant. These values are written
+    # once when the actual position first becomes visible and remain immutable
+    # until that position closes.
+    immutable_hard_sl_position_identifier: int = 0
+    immutable_hard_sl_price: float = 0.0
+    immutable_hard_sl_entry_price: float = 0.0
+    immutable_hard_sl_volume: float = 0.0
+    immutable_hard_sl_balance: float = 0.0
+    immutable_hard_sl_leverage: int = 0
+    immutable_hard_sl_profit: float = 0.0
+    immutable_hard_sl_account_currency: str = ""
+    immutable_hard_sl_value_per_price_unit: float = 0.0
+    immutable_hard_sl_tick_size: float = 0.0
+    immutable_hard_sl_account_loss_cap_applied: bool = False
+    immutable_hard_sl_locked_at: str = ""
+    immutable_hard_sl_source: str = ""
 
     prev_change: float = 0.0
     prev_full_week_change: float = 0.0
@@ -1393,6 +1415,7 @@ class OPPWContinuousStrategy:
         self.last_autotrading_signature: Optional[tuple[Any, ...]] = None
         self.last_autotrading_log_monotonic = 0.0
         self.last_stale_tick_log_monotonic: dict[str, float] = {}
+        self.tsl_install_deferred = False
         self._session_times_cache: dict[date, SessionTimes] = {}
         self.last_monitor_publish_monotonic = 0.0
         self.last_monitor_minute_key = ""
@@ -1826,6 +1849,92 @@ class OPPWContinuousStrategy:
         from_comment = self.parse_leverage_from_comment(getattr(position, "comment", ""))
         return from_comment if from_comment in {8, 10} else 8
 
+    def clear_immutable_hard_stop(self) -> None:
+        self.state.immutable_hard_sl_position_identifier = 0
+        self.state.immutable_hard_sl_price = 0.0
+        self.state.immutable_hard_sl_entry_price = 0.0
+        self.state.immutable_hard_sl_volume = 0.0
+        self.state.immutable_hard_sl_balance = 0.0
+        self.state.immutable_hard_sl_leverage = 0
+        self.state.immutable_hard_sl_profit = 0.0
+        self.state.immutable_hard_sl_account_currency = ""
+        self.state.immutable_hard_sl_value_per_price_unit = 0.0
+        self.state.immutable_hard_sl_tick_size = 0.0
+        self.state.immutable_hard_sl_account_loss_cap_applied = False
+        self.state.immutable_hard_sl_locked_at = ""
+        self.state.immutable_hard_sl_source = ""
+
+    def immutable_hard_stop_matches(self, position) -> bool:
+        return (
+            int(self.state.immutable_hard_sl_position_identifier or 0) == self.position_identifier(position)
+            and float(self.state.immutable_hard_sl_price or 0.0) > 0
+        )
+
+    def lock_immutable_hard_stop(self, position, now: datetime, source: str) -> bool:
+        """Calculate and persist the definitive hard stop exactly once.
+
+        The calculation deliberately occurs only after MT5 exposes the filled
+        position, so it uses the actual average fill and filled volume. A
+        restart reloads the persisted values and never re-prices the baseline.
+        Legacy positions without v49 state receive a one-time recovery lock.
+        """
+        if self.immutable_hard_stop_matches(position):
+            return False
+
+        info = mt5.symbol_info(position.symbol)
+        account = mt5.account_info()
+        if info is None or account is None:
+            raise RuntimeError(f"Cannot lock immutable hard stop: {mt5.last_error()}")
+
+        identifier = self.position_identifier(position)
+        entry_price = float(position.price_open)
+        volume = float(position.volume)
+        balance = float(getattr(account, "balance", 0.0) or 0.0)
+        leverage = int(self.state.entry_leverage or self.infer_position_leverage(position))
+        tick_size = float(getattr(info, "trade_tick_size", 0.0) or getattr(info, "point", 0.0) or 0.01)
+        if identifier <= 0 or entry_price <= 0 or volume <= 0 or balance <= 0:
+            raise RuntimeError(
+                "Cannot lock immutable hard stop with invalid filled-position inputs: "
+                f"identifier={identifier} entry={entry_price} volume={volume} balance={balance}"
+            )
+
+        price, profit, cap_applied = self.capped_hard_stop(
+            position.symbol, volume, entry_price, balance, leverage, tick_size,
+        )
+        price = ceil_step(ceil_whole_sl(price), tick_size)
+        profit_raw = mt5.order_calc_profit(
+            mt5.ORDER_TYPE_BUY, position.symbol, volume, entry_price, price,
+        )
+        if profit_raw is None:
+            raise RuntimeError(f"order_calc_profit failed while locking immutable hard stop: {mt5.last_error()}")
+        profit = float(profit_raw)
+        price_distance = abs(entry_price - price)
+        account_value_per_price_unit = abs(profit) / price_distance if price_distance > 0 else 0.0
+
+        self.state.immutable_hard_sl_position_identifier = identifier
+        self.state.immutable_hard_sl_price = float(price)
+        self.state.immutable_hard_sl_entry_price = entry_price
+        self.state.immutable_hard_sl_volume = volume
+        self.state.immutable_hard_sl_balance = balance
+        self.state.immutable_hard_sl_leverage = leverage
+        self.state.immutable_hard_sl_profit = profit
+        self.state.immutable_hard_sl_account_currency = str(getattr(account, "currency", "") or "")
+        self.state.immutable_hard_sl_value_per_price_unit = account_value_per_price_unit
+        self.state.immutable_hard_sl_tick_size = tick_size
+        self.state.immutable_hard_sl_account_loss_cap_applied = bool(cap_applied)
+        self.state.immutable_hard_sl_locked_at = now.isoformat()
+        self.state.immutable_hard_sl_source = source
+        self.state.save(self.cfg.state_file)
+        self.log.info(
+            "EVENT IMMUTABLE_HARD_SL_LOCKED position_identifier=%s ticket=%s source=%s price=%.5f "
+            "entry=%.5f volume=%.8f balance_at_fill=%.2f leverage=%s profit_at_stop=%.2f "
+            "account_currency=%s account_value_per_price_unit=%.8f tick_size=%.8f account_loss_cap=%s",
+            identifier, int(position.ticket), source, price, entry_price, volume, balance, leverage, profit,
+            self.state.immutable_hard_sl_account_currency or "unknown", account_value_per_price_unit,
+            tick_size, bool(cap_applied),
+        )
+        return True
+
     def clear_current_position_exit_state(self, clear_last_exit: bool = True) -> None:
         self.state.exit_latched_reason = ""
         self.state.exit_latched_at = ""
@@ -1835,6 +1944,7 @@ class OPPWContinuousStrategy:
         self.state.active_tp_price = 0.0
         self.state.active_protection_updated_at = ""
         self.state.active_protection_position_identifier = 0
+        self.clear_immutable_hard_stop()
         if clear_last_exit:
             self.state.last_exit_reason = ""
             self.state.last_exit_price = 0.0
@@ -1979,11 +2089,17 @@ class OPPWContinuousStrategy:
 
         if previous_identifier != identifier:
             self.clear_current_position_exit_state(clear_last_exit=True)
+            self.state.first_protection_confirmed = False
             self.state.last_processed_bar_utc = 0
             self.state.last_close_processed_date = ""
+            lock_source = "POST_FILL" if self.state.active_execution_id else "RECOVERY_INITIALIZATION"
+            self.lock_immutable_hard_stop(position, now, lock_source)
             self.infer_active_protection(position, now)
-        elif force and self.state.active_protection_position_identifier != identifier:
-            self.infer_active_protection(position, now)
+        else:
+            if not self.immutable_hard_stop_matches(position):
+                self.lock_immutable_hard_stop(position, now, "RECOVERY_INITIALIZATION")
+            if force and self.state.active_protection_position_identifier != identifier:
+                self.infer_active_protection(position, now)
 
         self.state.save(self.cfg.state_file)
         self.log.info(
@@ -2786,6 +2902,12 @@ class OPPWContinuousStrategy:
             f"current P/L % leveraged: {leveraged_pnl_pct:.4%}",
             f"equity: {equity:.2f}{currency_suffix} deposit: {deposit:.2f}{currency_suffix}",
             f"SL: {float(position.sl):.5f} ({self.state.active_sl_reason or '-'})",
+            f"immutable hard SL: {float(self.state.immutable_hard_sl_price or 0.0):.5f} "
+            f"(locked={self.state.immutable_hard_sl_locked_at or '-'} source={self.state.immutable_hard_sl_source or '-'})",
+            f"immutable SL inputs: entry={float(self.state.immutable_hard_sl_entry_price or 0.0):.5f} "
+            f"volume={float(self.state.immutable_hard_sl_volume or 0.0):.8f} "
+            f"balance={float(self.state.immutable_hard_sl_balance or 0.0):.2f}{currency_suffix} "
+            f"profit={float(self.state.immutable_hard_sl_profit or 0.0):.2f}{currency_suffix}",
             f"TP: {float(position.tp):.5f} ({self.state.active_tp_reason or '-'})",
             f"break-even armed: {self.state.break_even}",
             f"exit latch: {self.state.exit_latched_reason or '-'}",
@@ -3075,6 +3197,21 @@ class OPPWContinuousStrategy:
                 "protectionRegime": regime,
                 "activeSlReason": self.state.active_sl_reason,
                 "activeTpReason": self.state.active_tp_reason,
+                "immutableHardStop": {
+                    "positionIdentifier": int(self.state.immutable_hard_sl_position_identifier or 0),
+                    "price": float(self.state.immutable_hard_sl_price or 0.0),
+                    "entryPrice": float(self.state.immutable_hard_sl_entry_price or 0.0),
+                    "volume": float(self.state.immutable_hard_sl_volume or 0.0),
+                    "balanceAtFill": float(self.state.immutable_hard_sl_balance or 0.0),
+                    "leverage": int(self.state.immutable_hard_sl_leverage or 0),
+                    "profitAtStop": float(self.state.immutable_hard_sl_profit or 0.0),
+                    "accountCurrency": self.state.immutable_hard_sl_account_currency,
+                    "accountValuePerPriceUnit": float(self.state.immutable_hard_sl_value_per_price_unit or 0.0),
+                    "tickSize": float(self.state.immutable_hard_sl_tick_size or 0.0),
+                    "accountLossCapApplied": bool(self.state.immutable_hard_sl_account_loss_cap_applied),
+                    "lockedAt": self.state.immutable_hard_sl_locked_at,
+                    "source": self.state.immutable_hard_sl_source,
+                },
             }
             conditions = self.monitor_all_conditions(position, now, bid, signal_price)
             closest = self.monitor_closest_condition(conditions)
@@ -3247,17 +3384,18 @@ class OPPWContinuousStrategy:
         return (100.0 - self.cfg.leverage_stop_points / leverage) / 100.0
 
     def hard_sl_price(self, position) -> float:
+        if self.immutable_hard_stop_matches(position):
+            return float(self.state.immutable_hard_sl_price)
+
+        # A missing v49 lock is exceptional and is repaired by position
+        # reconciliation or apply_standard_protection(). Keep this fallback
+        # deterministic and independent of current balance/conversion so a
+        # read-only status calculation can never create a moving baseline.
         leverage = self.state.entry_leverage or self.choose_leverage()
         entry = float(position.price_open)
         info = mt5.symbol_info(position.symbol)
         tick_size = float(getattr(info, "trade_tick_size", 0.0) or getattr(info, "point", 0.0) or 0.01) if info is not None else 0.01
-        account = mt5.account_info()
-        balance = float(getattr(account, "balance", 0.0) or 0.0) if account is not None else 0.0
-        volume = float(getattr(position, "volume", 0.0) or 0.0)
-        if volume <= 0 or balance <= 0:
-            return ceil_step(ceil_whole_sl(entry * self.hard_sl_ratio(leverage)), tick_size)
-        price, _profit, _capped = self.capped_hard_stop(position.symbol, volume, entry, balance, leverage, tick_size)
-        return price
+        return ceil_step(ceil_whole_sl(entry * self.hard_sl_ratio(leverage)), tick_size)
 
     def is_new_week_entry(self, current_day: date) -> bool:
         if current_day.weekday() not in (0, 1) or self.state.last_entry_week == iso_week_key(current_day):
@@ -3652,13 +3790,18 @@ class OPPWContinuousStrategy:
         digits = int(info.digits)
         desired_sl = ceil_step(ceil_whole_sl(desired_sl), tick_size) if desired_sl else 0.0
         desired_tp = round(desired_tp, digits) if desired_tp else 0.0
-        if desired_sl > 0:
+        tolerance = max(tick_size * 0.5, float(info.point) * 0.5)
+        sl_already_installed = (
+            desired_sl > 0
+            and float(getattr(position, "sl", 0.0) or 0.0) > 0
+            and not price_changed(float(position.sl), desired_sl, tolerance)
+        )
+        if desired_sl > 0 and not sl_already_installed:
             tick = self.latest_tick(position.symbol)
             maximum_valid_sl = float(getattr(tick, "bid", 0.0) or 0.0) - self.broker_minimum_distance(info)
             if maximum_valid_sl > 0 and desired_sl >= maximum_valid_sl:
                 desired_sl = floor_step(math.floor(maximum_valid_sl - 1e-9), tick_size)
-            desired_sl = round(desired_sl, digits)
-        tolerance = max(tick_size * 0.5, float(info.point) * 0.5)
+        desired_sl = round(desired_sl, digits) if desired_sl > 0 else 0.0
 
         if not price_changed(float(position.sl), desired_sl, tolerance) and not price_changed(float(position.tp), desired_tp, tolerance):
             self.record_active_protection(position, desired_sl, desired_tp, sl_reason, tp_reason)
@@ -3830,6 +3973,9 @@ class OPPWContinuousStrategy:
         if self.state.exit_latched_reason:
             return self.apply_exit_bracket(position, self.state.exit_latched_reason)
 
+        if not self.immutable_hard_stop_matches(position):
+            self.lock_immutable_hard_stop(position, now, "PROTECTION_RECONCILIATION")
+
         info = mt5.symbol_info(position.symbol)
         if info is None:
             raise RuntimeError(f"symbol_info({position.symbol}) failed: {mt5.last_error()}")
@@ -3845,26 +3991,86 @@ class OPPWContinuousStrategy:
         desired_sl, sl_reason = self.weekday_sl_target(position, now)
         desired_tp = float(position.price_open) * self.cfg.break_even_ratio if self.state.break_even else 0.0
         tp_reason = "BH" if desired_tp > 0 else ""
-
-        max_valid_sl = bid - distance
-        min_valid_tp = ask + distance
+        tolerance = max(tick_size * 0.5, float(info.point) * 0.5)
+        current_broker_sl = float(getattr(position, "sl", 0.0) or 0.0)
         desired_sl = ceil_step(ceil_whole_sl(desired_sl), tick_size)
-        if desired_sl >= max_valid_sl:
+        max_valid_sl = bid - distance
+        desired_sl_already_installed = False
+
+        # TSL is an executable price threshold, not merely a desired broker
+        # modification. If a gap or any other move places the live bid at or
+        # below the normalized TSL before it can be installed or restored,
+        # close immediately through the globally fenced market-SELL path.
+        if sl_reason == "TSL":
+            tsl_threshold = ceil_step(
+                ceil_whole_sl(float(position.price_open) * self.cfg.tsl_ratio), tick_size,
+            )
+            if bid <= tsl_threshold:
+                self.log.warning(
+                    "EVENT TSL_MARKET_EXIT_REQUIRED ticket=%s bid=%.5f threshold=%.5f "
+                    "entry=%.5f ratio=%.6f reason=threshold_crossed",
+                    int(position.ticket), bid, tsl_threshold,
+                    float(position.price_open), self.cfg.tsl_ratio,
+                )
+                self.tsl_install_deferred = False
+                return self.close_position_market(position, "TSL", now)
+
+            tsl_already_installed = (
+                current_broker_sl > 0
+                and current_broker_sl >= tsl_threshold - tolerance
+            )
+            if tsl_already_installed:
+                desired_sl = current_broker_sl
+                desired_sl_already_installed = True
+                self.tsl_install_deferred = False
+            elif desired_sl >= max_valid_sl:
+                if not self.tsl_install_deferred:
+                    self.log.warning(
+                        "EVENT TSL_INSTALL_DEFERRED ticket=%s bid=%.5f threshold=%.5f "
+                        "max_valid_sl=%.5f existing_sl=%.5f retry=next_cycle",
+                        int(position.ticket), bid, tsl_threshold, max_valid_sl, current_broker_sl,
+                    )
+                self.tsl_install_deferred = True
+                return True
+            else:
+                if self.tsl_install_deferred:
+                    self.log.info(
+                        "EVENT TSL_INSTALL_RETRY_READY ticket=%s bid=%.5f threshold=%.5f max_valid_sl=%.5f",
+                        int(position.ticket), bid, tsl_threshold, max_valid_sl,
+                    )
+                self.tsl_install_deferred = False
+        else:
+            self.tsl_install_deferred = False
+
+        # Never weaken protection already present at the broker. The immutable
+        # baseline is the floor; TSL and any existing tighter broker SL are the
+        # only values allowed to raise it.
+        if self.state.first_protection_confirmed and current_broker_sl > desired_sl:
+            desired_sl = current_broker_sl
+            desired_sl_already_installed = True
+            if sl_reason == "SL":
+                sl_reason = self.state.active_sl_reason or "BROKER_TIGHTER_SL"
+
+        if (
+            self.state.first_protection_confirmed
+            and current_broker_sl > 0
+            and not price_changed(current_broker_sl, desired_sl, tolerance)
+        ):
+            desired_sl_already_installed = True
+
+        min_valid_tp = ask + distance
+        if not desired_sl_already_installed and desired_sl >= max_valid_sl:
             self.arm_exit(position, "PROTECTION_SL_ALREADY_CROSSED", now)
             return False
         if desired_tp > 0 and desired_tp <= min_valid_tp:
-            self.arm_exit(position, "PROTECTION_TP_ALREADY_CROSSED", now)
-            return False
+            return self.close_position_market(position, "BH", now)
 
         desired_tp = ceil_step(desired_tp, tick_size) if desired_tp > 0 else 0.0
-        leverage = self.state.entry_leverage or self.choose_leverage()
-        account = mt5.account_info()
-        balance = float(getattr(account, "balance", 0.0) or 0.0) if account is not None else 0.0
-        _hard_price, _hard_profit, hard_cap_applied = self.capped_hard_stop(
-            position.symbol, float(position.volume), float(position.price_open), balance, leverage, tick_size,
-        ) if balance > 0 else (float(position.price_open) * self.hard_sl_ratio(leverage), 0.0, False)
-        reason_parts = [f"HARD_SL_L{leverage}_RATIO_{self.hard_sl_ratio(leverage):.6f}"]
-        if hard_cap_applied:
+        leverage = int(self.state.immutable_hard_sl_leverage or self.state.entry_leverage or self.choose_leverage())
+        reason_parts = [
+            f"IMMUTABLE_HARD_SL_L{leverage}_RATIO_{self.hard_sl_ratio(leverage):.6f}"
+        ]
+        if self.state.immutable_hard_sl_account_loss_cap_applied:
             reason_parts.append("ACCOUNT_LOSS_CAP_50_PERCENT")
         if sl_reason == "TSL":
             reason_parts.append(f"TSL_STOP_{self.cfg.tsl_stop:.4%}_RATIO_{self.cfg.tsl_ratio:.6f}")
@@ -3877,12 +4083,12 @@ class OPPWContinuousStrategy:
     def evaluate_premarket_open(self, position, bar: M1Bar, now: datetime) -> None:
         entry = float(position.price_open)
         if self.state.break_even and bar.open > entry * self.cfg.break_even_ratio:
-            self.arm_exit(position, "BEPRE", now)
+            self.close_position_market(position, "BEPRE", now)
 
     def evaluate_cash_open(self, position, bar: M1Bar, now: datetime) -> None:
         entry = float(position.price_open)
         if self.state.break_even and bar.open > entry * self.cfg.break_even_ratio:
-            self.arm_exit(position, "BEO", now)
+            self.close_position_market(position, "BEO", now)
 
     def evaluate_regular_bar(self, position, bar: M1Bar, now: datetime) -> None:
         if self.state.exit_latched_reason:
@@ -3893,7 +4099,7 @@ class OPPWContinuousStrategy:
         # day's already-forming M1 candle to trigger BH retroactively.
         armed_during_today_close = self.state.last_close_action_date == bar.local_datetime.date().isoformat()
         if self.state.break_even and not armed_during_today_close and bar.high > entry * self.cfg.break_even_ratio:
-            self.arm_exit(position, "BH", now)
+            self.close_position_market(position, "BH", now)
 
     def process_completed_close(self, current_day: date, now: datetime, position) -> None:
         day_key = current_day.isoformat()

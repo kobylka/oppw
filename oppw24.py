@@ -439,8 +439,6 @@ class Sim:
             qqq_open = quotes[0]
             qqq_close = quotes[3]
             
-            print(date)
-            
             openest = quotes[4][0]
             opon = quotes[934][0]
             close = quotes[1324][3]
@@ -559,6 +557,7 @@ class Sim:
                         close_price = o
                         trade_type = "BEPRE"
                         break
+
 
             if close_price > 0 and open_price > 0:
                 self.sell(i,open_price,close_price,open_date,close_date,trade_type,LEVERAGE,debug)
@@ -804,7 +803,7 @@ if __name__ == "__main__":
         sim.read_quotes(files, "20180413")
         sim.read_csv_quotes(files, "20180413")
     
-    LEVERAGE = 8
+    LEVERAGE = 3
     SL = (100-50/LEVERAGE)/100
     BE = 0.996
     
@@ -814,7 +813,7 @@ if __name__ == "__main__":
     
     tpps = [0.007,0.02,0.05,0.05,0.05]
     print(tpps)
-    result = sim.process(sim_i.quotes, "QQQ","20180413", "20260717", LEVERAGE, tpps, SL, BE, 0.004,0.004, 30000, False,False,True,True)
+    result = sim.process(sim_i.quotes, "QQQ","20180413", "20260716", LEVERAGE, tpps, SL, BE, 0.004,0.004, 30000, False,False,True,True)
     print(result)
     
     #1,79216 125
