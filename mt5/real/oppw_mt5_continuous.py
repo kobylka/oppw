@@ -60,7 +60,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-BUILD_ID = "2026-07-21-lease-outage-recovery-v48.5"
+BUILD_ID = "2026-07-21-break-even-schedule-v48.6"
 INSTANCE_MODE_EXECUTOR = "EXECUTOR"
 INSTANCE_MODE_PUBLISHER = "PUBLISHER"
 ACCOUNT_DEMO = "DEMO"
@@ -1621,6 +1621,61 @@ class OPPWContinuousStrategy:
             "nonEntryActionLeadSeconds": float(self.cfg.non_entry_action_lead_seconds),
         }
 
+    def break_even_check_payload(self, position, now: datetime) -> dict[str, Any]:
+        entry = float(getattr(position, "price_open", 0.0) or self.state.entry_price or 0.0)
+        signal_reference = float(self.state.entry_signal_daily_open or entry)
+        threshold = signal_reference * float(self.cfg.break_even_ratio) if signal_reference > 0 else 0.0
+        if self.state.break_even:
+            return {
+                "status": "ARMED",
+                "nextCheckAt": "",
+                "signalReference": signal_reference,
+                "threshold": threshold,
+                "condition": "Break-even protection is armed; live exit checks are active.",
+            }
+
+        opened = parse_date(self.state.open_date)
+        if opened is None:
+            opened_timestamp = float(getattr(position, "time", 0.0) or 0.0)
+            if opened_timestamp > 0:
+                opened = self.mt5_timestamp_to_local(opened_timestamp).date()
+        if opened is None:
+            return {
+                "status": "UNAVAILABLE",
+                "nextCheckAt": "",
+                "signalReference": signal_reference,
+                "threshold": threshold,
+                "condition": "Position opening date is unavailable.",
+            }
+
+        final_day = self.final_trading_day(opened)
+        for offset in range(15):
+            candidate = now.date() + timedelta(days=offset)
+            if candidate <= opened:
+                continue
+            if final_day is not None and candidate >= final_day:
+                break
+            if not self.is_trading_session_day(candidate):
+                continue
+            if self.state.last_close_processed_date == candidate.isoformat():
+                continue
+            check_at = self.session_times(candidate).close_processing
+            return {
+                "status": "DUE" if check_at <= now else "SCHEDULED",
+                "nextCheckAt": check_at.isoformat(),
+                "signalReference": signal_reference,
+                "threshold": threshold,
+                "condition": "Arms when the completed signal close is below the threshold.",
+            }
+
+        return {
+            "status": "NO_FURTHER_CHECK",
+            "nextCheckAt": "",
+            "signalReference": signal_reference,
+            "threshold": threshold,
+            "condition": "No further break-even arming check is scheduled before weekly TO.",
+        }
+
     def final_trading_day(self, day: date) -> Optional[date]:
         sessions = self.trading_sessions_for_week(day)
         return sessions[-1] if sessions else None
@@ -3013,6 +3068,7 @@ class OPPWContinuousStrategy:
                 "takeProfit": float(position.tp),
                 "potentialTakeProfit": potential_take_profit,
                 "breakEvenArmed": bool(self.state.break_even),
+                "breakEvenCheck": self.break_even_check_payload(position, now),
                 "protectionRegime": regime,
                 "activeSlReason": self.state.active_sl_reason,
                 "activeTpReason": self.state.active_tp_reason,
@@ -4086,7 +4142,9 @@ class OPPWContinuousStrategy:
                 "leveragedProfitPercent": 0.0, "exposure": 0.0, "requiredDeposit": deposit,
                 "effectiveLeverage": 0.0, "stopLoss": float(getattr(position, "sl", 0.0) or 0.0),
                 "takeProfit": float(getattr(position, "tp", 0.0) or 0.0), "potentialTakeProfit": 0.0,
-                "breakEvenArmed": bool(self.state.break_even), "protectionRegime": "Weekend idle",
+                "breakEvenArmed": bool(self.state.break_even),
+                "breakEvenCheck": self.break_even_check_payload(position, now),
+                "protectionRegime": "Weekend idle",
                 "activeSlReason": self.state.active_sl_reason, "activeTpReason": self.state.active_tp_reason,
             }
         plan_day = self.week_plan_day(now.date())

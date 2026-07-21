@@ -144,6 +144,14 @@ data class LastClosedTrade(
     val tradeClass: String  = "",
 )
 
+data class BreakEvenCheck(
+    val status: String = "UNAVAILABLE",
+    val nextCheckAt: String = "",
+    val signalReference: Double = 0.0,
+    val threshold: Double = 0.0,
+    val condition: String = "",
+)
+
 data class PositionStatus(
     val symbol: String,
     val side: String,
@@ -170,6 +178,7 @@ data class PositionStatus(
     val protectionRegime: String,
     val activeSlReason: String,
     val activeTpReason: String,
+    val breakEvenCheck: BreakEvenCheck = BreakEvenCheck(),
 )
 
 data class PriceCondition(

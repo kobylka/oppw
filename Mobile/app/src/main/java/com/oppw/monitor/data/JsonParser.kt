@@ -354,6 +354,15 @@ object JsonParser {
         leveragedProfitPercent = json.optDouble("leveragedProfitPercent"), exposure = json.optDouble("exposure"), effectiveLeverage = json.optDouble("effectiveLeverage"),
         stopLoss = json.optDouble("stopLoss"), takeProfit = json.optDouble("takeProfit"), potentialTakeProfit = json.optDouble("potentialTakeProfit"), breakEvenArmed = json.optBoolean("breakEvenArmed"),
         protectionRegime = json.optString("protectionRegime"), activeSlReason = json.optString("activeSlReason"), activeTpReason = json.optString("activeTpReason"),
+        breakEvenCheck = json.optJSONObject("breakEvenCheck")?.let(::parseBreakEvenCheck) ?: BreakEvenCheck(),
+    )
+
+    private fun parseBreakEvenCheck(json: JSONObject) = BreakEvenCheck(
+        status = json.optString("status", "UNAVAILABLE"),
+        nextCheckAt = json.optString("nextCheckAt"),
+        signalReference = json.optDouble("signalReference"),
+        threshold = json.optDouble("threshold"),
+        condition = json.optString("condition"),
     )
 
     private fun parseCondition(json: JSONObject) = PriceCondition(
