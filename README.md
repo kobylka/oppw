@@ -24,4 +24,6 @@ The command refuses a dirty repository, validates source-layout invariants, comp
 
 Generated archives, IDE files, runtime state, local credentials, account logs, and historical source copies are not committed.
 
-See [docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md) and [docs/STRATEGY_SPECIFICATION.md](docs/STRATEGY_SPECIFICATION.md).
+Every change begins with [AGENTS.md](AGENTS.md). Current system ownership and boundaries are documented in [docs/CURRENT_ARCHITECTURE.md](docs/CURRENT_ARCHITECTURE.md), with contract rules in [docs/CONTRACT_POLICY.md](docs/CONTRACT_POLICY.md) and the required checklist in [docs/CHANGE_CHECKLIST.md](docs/CHANGE_CHECKLIST.md).
+
+Release details are in [docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md), and strategy authority is described in [docs/STRATEGY_SPECIFICATION.md](docs/STRATEGY_SPECIFICATION.md).

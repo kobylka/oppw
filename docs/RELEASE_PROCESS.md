@@ -4,6 +4,8 @@
 
 `tools/release.ps1` is the only supported release path. It packages committed canonical sources rather than copying whichever versioned files happen to be present in an account directory.
 
+Repository work is governed by root `AGENTS.md`, `CURRENT_ARCHITECTURE.md`, `CONTRACT_POLICY.md`, the change checklist, and accepted records under `docs/decisions/`. The source validator requires these controls to remain present.
+
 ## Preconditions
 
 - Work from a clean Git commit.

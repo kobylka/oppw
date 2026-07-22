@@ -73,7 +73,7 @@ try {
     try {
         $tracked = @(& git ls-files)
         $selected = $tracked | Where-Object {
-            $_ -in @('VERSION','README.md','requirements_mt5') -or
+            $_ -in @('VERSION','README.md','AGENTS.md','requirements_mt5','.github/pull_request_template.md') -or
             $_ -like 'docs/*' -or
             $_ -in @(
                 'mt5/oppw_mt5_continuous.py','mt5/oppw_mt5_config.example.py',

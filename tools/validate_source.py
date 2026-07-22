@@ -35,6 +35,35 @@ def main() -> int:
     args = parser.parse_args()
     root = args.root.resolve()
     errors: list[str] = []
+    tracked = tracked_files(root)
+
+    required_governance = {
+        "AGENTS.md": ("Context reset protocol", "Canonical source rules", "Required completion gate"),
+        "docs/CURRENT_ARCHITECTURE.md": ("Canonical source map", "Data authority", "Runtime topology"),
+        "docs/CONTRACT_POLICY.md": ("Atomic contract change rule", "Compatibility rules", "Required tests"),
+        "docs/CHANGE_CHECKLIST.md": ("Before editing", "Implementation", "Validation"),
+        "docs/decisions/0001-canonical-source-and-release-pipeline.md": ("Status: Accepted",),
+        "docs/decisions/0002-immutable-mysql-authority.md": ("Status: Accepted",),
+        "docs/decisions/0003-atomic-cross-component-contracts.md": ("Status: Accepted",),
+        ".github/pull_request_template.md": ("Contract impact", "Architecture and safety", "Validation"),
+    }
+    for relative, markers in required_governance.items():
+        path = root / relative
+        if not path.is_file():
+            fail(errors, f"required project-governance file is missing: {relative}")
+            continue
+        content = path.read_text(encoding="utf-8")
+        for marker in markers:
+            if marker not in content:
+                fail(errors, f"project-governance marker missing from {relative}: {marker}")
+
+    agent_files = sorted(
+        path.relative_to(root).as_posix()
+        for path in tracked
+        if path.name.lower() == "agents.md"
+    )
+    if agent_files != ["AGENTS.md"]:
+        fail(errors, "exactly one root AGENTS.md must govern the repository; found: " + ", ".join(agent_files))
 
     version_file = root / "VERSION"
     version = version_file.read_text(encoding="utf-8").strip() if version_file.is_file() else ""
@@ -86,6 +115,20 @@ def main() -> int:
     if re.search(r"versionName\s*=\s*\"", android_text):
         fail(errors, "Android contains a hard-coded versionName")
 
+    release_script = root / "tools" / "release.ps1"
+    release_text = release_script.read_text(encoding="utf-8") if release_script.is_file() else ""
+    release_gates = (
+        "validate_source.py",
+        "-m unittest discover",
+        "Get-Command php",
+        "validate_mysql.ps1",
+        "testDebugUnitTest assembleDebug",
+        "git diff --cached --quiet",
+    )
+    for gate in release_gates:
+        if gate not in release_text:
+            fail(errors, f"release pipeline is missing required gate: {gate}")
+
     forbidden_worktree = []
     source_roots = (root / "mt5", root / "Mobile", root / "tools", root / "docs")
     for source_root in source_roots:
@@ -99,7 +142,6 @@ def main() -> int:
     if forbidden_worktree:
         fail(errors, "backup/diff artifacts found in source tree: " + ", ".join(forbidden_worktree))
 
-    tracked = tracked_files(root)
     forbidden_tracked: list[str] = []
     for path in tracked:
         relative = path.relative_to(root).as_posix()
