@@ -31,14 +31,14 @@ try {
     }
 
     $accountsStmt = $db->prepare(
-        'SELECT p.account_key
+        'SELECT p.account_key, p.can_control_service
            FROM monitor_pairing_code_accounts p
            JOIN monitor_accounts a ON a.account_key = p.account_key
           WHERE p.pairing_code_id = ? AND a.enabled = TRUE'
     );
     $accountsStmt->execute([(int)$pairing['id']]);
-    $accountKeys = array_map(static fn(array $row): string => (string)$row['account_key'], $accountsStmt->fetchAll());
-    if (!$accountKeys) {
+    $accountPermissions = $accountsStmt->fetchAll();
+    if (!$accountPermissions) {
         $db->rollBack();
         json_response(['ok' => false, 'error' => 'Pairing code has no enabled accounts'], 409);
     }
@@ -52,8 +52,10 @@ try {
     );
     $insertDevice->execute([$deviceId, $deviceName, token_hash($refreshToken), mysql_datetime($refreshExpires)]);
 
-    $permissionStmt = $db->prepare('INSERT INTO monitor_device_accounts(device_id, account_key) VALUES (?, ?)');
-    foreach ($accountKeys as $accountKey) $permissionStmt->execute([$deviceId, $accountKey]);
+    $permissionStmt = $db->prepare('INSERT INTO monitor_device_accounts(device_id, account_key, can_control_service) VALUES (?, ?, ?)');
+    foreach ($accountPermissions as $permission) {
+        $permissionStmt->execute([$deviceId, (string)$permission['account_key'], (bool)$permission['can_control_service'] ? 1 : 0]);
+    }
 
     $consume = $db->prepare('UPDATE monitor_pairing_codes SET consumed_at = UTC_TIMESTAMP(3) WHERE id = ?');
     $consume->execute([(int)$pairing['id']]);

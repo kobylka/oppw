@@ -38,9 +38,53 @@ object JsonParser {
                     connected = item.optBoolean("connected"),
                     health = item.optString("health", "UNKNOWN"),
                     lastSync = item.optString("lastSync"),
+                    canControlService = item.optBoolean("canControlService"),
                 ))
             }
         }
+    }
+
+    fun parseServiceControl(raw: String): ServiceControlStatus {
+        val root = JSONObject(raw)
+        requireOk(root)
+        fun process(value: JSONObject?): ManagedProcessStatus = ManagedProcessStatus(
+            running = value?.optBoolean("running") ?: false,
+            pid = value?.optLong("pid") ?: 0,
+            startedAt = value?.optString("startedAt").orEmpty(),
+            restartCount = value?.optInt("restartCount") ?: 0,
+            lastExitCode = value?.let { if (it.has("lastExitCode") && !it.isNull("lastExitCode")) it.optInt("lastExitCode") else null },
+        )
+        fun node(value: JSONObject?): SupervisorNodeStatus = SupervisorNodeStatus(
+            configured = value?.optBoolean("configured") ?: false,
+            online = value?.optBoolean("online") ?: false,
+            nodeId = value?.optString("nodeId").orEmpty(),
+            hostname = value?.optString("hostname").orEmpty(),
+            build = value?.optString("build").orEmpty(),
+            lastSeenAt = value?.optString("lastSeenAt").orEmpty(),
+        )
+        val roles = root.optJSONArray("roles") ?: JSONArray()
+        return ServiceControlStatus(
+            generatedAt = root.optString("generatedAt"),
+            accountKey = root.optString("accountKey"),
+            canControl = root.optBoolean("canControl"),
+            staleAfterSeconds = root.optInt("staleAfterSeconds"),
+            master = node(root.optJSONObject("master")),
+            backup = node(root.optJSONObject("backup")),
+            roles = buildList {
+                for (index in 0 until roles.length()) roles.getJSONObject(index).let { item ->
+                    add(ServiceRoleStatus(
+                        role = item.optString("role"),
+                        desiredRunning = item.optBoolean("desiredRunning"),
+                        revision = item.optLong("revision"),
+                        changedAt = item.optString("changedAt"),
+                        activeNodeRole = item.optString("activeNodeRole"),
+                        process = process(item.optJSONObject("process")),
+                        masterProcess = process(item.optJSONObject("masterProcess")),
+                        backupProcess = process(item.optJSONObject("backupProcess")),
+                    ))
+                }
+            },
+        )
     }
 
     fun parseResponse(raw: String): MonitorResponse {

@@ -29,6 +29,7 @@ return [
     'event_limit' => 50,
     'monitor_heartbeat_stale_seconds' => 180,
     'monitor_price_warning_seconds' => 60,
+    'service_supervisor_stale_seconds' => 20,
 
     // Leave true in production. Enable forwarded proto only behind a trusted proxy
     // that overwrites X-Forwarded-Proto itself.

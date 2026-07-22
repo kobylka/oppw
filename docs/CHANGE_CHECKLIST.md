@@ -26,6 +26,7 @@ Use the applicable items for every change. The release validator confirms that t
 - [ ] Lint affected PHP and confirm JSON endpoints return JSON on failure.
 - [ ] Apply the ordered schema/migrations to disposable MySQL when persistence is affected.
 - [ ] Run Android unit tests and build when Android or its contract is affected.
+- [ ] Compile the Windows service host and run supervisor tests when service supervision is affected.
 - [ ] Run the executable PHP/MySQL/API/Android contract when any cross-component contract is affected.
 - [ ] Run `git diff --check`.
 - [ ] Inspect the final diff and confirm no unrelated files or credentials are included.

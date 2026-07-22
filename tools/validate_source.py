@@ -47,6 +47,7 @@ def main() -> int:
         "docs/decisions/0003-atomic-cross-component-contracts.md": ("Status: Accepted",),
         "docs/decisions/0004-executable-cross-component-contracts.md": ("Status: Accepted",),
         "docs/decisions/0005-single-mt5-entrypoint.md": ("Status: Accepted", "Supersedes"),
+        "docs/decisions/0006-two-node-windows-supervision.md": ("Status: Accepted", "OPPWContinuousSupervisor"),
         ".github/pull_request_template.md": ("Contract impact", "Architecture and safety", "Validation"),
     }
     for relative, markers in required_governance.items():
@@ -107,6 +108,22 @@ def main() -> int:
     if "ACCOUNT_CONFIG_FALLBACKS" in canonical_text:
         fail(errors, "legacy MT5 account-config aliases are not allowed")
 
+    service_files = {
+        "service/oppw_windows_supervisor.py": ("ACCOUNTS = (\"DEMO\", \"REAL\")", "ROLES = (\"EXECUTOR\", \"PUBLISHER\")", "assignmentTtlSeconds"),
+        "service/OPPWServiceHost.cs": ("ServiceName = \"OPPWContinuousSupervisor\"", "CreateKillOnCloseJob"),
+        "service/install-service.ps1": ("ValidateSet('Master','Backup')", "delayed-auto", "ServiceCredential"),
+        "Mobile/backend/service-control.php": ("setDesiredState", "strategy_service_control_events", "MASTER_ONLINE"),
+    }
+    for relative, markers in service_files.items():
+        path = root / relative
+        if not path.is_file():
+            fail(errors, f"required service-supervision file is missing: {relative}")
+            continue
+        content = path.read_text(encoding="utf-8")
+        for marker in markers:
+            if marker not in content:
+                fail(errors, f"service-supervision marker missing from {relative}: {marker}")
+
     config_examples = sorted((root / "mt5").rglob("*config*.example.py"))
     expected_config = root / "mt5" / "oppw_mt5_config.example.py"
     if config_examples != [expected_config]:
@@ -159,6 +176,8 @@ def main() -> int:
         "validate_contracts.py",
         "testDebugUnitTest assembleDebug",
         "git diff --cached --quiet",
+        "service\\tests",
+        "build-service-host.ps1",
     )
     for gate in release_gates:
         if gate not in release_text:

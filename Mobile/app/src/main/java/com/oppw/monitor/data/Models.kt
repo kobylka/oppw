@@ -11,9 +11,48 @@ data class MonitorAccount(
     val connected: Boolean,
     val health: String,
     val lastSync: String,
+    val canControlService: Boolean = false,
 ) {
     val isReal: Boolean get() = accountType.equals("REAL", true)
 }
+
+data class SupervisorNodeStatus(
+    val configured: Boolean = false,
+    val online: Boolean = false,
+    val nodeId: String = "",
+    val hostname: String = "",
+    val build: String = "",
+    val lastSeenAt: String = "",
+)
+
+data class ManagedProcessStatus(
+    val running: Boolean = false,
+    val pid: Long = 0,
+    val startedAt: String = "",
+    val restartCount: Int = 0,
+    val lastExitCode: Int? = null,
+)
+
+data class ServiceRoleStatus(
+    val role: String,
+    val desiredRunning: Boolean,
+    val revision: Long,
+    val changedAt: String,
+    val activeNodeRole: String,
+    val process: ManagedProcessStatus,
+    val masterProcess: ManagedProcessStatus,
+    val backupProcess: ManagedProcessStatus,
+)
+
+data class ServiceControlStatus(
+    val generatedAt: String,
+    val accountKey: String,
+    val canControl: Boolean,
+    val staleAfterSeconds: Int,
+    val master: SupervisorNodeStatus,
+    val backup: SupervisorNodeStatus,
+    val roles: List<ServiceRoleStatus>,
+)
 
 data class MonitorResponse(
     val generatedAt: String,
@@ -556,6 +595,9 @@ data class UiState(
     val analyticsLoading: Boolean = false,
     val analyticsError: String? = null,
     val error: String? = null,
+    val serviceControl: ServiceControlStatus? = null,
+    val serviceControlLoading: Boolean = false,
+    val serviceControlError: String? = null,
     val lastSuccessfulFetchEpochMs: Long = 0L,
     val nowEpochMs: Long = System.currentTimeMillis(),
 )

@@ -8,6 +8,7 @@ OPPW has one canonical source tree and one project version.
 - `mt5/oppw_mt5_continuous.py` is the only MT5 loop implementation.
 - `mt5/oppw_mt5_config.example.py` is the only committed MT5 configuration template.
 - `Mobile/` contains the Android application and PHP/MySQL backend.
+- `service/` contains the canonical two-node Windows service supervisor and installer.
 - `Mobile/backend/sql/migration-order.txt` defines the database migration order.
 
 Run the canonical entrypoint directly and select the account explicitly:
@@ -18,6 +19,8 @@ python .\mt5\oppw_mt5_continuous.py --account real
 ```
 
 Private account configuration files remain local and ignored as `mt5/demo/demo_mt5_config.py` and `mt5/real/real_mt5_config.py`.
+
+Install the continuous supervisor from elevated PowerShell with `service/install-service.ps1`. Use `-NodeRole Master` on the preferred machine and `-NodeRole Backup` on the standby machine. Both services stay online; backend assignment and the existing global leases decide which node may run each account/role.
 
 ## Validate and release
 

@@ -9,6 +9,7 @@ MT5 loop → PHP ingestion → MySQL → PHP read API → Android parser/model/U
 ```
 
 It also applies to coordination leases, execution lifecycle records, strategy specifications, decisions, trades, fills, protection changes, cash flows, status, analytics, and authentication responses.
+Windows supervisor heartbeats, assignments, mobile desired-state commands, and account control permissions are included in this policy.
 
 ## Atomic contract change rule
 

@@ -1,0 +1,107 @@
+[CmdletBinding(SupportsShouldProcess=$true)]
+param(
+    [ValidateSet('Master','Backup')][string]$NodeRole = 'Master',
+    [string]$RepoRoot = (Split-Path -Parent $PSScriptRoot),
+    [string]$PythonPath = '',
+    [string]$ControlUrl = 'https://eloski.eu/oppw-backend/service-control.php',
+    [string]$WriteToken = '',
+    [PSCredential]$ServiceCredential,
+    [switch]$Uninstall
+)
+
+$ErrorActionPreference = 'Stop'
+$serviceName = 'OPPWContinuousSupervisor'
+function Invoke-ScCommand([string[]]$Arguments) {
+    & sc.exe @Arguments | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "sc.exe failed ($LASTEXITCODE): $($Arguments -join ' ')" }
+}
+if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    throw 'Run this installer from an elevated PowerShell session.'
+}
+if ($Uninstall) {
+    if ($PSCmdlet.ShouldProcess($serviceName, 'Stop and remove Windows service')) {
+        $existing = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+        if ($existing -and $existing.Status -ne 'Stopped') { Stop-Service -Name $serviceName -Force; $existing.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(40)) }
+        if ($existing) { Invoke-ScCommand @('delete', $serviceName) }
+    }
+    return
+}
+
+$root = (Resolve-Path -LiteralPath $RepoRoot -ErrorAction Stop).Path
+if ($PythonPath -eq '') {
+    $python = Get-Command python -ErrorAction SilentlyContinue
+    if (-not $python) { throw 'Python is required. Pass -PythonPath when it is not on PATH.' }
+    $PythonPath = $python.Source
+}
+$PythonPath = (Resolve-Path -LiteralPath $PythonPath -ErrorAction Stop).Path
+foreach ($relative in @('VERSION','mt5\oppw_mt5_continuous.py','mt5\demo\demo_mt5_config.py','mt5\real\real_mt5_config.py','service\oppw_windows_supervisor.py')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $root $relative) -PathType Leaf)) { throw "Required runtime file missing: $relative" }
+}
+if (-not $ControlUrl.StartsWith('https://', [StringComparison]::OrdinalIgnoreCase)) { throw 'ControlUrl must use HTTPS.' }
+if ($WriteToken -eq '') {
+    $secure = Read-Host 'Backend MT5 write token' -AsSecureString
+    $pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+    try { $WriteToken = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer) }
+    finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer) }
+}
+if ([string]::IsNullOrWhiteSpace($WriteToken)) { throw 'Backend write token is required.' }
+if (-not $ServiceCredential) {
+    $defaultUser = if ($env:USERDOMAIN) { "$env:USERDOMAIN\$env:USERNAME" } else { $env:USERNAME }
+    $ServiceCredential = Get-Credential -UserName $defaultUser -Message 'Windows account that owns the MetaTrader installations and private OPPW configuration'
+}
+if (-not $ServiceCredential) { throw 'A Windows service credential is required.' }
+
+$programData = Join-Path $env:ProgramData 'OPPW'
+$binDir = Join-Path $programData 'bin'
+$configPath = Join-Path $programData 'service.json'
+$hostPath = Join-Path $binDir 'OPPWServiceHost.exe'
+$supervisorPath = Join-Path $root 'service\oppw_windows_supervisor.py'
+New-Item -ItemType Directory -Path $programData -Force | Out-Null
+New-Item -ItemType Directory -Path $binDir -Force | Out-Null
+$packagedHost = Join-Path $root 'artifacts\OPPWServiceHost.exe'
+if (Test-Path -LiteralPath $packagedHost -PathType Leaf) {
+    Copy-Item -LiteralPath $packagedHost -Destination $hostPath -Force
+} else {
+    & (Join-Path $root 'service\build-service-host.ps1') -RepoRoot $root -OutputPath $hostPath
+}
+$existing = if (Test-Path -LiteralPath $configPath) { Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json } else { $null }
+$nodeId = if ($existing -and "$($existing.nodeRole)" -eq $NodeRole.ToUpperInvariant() -and "$($existing.nodeId)" -match '^[a-f0-9]{32}$') { "$($existing.nodeId)" } else { [Guid]::NewGuid().ToString('N') }
+$config = [ordered]@{
+    nodeId = $nodeId
+    nodeRole = $NodeRole.ToUpperInvariant()
+    repoRoot = $root
+    pythonPath = $PythonPath
+    controlUrl = $ControlUrl
+    writeToken = $WriteToken
+    pollSeconds = 3
+    assignmentTtlSeconds = 15
+    stopGraceSeconds = 15
+    restartDelaySeconds = 5
+    runtimeDir = (Join-Path $programData 'runtime')
+    logDir = (Join-Path $programData 'logs')
+}
+[IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json -Depth 4), [Text.UTF8Encoding]::new($false))
+$serviceAccount = $ServiceCredential.UserName
+& icacls.exe $programData /grant:r "${serviceAccount}:(OI)(CI)(M)" | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'Could not grant the service account access to OPPW runtime directories.' }
+& icacls.exe $configPath /inheritance:r /grant:r 'SYSTEM:(F)' 'Administrators:(F)' "${serviceAccount}:(R)" | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'Could not protect the private service configuration.' }
+
+$binaryPath = '"' + $hostPath + '" "' + $PythonPath + '" "' + $supervisorPath + '" "' + $configPath + '"'
+if ($PSCmdlet.ShouldProcess($serviceName, 'Create and start Windows service')) {
+    $existingService = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+    if ($existingService) {
+        if ($existingService.Status -ne 'Stopped') { Stop-Service -Name $serviceName -Force; $existingService.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(40)) }
+        Invoke-ScCommand @('delete', $serviceName)
+        for ($attempt = 0; $attempt -lt 30 -and (Get-Service -Name $serviceName -ErrorAction SilentlyContinue); $attempt++) { Start-Sleep -Milliseconds 500 }
+        if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) { throw 'Previous service registration did not finish deleting.' }
+    }
+    New-Service -Name $serviceName -BinaryPathName $binaryPath -DisplayName 'OPPW Continuous Supervisor' `
+        -Description 'Maintains the assigned DEMO/REAL executor and publisher processes with global master/backup fencing.' `
+        -StartupType Automatic -Credential $ServiceCredential | Out-Null
+    Invoke-ScCommand @('config', $serviceName, 'start=', 'delayed-auto')
+    Invoke-ScCommand @('failure', $serviceName, 'reset=', '86400', 'actions=', 'restart/5000/restart/15000/restart/30000')
+    Start-Service -Name $serviceName
+    (Get-Service -Name $serviceName).WaitForStatus('Running', [TimeSpan]::FromSeconds(40))
+}
+Write-Host "OPPW SERVICE INSTALLED role=$($NodeRole.ToUpperInvariant()) node=$nodeId config=$configPath"

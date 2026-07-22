@@ -260,7 +260,8 @@ function create_access_token(PDO $db, string $deviceId): array
 function allowed_accounts(PDO $db, string $deviceId): array
 {
     $stmt = $db->prepare(
-        'SELECT a.account_key, a.display_name, a.account_type, a.broker_account_id, a.is_default
+        'SELECT a.account_key, a.display_name, a.account_type, a.broker_account_id, a.is_default,
+                da.can_control_service
            FROM monitor_device_accounts da
            JOIN monitor_accounts a ON a.account_key = da.account_key
           WHERE da.device_id = ? AND a.enabled = TRUE
@@ -273,6 +274,7 @@ function allowed_accounts(PDO $db, string $deviceId): array
         'accountType' => (string)$row['account_type'],
         'brokerAccountId' => (string)$row['broker_account_id'],
         'isDefault' => (bool)$row['is_default'],
+        'canControlService' => (bool)$row['can_control_service'],
     ], $stmt->fetchAll());
 }
 

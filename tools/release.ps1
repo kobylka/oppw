@@ -39,6 +39,17 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'MT5 Python compilation failed.' }
     & $PythonPath -m unittest discover -s (Join-Path $root 'mt5\tests') -p 'test_*.py' -q
     if ($LASTEXITCODE -ne 0) { throw 'MT5 regression tests failed.' }
+    & $PythonPath -m py_compile (Join-Path $root 'service\oppw_windows_supervisor.py')
+    if ($LASTEXITCODE -ne 0) { throw 'Windows supervisor Python compilation failed.' }
+    & $PythonPath -m unittest discover -s (Join-Path $root 'service\tests') -p 'test_*.py' -q
+    if ($LASTEXITCODE -ne 0) { throw 'Windows supervisor regression tests failed.' }
+    $serviceHostValidation = Join-Path ([IO.Path]::GetTempPath()) ('OPPWServiceHost-validation-' + [Guid]::NewGuid().ToString('N') + '.exe')
+    try {
+        & powershell -ExecutionPolicy Bypass -File (Join-Path $root 'service\build-service-host.ps1') -RepoRoot $root -OutputPath $serviceHostValidation
+        if ($LASTEXITCODE -ne 0) { throw 'Windows service host compilation failed.' }
+    } finally {
+        if (Test-Path -LiteralPath $serviceHostValidation) { Remove-Item -LiteralPath $serviceHostValidation -Force }
+    }
 
     $php = Get-Command php -ErrorAction SilentlyContinue
     if (-not $php) { throw 'PHP CLI is required for release linting.' }
@@ -79,6 +90,7 @@ try {
             $_ -in @('VERSION','README.md','AGENTS.md','requirements_mt5','.github/pull_request_template.md') -or
             $_ -like 'docs/*' -or
             $_ -like 'contracts/*' -or
+            $_ -like 'service/*' -or
             $_ -in @(
                 'mt5/oppw_mt5_continuous.py','mt5/oppw_mt5_config.example.py',
                 'mt5/README.md'
@@ -114,6 +126,9 @@ try {
         $artifactDir = Join-Path $stage 'artifacts'
         New-Item -ItemType Directory -Path $artifactDir -Force | Out-Null
         Copy-Item -LiteralPath $apk -Destination (Join-Path $artifactDir "OPPW-Monitor-$version-debug.apk") -Force
+        & powershell -ExecutionPolicy Bypass -File (Join-Path $root 'service\build-service-host.ps1') `
+            -RepoRoot $root -OutputPath (Join-Path $artifactDir 'OPPWServiceHost.exe')
+        if ($LASTEXITCODE -ne 0) { throw 'Release Windows service host compilation failed.' }
 
         $manifestPath = Join-Path $stage 'RELEASE-MANIFEST.sha256'
         $manifest = Get-ChildItem -LiteralPath $stage -Recurse -File |

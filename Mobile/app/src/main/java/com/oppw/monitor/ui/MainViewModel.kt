@@ -99,6 +99,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { load(manual = true, forceAccounts = true) }
     }
 
+    fun setServiceDesiredState(role: String, desiredRunning: Boolean) {
+        val current = _uiState.value
+        val account = current.selectedAccountKey ?: return
+        if (current.serviceControlLoading || current.accounts.none { it.key == account && it.canControlService }) return
+        _uiState.value = current.copy(serviceControlLoading = true, serviceControlError = null)
+        viewModelScope.launch {
+            runCatching { repository.setServiceDesiredState(account, role, desiredRunning) }
+                .onSuccess { control ->
+                    val latest = _uiState.value
+                    if (latest.selectedAccountKey == account) {
+                        _uiState.value = latest.copy(serviceControl = control, serviceControlLoading = false, serviceControlError = null)
+                    }
+                }
+                .onFailure { error ->
+                    val latest = _uiState.value
+                    if (latest.selectedAccountKey == account) {
+                        _uiState.value = latest.copy(serviceControlLoading = false, serviceControlError = error.message ?: error::class.java.simpleName)
+                    }
+                }
+        }
+    }
+
     fun requestAccountSelection(accountKey: String) {
         val current = _uiState.value
         if (current.authStatus != AuthStatus.PAIRED || accountKey == current.selectedAccountKey) return
@@ -223,6 +245,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             selectedKey = resolveSelectedAccount(accounts, previous.selectedAccountKey)
             _uiState.value = _uiState.value.copy(accountsLoading = false, accounts = accounts, selectedAccountKey = selectedKey)
             val response = repository.refresh(selectedKey)
+            val serviceControlResult = runCatching { repository.serviceControl(selectedKey) }
             val now = System.currentTimeMillis()
             if (response.snapshot.connection.heartbeatStatus.equals("RUNNING", true) || response.snapshot.connection.heartbeatStatus.equals("WEEKEND IDLE", true)) {
                 staleNotificationShown = false
@@ -239,6 +262,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 lastSuccessfulFetchEpochMs = now,
                 nowEpochMs = now,
                 error = null,
+                serviceControl = serviceControlResult.getOrNull(),
+                serviceControlLoading = false,
+                serviceControlError = serviceControlResult.exceptionOrNull()?.message,
             )
         } catch (error: Throwable) {
             if (error is AuthenticationRequiredException) {

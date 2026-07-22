@@ -5127,6 +5127,11 @@ def parse_arguments(argv: Optional[list[str]] = None) -> argparse.Namespace:
         action="store_true",
         help="replace the default 1.765 growth multiplier with conservative leverage-bound sizing: 2.0 at L10 and 2.5 at L8",
     )
+    parser.add_argument(
+        "--service-stop-file",
+        default="",
+        help=argparse.SUPPRESS,
+    )
     return parser.parse_args(argv)
 
 
@@ -5156,6 +5161,24 @@ def main() -> int:
                 "Publisher mode cannot start because backend monitor publishing "
                 "is not configured"
             )
+        service_stop_file = Path(str(args.service_stop_file)).resolve() if str(args.service_stop_file).strip() else None
+        if service_stop_file is not None:
+            def watch_service_stop() -> None:
+                while strategy is not None and strategy.running:
+                    if service_stop_file.is_file():
+                        strategy.log.warning(
+                            "EVENT SERVICE_STOP_REQUESTED role=%s account=%s stop_file=%s",
+                            role, account, service_stop_file,
+                        )
+                        strategy.stop()
+                        return
+                    time_module.sleep(0.20)
+
+            threading.Thread(
+                target=watch_service_stop,
+                name=f"oppw-{account.lower()}-{role.lower()}-service-stop",
+                daemon=True,
+            ).start()
         signal.signal(signal.SIGINT, strategy.stop)
         if hasattr(signal, "SIGTERM"):
             signal.signal(signal.SIGTERM, strategy.stop)

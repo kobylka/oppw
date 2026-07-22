@@ -7,6 +7,7 @@ $session = require_mobile_session();
 $db = pdo();
 $stmt = $db->prepare(
     'SELECT a.account_key, a.display_name, a.account_type, a.broker_account_id, a.is_default,
+            da.can_control_service,
             s.payload, s.captured_at,
             (SELECT MAX(mp.captured_minute)
                FROM strategy_market_points mp
@@ -40,6 +41,7 @@ $accounts = array_map(static function (array $row) use ($now, $priceWarningSecon
         'accountType' => (string)$row['account_type'],
         'brokerAccountId' => (string)$row['broker_account_id'],
         'isDefault' => (bool)$row['is_default'],
+        'canControlService' => (bool)$row['can_control_service'],
         'connected' => (bool)($connection['connected'] ?? false),
         'health' => $health,
         'lastSync' => $capturedAt ? atom_datetime($capturedAt) : '',

@@ -68,12 +68,17 @@ try {
         mysql -N -uroot --database=oppw_monitor -e $tableQuery).Trim()
     if ($LASTEXITCODE -ne 0 -or [int]$tableCount -ne 8) { throw "Authority-table validation failed: $tableCount/8" }
 
+    $serviceTableQuery = "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='oppw_monitor' AND TABLE_NAME IN ('strategy_service_desired_state','strategy_supervisor_nodes','strategy_service_control_events');"
+    $serviceTableCount = (& $docker.Source exec $container `
+        mysql -N -uroot --database=oppw_monitor -e $serviceTableQuery).Trim()
+    if ($LASTEXITCODE -ne 0 -or [int]$serviceTableCount -ne 3) { throw "Service-supervision table validation failed: $serviceTableCount/3" }
+
     $triggerQuery = "SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA='oppw_monitor' AND TRIGGER_NAME REGEXP '_no_(update|delete)$';"
     $triggerCount = (& $docker.Source exec $container `
         mysql -N -uroot --database=oppw_monitor -e $triggerQuery).Trim()
-    if ($LASTEXITCODE -ne 0 -or [int]$triggerCount -ne 16) { throw "Immutability-trigger validation failed: $triggerCount/16" }
+    if ($LASTEXITCODE -ne 0 -or [int]$triggerCount -ne 18) { throw "Immutability-trigger validation failed: $triggerCount/18" }
 
-    Write-Host "MYSQL VALIDATION PASSED tables=$tableCount triggers=$triggerCount image=$Image"
+    Write-Host "MYSQL VALIDATION PASSED authority_tables=$tableCount service_tables=$serviceTableCount triggers=$triggerCount image=$Image"
 } finally {
     if ($containerStarted) {
         try {

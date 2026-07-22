@@ -19,6 +19,7 @@ This document describes the present repository. It is deliberately not a changel
 | Repository invariants | `tools/validate_source.py` |
 | Disposable MySQL validation | `tools/validate_mysql.ps1` |
 | Executable cross-component contracts | `contracts/` and `tools/validate_contracts.py` |
+| Windows service supervision | `service/` |
 
 ## Runtime topology
 
@@ -38,6 +39,8 @@ Android monitor (no trading capability)
 
 EXECUTOR and PUBLISHER ownership is coordinated globally through MySQL-backed leases exposed by `coordination.php`. Fencing tokens protect actions after takeover. Weekly entries use database idempotency so separate machines cannot legitimately claim the same account/week twice. Local filesystem locks are not authoritative.
 
+Two Windows machines run the canonical `OPPWContinuousSupervisor` service. The backend assigns all four Demo/Real Executor/Publisher children to the master while it is responsive, assigns them to the backup after master heartbeat expiry, and idles the backup when the master returns. This assignment controls process availability only; MySQL leases and fencing remain authoritative for role work and trading.
+
 ## Backend capability ownership
 
 | Capability | Canonical endpoint/module |
@@ -56,6 +59,7 @@ EXECUTOR and PUBLISHER ownership is coordinated globally through MySQL-backed le
 | Strategy specification history | `strategy-specifications.php` |
 | Immutable-record storage helpers | `authority.php` |
 | Cash-flow ingestion | `cashflow.php` |
+| Windows supervisor assignment and mobile desired state | `service-control.php` |
 
 Authentication endpoints live under `Mobile/backend/auth/`; push endpoints live under `Mobile/backend/push/`; administrative endpoints are not mobile read APIs.
 
@@ -74,6 +78,8 @@ Authentication endpoints live under `Mobile/backend/auth/`; push endpoints live 
 | Current mobile snapshot | `strategy_snapshots` projection |
 | Mobile analytics trade projection | `strategy_trades` |
 | Diagnostics and low-volume operational messages | `strategy_events` |
+| Desired process state and supervisor heartbeat | `strategy_service_desired_state` and `strategy_supervisor_nodes` |
+| Service-control audit | `strategy_service_control_events` |
 
 Immutable authority records use deterministic identifiers and reject mutation. Projections may be rebuilt or enriched; diagnostics must not become the only record of a business event.
 

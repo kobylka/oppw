@@ -10,7 +10,7 @@ Repository work is governed by root `AGENTS.md`, `CURRENT_ARCHITECTURE.md`, `CON
 
 - Work from a clean Git commit.
 - Keep populated MT5/backend/Android secrets outside Git.
-- Install Python, PHP CLI, Docker with a running engine, JDK 17, and the Android SDK.
+- Install Python, PHP CLI, Docker with a running engine, JDK 17, the Android SDK, and the Windows .NET Framework C# compiler.
 - Do not manually edit or commit `dist/`.
 
 ## Command
@@ -27,13 +27,13 @@ The release stops on any failure:
 
 1. repository is dirty or contains unignored files;
 2. source layout violates canonical-source rules;
-3. Python compilation or MT5 regression tests fail;
+3. Python compilation, MT5/supervisor regression tests, or Windows service-host compilation fail;
 4. a PHP file fails linting;
 5. the ordered SQL chain fails against temporary MySQL or immutable tables/triggers are missing;
 6. the executable publisher/PHP/MySQL/read-API/Android contract fails;
 7. Android unit tests or APK build fail.
 
-On success, `dist/OPPW-<VERSION>.zip` and its SHA-256 file are created. The archive contains a per-file SHA-256 manifest. `dist/` remains ignored because releases are reproducible outputs, not source.
+On success, `dist/OPPW-<VERSION>.zip` and its SHA-256 file are created. The archive contains the Android APK, compiled Windows service host, installer/supervisor sources, and a per-file SHA-256 manifest. `dist/` remains ignored because releases are reproducible outputs, not source.
 
 ## Version change
 

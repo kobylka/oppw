@@ -23,6 +23,12 @@ class ContractResponseParserTest {
     fun parsesActualBackendResponses() {
         val accounts = JsonParser.parseAccounts(response("accounts.json"))
         assertTrue(accounts.any { it.key == "DEMO" })
+        assertTrue(accounts.first { it.key == "DEMO" }.canControlService)
+
+        val serviceControl = JsonParser.parseServiceControl(response("service-control.json"))
+        assertTrue(serviceControl.canControl)
+        assertTrue(serviceControl.master.online)
+        assertEquals("MASTER", serviceControl.roles.first { it.role == "EXECUTOR" }.activeNodeRole)
 
         val status = JsonParser.parseResponse(response("status.json"))
         val position = assertNotNull(status.snapshot.position).let { status.snapshot.position!! }

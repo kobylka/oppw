@@ -12,6 +12,7 @@ import androidx.compose.material.icons.outlined.DeleteForever
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -35,8 +36,14 @@ import com.oppw.monitor.util.age
 import com.oppw.monitor.util.secondsSinceEpoch
 
 @Composable
-fun SettingsScreen(state: UiState, onRefresh: () -> Unit, onUnpair: () -> Unit) {
+fun SettingsScreen(
+    state: UiState,
+    onRefresh: () -> Unit,
+    onUnpair: () -> Unit,
+    onServiceDesiredState: (String, Boolean) -> Unit,
+) {
     var confirmUnpair by remember { mutableStateOf(false) }
+    var pendingServiceCommand by remember { mutableStateOf<Pair<String, Boolean>?>(null) }
     val selected = state.accounts.firstOrNull { it.key == state.selectedAccountKey }
     val retrievalAge = secondsSinceEpoch(state.lastSuccessfulFetchEpochMs, state.nowEpochMs)
 
@@ -44,6 +51,40 @@ fun SettingsScreen(state: UiState, onRefresh: () -> Unit, onUnpair: () -> Unit) 
         Modifier.fillMaxSize().padding(horizontal = 14.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        item {
+            AppCard(Modifier.fillMaxWidth()) {
+                SectionTitle("Continuous service control")
+                val control = state.serviceControl
+                if (state.serviceControlLoading && control == null) {
+                    CircularProgressIndicator()
+                } else if (control == null) {
+                    Text(state.serviceControlError ?: "Service status unavailable", color = DangerRed)
+                } else {
+                    Metric("Master", if (control.master.online) "ONLINE · ${control.master.hostname}" else "OFFLINE")
+                    Metric("Backup", if (control.backup.online) "ONLINE · ${control.backup.hostname}" else "OFFLINE")
+                    control.roles.forEach { role ->
+                        val actual = when {
+                            !role.desiredRunning -> "STOPPED BY CONTROL"
+                            role.process.running -> "RUNNING ON ${role.activeNodeRole} · PID ${role.process.pid}"
+                            role.activeNodeRole.isBlank() -> "NO SUPERVISOR ONLINE"
+                            else -> "STARTING ON ${role.activeNodeRole}"
+                        }
+                        Metric(role.role, actual)
+                        OutlinedButton(
+                            onClick = { pendingServiceCommand = role.role to !role.desiredRunning },
+                            enabled = control.canControl && !state.serviceControlLoading,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(if (role.desiredRunning) "Force stop ${role.role.lowercase()}" else "Force start ${role.role.lowercase()}")
+                        }
+                    }
+                    if (!control.canControl) {
+                        Text("This device is read-only. Pair it with service-control permission to enable these controls.", color = TextSecondary)
+                    }
+                    state.serviceControlError?.let { Text(it, color = DangerRed) }
+                }
+            }
+        }
         item {
             AppCard(Modifier.fillMaxWidth()) {
                 SectionTitle("Device")
@@ -118,6 +159,32 @@ fun SettingsScreen(state: UiState, onRefresh: () -> Unit, onUnpair: () -> Unit) 
                 TextButton(onClick = { confirmUnpair = false; onUnpair() }) { Text("Unpair", color = DangerRed) }
             },
             dismissButton = { TextButton(onClick = { confirmUnpair = false }) { Text("Cancel") } },
+        )
+    }
+
+    pendingServiceCommand?.let { (role, desiredRunning) ->
+        AlertDialog(
+            onDismissRequest = { pendingServiceCommand = null },
+            title = { Text(if (desiredRunning) "Start $role?" else "Stop $role?") },
+            text = {
+                Text(
+                    "This changes ${selected?.displayName ?: "the selected account"} globally. " +
+                        if (desiredRunning) {
+                            "The active master, or backup during failover, will start it."
+                        } else if (role == "EXECUTOR") {
+                            "Both master and backup will keep it stopped. Position management and scheduled trading logic will be suspended; existing broker-side protection remains."
+                        } else {
+                            "Both master and backup will keep it stopped. Mobile status publishing will be suspended."
+                        }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingServiceCommand = null
+                    onServiceDesiredState(role, desiredRunning)
+                }) { Text(if (desiredRunning) "Start" else "Stop", color = if (desiredRunning) MaterialTheme.colorScheme.primary else DangerRed) }
+            },
+            dismissButton = { TextButton(onClick = { pendingServiceCommand = null }) { Text("Cancel") } },
         )
     }
 }

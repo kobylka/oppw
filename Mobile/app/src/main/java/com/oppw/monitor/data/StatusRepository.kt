@@ -11,6 +11,9 @@ class StatusRepository(context: Context) {
     suspend fun pair(pairingCode: String, deviceName: String): AuthSession = api.pair(pairingCode, deviceName)
     suspend fun unpair() = api.unpair()
     suspend fun accounts(): List<MonitorAccount> = api.fetchAccounts()
+    suspend fun serviceControl(accountKey: String): ServiceControlStatus = api.fetchServiceControl(accountKey)
+    suspend fun setServiceDesiredState(accountKey: String, role: String, desiredRunning: Boolean): ServiceControlStatus =
+        api.setServiceDesiredState(accountKey, role, desiredRunning)
     suspend fun refresh(accountKey: String): MonitorResponse = api.fetchStatus(accountKey)
     suspend fun analytics(accountKey: String, filters: AnalyticsFilters): AnalyticsResponse = api.fetchAnalytics(accountKey, filters)
     suspend fun events(accountKey: String, beforeId: Long?, limit: Int, buySellOnly: Boolean, hideRoutine: Boolean, eventName: String?): EventPage = api.fetchEvents(accountKey, beforeId, limit, buySellOnly, hideRoutine, eventName)

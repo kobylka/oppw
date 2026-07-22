@@ -283,7 +283,7 @@ return [
   'access_token_ttl_seconds' => 900, 'refresh_token_ttl_days' => 90,
   'pairing_code_ttl_minutes' => 10, 'default_account_key' => 'DEMO',
   'event_limit' => 50, 'monitor_heartbeat_stale_seconds' => 180,
-  'monitor_price_warning_seconds' => 60, 'require_https' => false,
+  'monitor_price_warning_seconds' => 60, 'service_supervisor_stale_seconds' => 20, 'require_https' => false,
   'trust_forwarded_proto' => false, 'push_enabled' => false,
   'firebase_project_id' => '', 'firebase_service_account_file' => ''
 ];
@@ -293,7 +293,7 @@ return [
             docker_sql(docker, container, f"""
                 INSERT INTO monitor_pairing_codes(id,code_hash,label,expires_at)
                 VALUES (1,'{pairing_hash}','contract',UTC_TIMESTAMP(3)+INTERVAL 10 MINUTE);
-                INSERT INTO monitor_pairing_code_accounts(pairing_code_id,account_key) VALUES (1,'DEMO');
+                INSERT INTO monitor_pairing_code_accounts(pairing_code_id,account_key,can_control_service) VALUES (1,'DEMO',TRUE);
             """, docker_env)
 
             php_port = free_port()
@@ -322,6 +322,40 @@ return [
                 "pairingCode": PAIRING_CODE, "deviceName": "Contract validator",
             }, expected=(201,))
             access_token = pair["session"]["accessToken"]
+
+            processes = [
+                {"account": account, "role": role, "running": True, "pid": index + 10,
+                 "startedAt": iso(datetime.now(timezone.utc)), "restartCount": 1, "lastExitCode": None}
+                for index, (account, role) in enumerate(
+                    (("DEMO", "EXECUTOR"), ("DEMO", "PUBLISHER"), ("REAL", "EXECUTOR"), ("REAL", "PUBLISHER"))
+                )
+            ]
+            _, backup_first, _ = http_json("POST", base_url + "service-control.php", {
+                "action": "heartbeat", "nodeId": "b" * 32, "nodeRole": "BACKUP",
+                "hostname": "backup-contract", "pid": 2, "build": "oppw-" + version,
+                "startedAt": iso(datetime.now(timezone.utc)), "processes": processes,
+            }, token=WRITE_TOKEN)
+            if not all(item["assigned"] for item in backup_first["assignments"]):
+                raise AssertionError("backup was not assigned while master was absent")
+            _, master_heartbeat, _ = http_json("POST", base_url + "service-control.php", {
+                "action": "heartbeat", "nodeId": "a" * 32, "nodeRole": "MASTER",
+                "hostname": "master-contract", "pid": 1, "build": "oppw-" + version,
+                "startedAt": iso(datetime.now(timezone.utc)), "processes": processes,
+            }, token=WRITE_TOKEN)
+            if not all(item["assigned"] for item in master_heartbeat["assignments"]):
+                raise AssertionError("master was not assigned on return")
+            _, backup_idled, _ = http_json("POST", base_url + "service-control.php", {
+                "action": "heartbeat", "nodeId": "b" * 32, "nodeRole": "BACKUP",
+                "hostname": "backup-contract", "pid": 2, "build": "oppw-" + version,
+                "startedAt": iso(datetime.now(timezone.utc)), "processes": processes,
+            }, token=WRITE_TOKEN)
+            if any(item["assigned"] for item in backup_idled["assignments"]):
+                raise AssertionError("backup remained assigned after master returned")
+            http_json("POST", base_url + "service-control.php", {
+                "action": "heartbeat", "nodeId": "b" * 32, "nodeRole": "BACKUP",
+                "hostname": "master-contract", "pid": 2, "build": "oppw-" + version,
+                "startedAt": iso(datetime.now(timezone.utc)), "processes": processes,
+            }, token=WRITE_TOKEN, expected=(409,))
 
             _, lease, _ = http_json("POST", base_url + "coordination.php", {
                 "action": "acquireLease", "accountKey": "DEMO", "role": "PUBLISHER",
@@ -377,6 +411,40 @@ return [
             http_json("GET", base_url + "status.php?account=DEMO", expected=(401,))
 
             _, accounts, accounts_raw = http_json("GET", base_url + "accounts.php", token=access_token)
+            if not accounts["accounts"][0].get("canControlService"):
+                raise AssertionError("service-control pairing permission was not propagated")
+            request_id = "c" * 32
+            for _ in range(2):
+                _, stopped, _ = http_json("POST", base_url + "service-control.php", {
+                    "action": "setDesiredState", "requestId": request_id, "accountKey": "DEMO",
+                    "role": "EXECUTOR", "desiredRunning": False,
+                }, token=access_token)
+                if stopped.get("desiredRunning") is not False:
+                    raise AssertionError("mobile service stop was not persisted")
+            event_count = int(docker_sql(
+                docker, container,
+                "SELECT COUNT(*) FROM strategy_service_control_events WHERE request_id='" + request_id + "'",
+                docker_env,
+            ))
+            if event_count != 1:
+                raise AssertionError("service control request was not idempotent")
+            http_json("POST", base_url + "service-control.php", {
+                "action": "setDesiredState", "requestId": request_id, "accountKey": "DEMO",
+                "role": "EXECUTOR", "desiredRunning": True,
+            }, token=access_token, expected=(409,))
+            http_json("POST", base_url + "service-control.php", {
+                "action": "setDesiredState", "requestId": "e" * 32, "accountKey": "DEMO",
+                "role": "EXECUTOR", "desiredRunning": "false",
+            }, token=access_token, expected=(400,))
+            http_json("POST", base_url + "service-control.php", {
+                "action": "setDesiredState", "requestId": "d" * 32, "accountKey": "DEMO",
+                "role": "EXECUTOR", "desiredRunning": True,
+            }, token=access_token)
+            _, service_control, service_control_raw = http_json(
+                "GET", base_url + "service-control.php?account=DEMO", token=access_token,
+            )
+            if not service_control.get("canControl") or service_control.get("master", {}).get("online") is not True:
+                raise AssertionError("service-control status did not expose authorized master state")
             _, status, status_raw = http_json("GET", base_url + "status.php?account=DEMO", token=access_token)
             snapshot = status["snapshot"]
             if snapshot["position"]["ticket"] != expected["positionTicket"]:
@@ -450,6 +518,7 @@ return [
             (output / "accounts.json").write_text(accounts_raw, encoding="utf-8")
             (output / "status.json").write_text(status_raw, encoding="utf-8")
             (output / "analytics.json").write_text(analytics_raw, encoding="utf-8")
+            (output / "service-control.json").write_text(service_control_raw, encoding="utf-8")
             android_env = os.environ.copy()
             android_env["OPPW_CONTRACT_OUTPUT_DIR"] = str(output)
             if os.name == "nt":

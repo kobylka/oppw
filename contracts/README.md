@@ -5,8 +5,8 @@ These fixtures are consumed by `tools/validate_contracts.py`. They are not sampl
 The validator runs this boundary with real components:
 
 ```text
-fixture → coordination.php → ingest.php → disposable MySQL
-        → status.php / analytics.php / mobile-receipt.php
+fixture → coordination.php / service-control.php → ingest.php → disposable MySQL
+        → status.php / analytics.php / mobile-receipt.php / service-control.php
         → Android JsonParser JVM test
 ```
 

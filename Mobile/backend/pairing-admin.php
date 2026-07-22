@@ -34,7 +34,7 @@ function enabled_accounts(PDO $db): array
     return $stmt->fetchAll();
 }
 
-function generate_pairing_code(PDO $db, array $accountKeys, int $minutes, string $label): array
+function generate_pairing_code(PDO $db, array $accountKeys, int $minutes, string $label, bool $canControlService): array
 {
     $accountKeys = array_values(array_unique(array_filter(array_map(
         static fn(mixed $value): string => trim((string)$value),
@@ -64,14 +64,15 @@ function generate_pairing_code(PDO $db, array $accountKeys, int $minutes, string
             $insert->execute([pairing_code_hash($plain), $label, mysql_datetime($expires)]);
             $pairingCodeId = (int)$db->lastInsertId();
 
-            $permission = $db->prepare('INSERT INTO monitor_pairing_code_accounts(pairing_code_id, account_key) VALUES (?, ?)');
-            foreach ($accountKeys as $accountKey) $permission->execute([$pairingCodeId, $accountKey]);
+            $permission = $db->prepare('INSERT INTO monitor_pairing_code_accounts(pairing_code_id, account_key, can_control_service) VALUES (?, ?, ?)');
+            foreach ($accountKeys as $accountKey) $permission->execute([$pairingCodeId, $accountKey, $canControlService ? 1 : 0]);
 
             $db->commit();
             return [
                 'code' => $display,
                 'accounts' => $accountKeys,
                 'expires' => atom_datetime($expires),
+                'canControlService' => $canControlService,
             ];
         } catch (PDOException $e) {
             if ($db->inTransaction()) $db->rollBack();
@@ -92,6 +93,7 @@ $error = '';
 $label = '';
 $minutes = max(1, min(1440, (int)($cfg['pairing_code_ttl_minutes'] ?? 10)));
 $selectedAccounts = [];
+$canControlService = false;
 
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     enforce_rate_limit('pairing-admin', 10, 600);
@@ -104,9 +106,10 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
         $label = substr(trim((string)($_POST['label'] ?? '')), 0, 100);
         $minutes = max(1, min(1440, (int)($_POST['minutes'] ?? $minutes)));
         $selectedAccounts = is_array($_POST['accounts'] ?? null) ? $_POST['accounts'] : [];
+        $canControlService = isset($_POST['can_control_service']);
 
         try {
-            $result = generate_pairing_code($db, $selectedAccounts, $minutes, $label);
+            $result = generate_pairing_code($db, $selectedAccounts, $minutes, $label, $canControlService);
         } catch (Throwable $e) {
             error_log('OPPW pairing admin failed: ' . $e->getMessage());
             $error = $e->getMessage();
@@ -153,6 +156,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
                 <div class="code"><?= h((string)$result['code']) ?></div>
                 <div>Accounts: <?= h(implode(', ', $result['accounts'])) ?></div>
                 <div>Expires: <?= h((string)$result['expires']) ?></div>
+                <div>Service control: <?= $result['canControlService'] ? 'allowed' : 'read-only' ?></div>
             </div>
         <?php endif; ?>
 
@@ -170,6 +174,11 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
                     </label>
                 <?php endforeach; ?>
             </fieldset>
+
+            <label class="account">
+                <input type="checkbox" name="can_control_service" value="1" <?= $canControlService ? 'checked' : '' ?>>
+                <span>Allow this device to start and stop supervised OPPW instances</span>
+            </label>
 
             <label for="minutes">Validity in minutes</label>
             <input id="minutes" name="minutes" type="number" min="1" max="1440" value="<?= h((string)$minutes) ?>" required>

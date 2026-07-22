@@ -36,6 +36,20 @@ class StatusApiClient(context: Context, private val baseUrl: String = BuildConfi
     fun clearSession() = sessionStore.clear()
     suspend fun fetchAccounts(): List<MonitorAccount> = JsonParser.parseAccounts(authenticatedRequest("GET", "accounts.php").body)
 
+    suspend fun fetchServiceControl(accountKey: String): ServiceControlStatus =
+        JsonParser.parseServiceControl(authenticatedRequest("GET", "service-control.php?account=${encode(accountKey)}").body)
+
+    suspend fun setServiceDesiredState(accountKey: String, role: String, desiredRunning: Boolean): ServiceControlStatus {
+        authenticatedRequest("POST", "service-control.php", JSONObject()
+            .put("action", "setDesiredState")
+            .put("requestId", java.util.UUID.randomUUID().toString().replace("-", ""))
+            .put("accountKey", accountKey)
+            .put("role", role)
+            .put("desiredRunning", desiredRunning)
+            .toString())
+        return fetchServiceControl(accountKey)
+    }
+
     suspend fun fetchStatus(accountKey: String): MonitorResponse {
         val response = JsonParser.parseResponse(authenticatedRequest("GET", "status.php?account=${encode(accountKey)}").body)
         val execution = response.snapshot.execution
