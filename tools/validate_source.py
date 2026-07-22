@@ -207,6 +207,22 @@ def main() -> int:
     if endpoint_conflicts:
         fail(errors, "duplicate/legacy backend endpoints found: " + ", ".join(endpoint_conflicts))
 
+    backend_php = [path for path in backend.rglob("*.php") if path.is_file()]
+    deprecated_curl_cleanup = [
+        path.relative_to(root).as_posix()
+        for path in backend_php
+        if "curl_close(" in path.read_text(encoding="utf-8")
+    ]
+    if deprecated_curl_cleanup:
+        fail(
+            errors,
+            "PHP 8.5-deprecated curl_close calls found: " + ", ".join(deprecated_curl_cleanup),
+        )
+    lib_text = (backend / "lib.php").read_text(encoding="utf-8")
+    for marker in ("ini_set('display_errors', '0')", "ini_set('log_errors', '1')"):
+        if marker not in lib_text:
+            fail(errors, f"backend JSON error-output protection missing from lib.php: {marker}")
+
     for path in tracked:
         if not path.is_file() or path.stat().st_size > 2_000_000:
             continue

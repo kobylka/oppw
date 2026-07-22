@@ -1,6 +1,11 @@
 <?php
 declare(strict_types=1);
 
+if (PHP_SAPI !== 'cli') {
+    @ini_set('display_errors', '0');
+    @ini_set('log_errors', '1');
+}
+
 function config(): array
 {
     static $config;
@@ -403,7 +408,6 @@ function http_request_json(string $url, string $method, string $body, array $hea
     $raw = curl_exec($handle);
     $status = (int)curl_getinfo($handle, CURLINFO_RESPONSE_CODE);
     $error = curl_error($handle);
-    curl_close($handle);
     if ($raw === false) throw new RuntimeException('HTTP request failed: ' . $error);
     $decoded = [];
     if (trim((string)$raw) !== '') {
