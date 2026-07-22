@@ -60,6 +60,24 @@ class ContractResponseParserTest {
         }
 
         val analytics = JsonParser.parseAnalytics(response("analytics.json"))
+        analytics.summary.let { summary ->
+            assertEquals(0.1465, summary.averageWeeklyPreleverageReturnPercent, 0.01)
+            assertEquals(1.15, summary.averageWeeklyLeveragedReturnPercent, 0.01)
+            assertEquals(0.75, summary.averageWinPreleverageReturnPercent, 0.01)
+            assertEquals(7.5, summary.averageWinLeveragedReturnPercent, 0.01)
+            assertEquals(-0.6, summary.averageLossPreleverageReturnPercent, 0.01)
+            assertEquals(-6.0, summary.averageLossLeveragedReturnPercent, 0.01)
+            assertEquals(15.5568203721, summary.calmarRatio, 0.01)
+            assertEquals(1.2014590348, summary.omegaRatio, 0.01)
+            assertEquals(6.9714095393, summary.ulcerIndexPercent, 0.01)
+            assertEquals(-10.0, summary.valueAtRisk95Percent, 0.01)
+            assertEquals(-10.0, summary.expectedShortfall95Percent, 0.01)
+            assertEquals(5, summary.riskSampleDays)
+        }
+        mapOf("A" to 1.0, "B" to 0.5, "C" to -0.2, "D" to -1.0).forEach { (tradeClass, expectedReturn) ->
+            val value = analytics.tradeClasses.first { it.tradeClass == tradeClass }
+            assertEquals(expectedReturn, value.averagePreleverageReturnPercent, 0.01)
+        }
         val quality = analytics.executionQuality
         assertEquals(1, quality.decisionToSend.sampleCount)
         assertEquals(100.0, quality.decisionToSend.medianMs!!, 0.01)

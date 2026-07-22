@@ -138,9 +138,15 @@ object JsonParser {
                 initialBalance = summary.optDouble("initialBalance"), topUps = summary.optDouble("topUps"), withdrawals = summary.optDouble("withdrawals"),
                 netContributions = summary.optDouble("netContributions"), capitalAdjustedReturnPercent = summary.optDouble("capitalAdjustedReturnPercent"),
                 positiveWeeksPercent = summary.optDouble("positiveWeeksPercent"), averageWeeklyProfit = summary.optDouble("averageWeeklyProfit"),
+                averageWeeklyPreleverageReturnPercent = summary.optDoubleAny("averageWeeklyPreleverageReturnPercent"),
+                averageWeeklyLeveragedReturnPercent = summary.optDoubleAny("averageWeeklyLeveragedReturnPercent"),
                 totalSlippagePoints = summary.optDouble("totalSlippagePoints"), grossProfit = summary.optDouble("grossProfit"), grossLoss = summary.optDouble("grossLoss"),
                 profitFactor = summary.optDouble("profitFactor"), expectancy = summary.optDouble("expectancy"), medianProfit = summary.optDouble("medianProfit"),
                 averageWin = summary.optDouble("averageWin"), averageLoss = summary.optDouble("averageLoss"), payoffRatio = summary.optDouble("payoffRatio"),
+                averageWinPreleverageReturnPercent = summary.optDoubleAny("averageWinPreleverageReturnPercent"),
+                averageWinLeveragedReturnPercent = summary.optDoubleAny("averageWinLeveragedReturnPercent"),
+                averageLossPreleverageReturnPercent = summary.optDoubleAny("averageLossPreleverageReturnPercent"),
+                averageLossLeveragedReturnPercent = summary.optDoubleAny("averageLossLeveragedReturnPercent"),
                 averageDurationSeconds = summary.optDouble("averageDurationSeconds"), averageMfePoints = summary.optDouble("averageMfePoints"), averageMaePoints = summary.optDouble("averageMaePoints"),
                 averageEntrySlippagePoints = summary.optDouble("averageEntrySlippagePoints"), averageExitSlippagePoints = summary.optDouble("averageExitSlippagePoints"),
                 captureEfficiencyPercent = summary.optDouble("captureEfficiencyPercent"), edgeRatio = summary.optDouble("edgeRatio"), maxDrawdown = summary.optDouble("maxDrawdown"),
@@ -164,6 +170,7 @@ object JsonParser {
                 for (i in 0 until values.length()) values.getJSONObject(i).let { item -> add(WeeklyAnalytics(
                     week = item.optString("week"), trades = item.optInt("trades"), winRate = item.optDouble("winRate"), profit = item.optDouble("profit"),
                     bestTrade = item.optDouble("bestTrade"), worstTrade = item.optDouble("worstTrade"), averageDurationSeconds = item.optDouble("averageDurationSeconds"),
+                    preleverageReturnPercent = item.optDoubleAny("preleverageReturnPercent"), leveragedReturnPercent = item.optDoubleAny("leveragedReturnPercent"),
                 )) }
             },
             recentTrades = parseTrades(root.optJSONArray("recentTrades") ?: JSONArray()),

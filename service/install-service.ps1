@@ -5,6 +5,7 @@ param(
     [string]$PythonPath = '',
     [string]$ControlUrl = 'https://eloski.eu/oppw-backend/service-control.php',
     [string]$WriteToken = '',
+    [string]$RuntimeUser = '',
     [PSCredential]$ServiceCredential,
     [switch]$Uninstall
 )
@@ -15,6 +16,20 @@ function Invoke-ScCommand([string[]]$Arguments) {
     & sc.exe @Arguments | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "sc.exe failed ($LASTEXITCODE): $($Arguments -join ' ')" }
 }
+function Remove-ServiceRegistration([string]$Name) {
+    & sc.exe delete $Name | Out-Null
+    $exitCode = $LASTEXITCODE
+    # ERROR_SERVICE_MARKED_FOR_DELETE means an earlier delete already succeeded.
+    if ($exitCode -ne 0 -and $exitCode -ne 1072) {
+        throw "sc.exe failed ($exitCode): delete $Name"
+    }
+    for ($attempt = 0; $attempt -lt 60 -and (Get-Service -Name $Name -ErrorAction SilentlyContinue); $attempt++) {
+        Start-Sleep -Milliseconds 500
+    }
+    if (Get-Service -Name $Name -ErrorAction SilentlyContinue) {
+        throw "Service $Name is marked for deletion but is still held open. Close Services (services.msc), Computer Management, and any service-properties windows, then run the installer again."
+    }
+}
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw 'Run this installer from an elevated PowerShell session.'
 }
@@ -22,7 +37,7 @@ if ($Uninstall) {
     if ($PSCmdlet.ShouldProcess($serviceName, 'Stop and remove Windows service')) {
         $existing = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
         if ($existing -and $existing.Status -ne 'Stopped') { Stop-Service -Name $serviceName -Force; $existing.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(40)) }
-        if ($existing) { Invoke-ScCommand @('delete', $serviceName) }
+        if ($existing) { Remove-ServiceRegistration $serviceName }
     }
     return
 }
@@ -45,11 +60,16 @@ if ($WriteToken -eq '') {
     finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer) }
 }
 if ([string]::IsNullOrWhiteSpace($WriteToken)) { throw 'Backend write token is required.' }
-if (-not $ServiceCredential) {
-    $defaultUser = if ($env:USERDOMAIN) { "$env:USERDOMAIN\$env:USERNAME" } else { $env:USERNAME }
-    $ServiceCredential = Get-Credential -UserName $defaultUser -Message 'Windows account that owns the MetaTrader installations and private OPPW configuration'
+if ($RuntimeUser -eq '' -and $ServiceCredential) { $RuntimeUser = $ServiceCredential.UserName }
+if ($RuntimeUser -eq '') {
+    $RuntimeUser = if ($env:USERDOMAIN) { "$env:USERDOMAIN\$env:USERNAME" } else { $env:USERNAME }
 }
-if (-not $ServiceCredential) { throw 'A Windows service credential is required.' }
+try {
+    $runtimeIdentity = [Security.Principal.NTAccount]::new($RuntimeUser)
+    $runtimeSid = $runtimeIdentity.Translate([Security.Principal.SecurityIdentifier]).Value
+} catch {
+    throw "RuntimeUser '$RuntimeUser' is not a resolvable Windows account."
+}
 
 $programData = Join-Path $env:ProgramData 'OPPW'
 $binDir = Join-Path $programData 'bin'
@@ -77,30 +97,29 @@ $config = [ordered]@{
     assignmentTtlSeconds = 15
     stopGraceSeconds = 15
     restartDelaySeconds = 5
+    companionStartDelaySeconds = 70
     runtimeDir = (Join-Path $programData 'runtime')
     logDir = (Join-Path $programData 'logs')
 }
 [IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json -Depth 4), [Text.UTF8Encoding]::new($false))
-$serviceAccount = $ServiceCredential.UserName
-& icacls.exe $programData /grant:r "${serviceAccount}:(OI)(CI)(M)" | Out-Null
+$serviceAccount = $RuntimeUser
+& icacls.exe $programData /grant:r "*${runtimeSid}:(OI)(CI)(M)" | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Could not grant the service account access to OPPW runtime directories.' }
 # Numeric SIDs are stable across localized Windows installations. icacls
 # requires the leading asterisk when a trustee is supplied as a SID.
-& icacls.exe $configPath /inheritance:r /grant:r '*S-1-5-18:(F)' '*S-1-5-32-544:(F)' "${serviceAccount}:(R)" | Out-Null
+& icacls.exe $configPath /inheritance:r /grant:r '*S-1-5-18:(F)' '*S-1-5-32-544:(F)' "*${runtimeSid}:(R)" | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Could not protect the private service configuration.' }
 
-$binaryPath = '"' + $hostPath + '" "' + $PythonPath + '" "' + $supervisorPath + '" "' + $configPath + '"'
+$binaryPath = '"' + $hostPath + '" "' + $PythonPath + '" "' + $supervisorPath + '" "' + $configPath + '" "' + $runtimeSid + '"'
 if ($PSCmdlet.ShouldProcess($serviceName, 'Create and start Windows service')) {
     $existingService = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
     if ($existingService) {
         if ($existingService.Status -ne 'Stopped') { Stop-Service -Name $serviceName -Force; $existingService.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(40)) }
-        Invoke-ScCommand @('delete', $serviceName)
-        for ($attempt = 0; $attempt -lt 30 -and (Get-Service -Name $serviceName -ErrorAction SilentlyContinue); $attempt++) { Start-Sleep -Milliseconds 500 }
-        if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) { throw 'Previous service registration did not finish deleting.' }
+        Remove-ServiceRegistration $serviceName
     }
     New-Service -Name $serviceName -BinaryPathName $binaryPath -DisplayName 'OPPW Continuous Supervisor' `
         -Description 'Maintains the assigned DEMO/REAL executor and publisher processes with global master/backup fencing.' `
-        -StartupType Automatic -Credential $ServiceCredential | Out-Null
+        -StartupType Automatic | Out-Null
     Invoke-ScCommand @('config', $serviceName, 'start=', 'delayed-auto')
     Invoke-ScCommand @('failure', $serviceName, 'reset=', '86400', 'actions=', 'restart/5000/restart/15000/restart/30000')
     Start-Service -Name $serviceName

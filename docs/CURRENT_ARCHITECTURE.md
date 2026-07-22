@@ -1,12 +1,13 @@
 # Current architecture
 
-This document describes the present repository. It is deliberately not a changelog. Root `VERSION` supplies the current release identity.
+This document describes the present repository. It is deliberately not a changelog. Root `VERSION` supplies the product release identity; `Mobile/VERSION` independently supplies the Android application release identity.
 
 ## Canonical source map
 
 | Concern | Canonical location |
 |---|---|
-| Project version | `VERSION` |
+| Product/MT5/backend/service version | `VERSION` |
+| Android application version | `Mobile/VERSION` |
 | MT5 strategy/execution loop | `mt5/oppw_mt5_continuous.py` |
 | MT5 configuration template | `mt5/oppw_mt5_config.example.py` |
 | Demo/Real selection | canonical entrypoint with `--account demo|real` |
@@ -39,7 +40,7 @@ Android monitor (no trading capability)
 
 EXECUTOR and PUBLISHER ownership is coordinated globally through MySQL-backed leases exposed by `coordination.php`. Fencing tokens protect actions after takeover. Weekly entries use database idempotency so separate machines cannot legitimately claim the same account/week twice. Local filesystem locks are not authoritative.
 
-Two Windows machines run the canonical `OPPWContinuousSupervisor` service. The backend assigns all four Demo/Real Executor/Publisher children to the master while it is responsive, assigns them to the backup after master heartbeat expiry, and idles the backup when the master returns. This assignment controls process availability only; MySQL leases and fencing remain authoritative for role work and trading.
+Two Windows machines run the canonical `OPPWContinuousSupervisor` service as LocalSystem. The host locates the explicitly configured MetaTrader owner's active or disconnected Windows session and launches the Python supervisor and terminal children on that interactive desktop; it waits fail-closed while that user is logged out. The backend assigns all four Demo/Real Executor/Publisher children to the master while it is responsive, assigns them to the backup after master heartbeat expiry, and idles the backup when the master returns. Per account, executor startup precedes publisher startup so two Python clients do not race the same terminal IPC initialization. This assignment controls process availability only; MySQL leases and fencing remain authoritative for role work and trading.
 
 ## Backend capability ownership
 
@@ -91,7 +92,7 @@ Any payload change must follow `docs/CONTRACT_POLICY.md`.
 
 ## Version and release flow
 
-MT5 build identity, strategy specification version, Android version name/code, release archive, and manifest derive from root `VERSION`. Releases are reproducible outputs in ignored `dist/`; they are never alternative source trees.
+MT5 build identity, strategy specification version, release archive, and manifest derive from root `VERSION`. Android `versionName` derives from `Mobile/VERSION`; its monotonically increasing `versionCode` uses the epoch formula documented in ADR 0007. The two release lines advance independently. Releases are reproducible outputs in ignored `dist/`; they are never alternative source trees.
 
 The release gate requires a clean Git commit, canonical-source validation, Python compilation/tests, PHP lint, complete SQL migration validation in disposable MySQL, an actual PHP/MySQL/API-to-Android contract run, and Android tests/build.
 

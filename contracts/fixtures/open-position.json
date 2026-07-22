@@ -189,5 +189,21 @@
     {"stage": "POSITION_VISIBLE", "offsetMs": 650, "result": true},
     {"stage": "PROTECTED", "offsetMs": 800, "result": true, "oldSl": 0.0, "newSl": 27550.0, "reason": "SL"},
     {"stage": "PUBLISHED", "offsetMs": 900, "result": true}
-  ]
+  ],
+  "analytics": {
+    "closedTrades": [
+      {"ticket": 990101, "weekOffset": -1, "dayOffset": 0, "openPrice": 100.0, "closePrice": 101.0, "profit": 100.0, "balanceBefore": 1000.0, "exitReason": "TP", "entryLeverage": 10.0},
+      {"ticket": 990102, "weekOffset": -1, "dayOffset": 3, "openPrice": 100.0, "closePrice": 99.8, "profit": -20.0, "balanceBefore": 1000.0, "exitReason": "TSL", "entryLeverage": 10.0},
+      {"ticket": 990103, "weekOffset": 0, "dayOffset": 1, "openPrice": 100.0, "closePrice": 100.5, "profit": 50.0, "balanceBefore": 1000.0, "exitReason": "TP", "entryLeverage": 10.0},
+      {"ticket": 990104, "weekOffset": 0, "dayOffset": 2, "openPrice": 100.0, "closePrice": 99.0, "profit": -100.0, "balanceBefore": 1000.0, "exitReason": "SL", "entryLeverage": 10.0}
+    ],
+    "dailyEquity": [
+      {"weekOffset": -1, "dayOffset": 0, "equity": 1000.0},
+      {"weekOffset": -1, "dayOffset": 1, "equity": 1100.0},
+      {"weekOffset": -1, "dayOffset": 2, "equity": 990.0},
+      {"weekOffset": -1, "dayOffset": 3, "equity": 1080.0},
+      {"weekOffset": -1, "dayOffset": 4, "equity": 972.0},
+      {"weekOffset": 0, "dayOffset": 0, "equity": 1020.0}
+    ]
+  }
 }

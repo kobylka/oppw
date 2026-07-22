@@ -11,6 +11,14 @@ $versionFile = Join-Path $root 'VERSION'
 if (-not (Test-Path -LiteralPath $versionFile -PathType Leaf)) { throw 'VERSION is missing.' }
 $version = (Get-Content -LiteralPath $versionFile -Raw).Trim()
 if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'VERSION must use MAJOR.MINOR.PATCH.' }
+$mobileVersionFile = Join-Path $root 'Mobile\VERSION'
+if (-not (Test-Path -LiteralPath $mobileVersionFile -PathType Leaf)) { throw 'Mobile/VERSION is missing.' }
+$mobileVersion = (Get-Content -LiteralPath $mobileVersionFile -Raw).Trim()
+if ($mobileVersion -notmatch '^\d+\.\d+\.\d+$') { throw 'Mobile/VERSION must use MAJOR.MINOR.PATCH.' }
+$mobileVersionParts = @($mobileVersion.Split('.') | ForEach-Object { [int]$_ })
+if ($mobileVersionParts[1] -gt 99 -or $mobileVersionParts[2] -gt 99) {
+    throw 'Mobile/VERSION minor and patch components must each be between 0 and 99.'
+}
 
 if ($PythonPath -eq '') {
     $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
@@ -75,7 +83,7 @@ try {
     }
 
     if ($ValidateOnly) {
-        Write-Host "RELEASE VALIDATION PASSED version=$version"
+        Write-Host "RELEASE VALIDATION PASSED version=$version mobileVersion=$mobileVersion"
         return
     }
 
@@ -100,7 +108,7 @@ try {
             $_ -like 'Mobile/backend/*' -or
             $_ -like 'Mobile/gradle/*' -or
             $_ -in @(
-                'Mobile/build.gradle.kts','Mobile/settings.gradle.kts','Mobile/gradle.properties',
+                'Mobile/VERSION','Mobile/build.gradle.kts','Mobile/settings.gradle.kts','Mobile/gradle.properties',
                 'Mobile/gradlew','Mobile/gradlew.bat','Mobile/local.properties.example','Mobile/README.md'
             ) -or
             $_ -in @(
@@ -125,7 +133,7 @@ try {
         if (-not (Test-Path -LiteralPath $apk -PathType Leaf)) { throw 'Android APK was not produced.' }
         $artifactDir = Join-Path $stage 'artifacts'
         New-Item -ItemType Directory -Path $artifactDir -Force | Out-Null
-        Copy-Item -LiteralPath $apk -Destination (Join-Path $artifactDir "OPPW-Monitor-$version-debug.apk") -Force
+        Copy-Item -LiteralPath $apk -Destination (Join-Path $artifactDir "OPPW-Monitor-$mobileVersion-debug.apk") -Force
         & powershell -ExecutionPolicy Bypass -File (Join-Path $root 'service\build-service-host.ps1') `
             -RepoRoot $root -OutputPath (Join-Path $artifactDir 'OPPWServiceHost.exe')
         if ($LASTEXITCODE -ne 0) { throw 'Release Windows service host compilation failed.' }
@@ -148,7 +156,7 @@ try {
         Compress-Archive -LiteralPath $stage -DestinationPath $zip -CompressionLevel Optimal
         $zipHash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
         [IO.File]::WriteAllText($checksum, "$zipHash  OPPW-$version.zip`r`n")
-        Write-Host "RELEASE CREATED version=$version archive=$zip sha256=$zipHash files=$($manifest.Count)"
+        Write-Host "RELEASE CREATED version=$version mobileVersion=$mobileVersion archive=$zip sha256=$zipHash files=$($manifest.Count)"
     } finally {
         $resolvedTemp = [IO.Path]::GetFullPath($tempBase)
         if ($resolvedTemp.StartsWith([IO.Path]::GetFullPath([IO.Path]::GetTempPath())) -and (Test-Path -LiteralPath $resolvedTemp)) {

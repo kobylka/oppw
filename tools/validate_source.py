@@ -48,6 +48,8 @@ def main() -> int:
         "docs/decisions/0004-executable-cross-component-contracts.md": ("Status: Accepted",),
         "docs/decisions/0005-single-mt5-entrypoint.md": ("Status: Accepted", "Supersedes"),
         "docs/decisions/0006-two-node-windows-supervision.md": ("Status: Accepted", "OPPWContinuousSupervisor"),
+        "docs/decisions/0007-independent-android-version.md": ("Status: Accepted", "Mobile/VERSION", "1,000,000"),
+        "docs/decisions/0008-interactive-mt5-service-session.md": ("Status: Accepted", "CreateProcessAsUser", "winsta0\\default"),
         ".github/pull_request_template.md": ("Contract impact", "Architecture and safety", "Validation"),
     }
     for relative, markers in required_governance.items():
@@ -72,6 +74,19 @@ def main() -> int:
     version = version_file.read_text(encoding="utf-8").strip() if version_file.is_file() else ""
     if not SEMVER.fullmatch(version):
         fail(errors, "VERSION must exist and contain MAJOR.MINOR.PATCH")
+
+    mobile_version_file = root / "Mobile" / "VERSION"
+    mobile_version = (
+        mobile_version_file.read_text(encoding="utf-8").strip()
+        if mobile_version_file.is_file()
+        else ""
+    )
+    if not SEMVER.fullmatch(mobile_version):
+        fail(errors, "Mobile/VERSION must exist and contain MAJOR.MINOR.PATCH")
+    else:
+        _, mobile_minor, mobile_patch = (int(part) for part in mobile_version.split("."))
+        if mobile_minor > 99 or mobile_patch > 99:
+            fail(errors, "Mobile/VERSION minor and patch components must each be between 0 and 99")
 
     canonical = root / "mt5" / "oppw_mt5_continuous.py"
     if not canonical.is_file():
@@ -110,8 +125,8 @@ def main() -> int:
 
     service_files = {
         "service/oppw_windows_supervisor.py": ("ACCOUNTS = (\"DEMO\", \"REAL\")", "ROLES = (\"EXECUTOR\", \"PUBLISHER\")", "assignmentTtlSeconds"),
-        "service/OPPWServiceHost.cs": ("ServiceName = \"OPPWContinuousSupervisor\"", "CreateKillOnCloseJob"),
-        "service/install-service.ps1": ("ValidateSet('Master','Backup')", "delayed-auto", "ServiceCredential"),
+        "service/OPPWServiceHost.cs": ("ServiceName = \"OPPWContinuousSupervisor\"", "CreateKillOnCloseJob", "WTSQueryUserToken", "CreateProcessAsUser"),
+        "service/install-service.ps1": ("ValidateSet('Master','Backup')", "delayed-auto", "RuntimeUser", "runtimeSid"),
         "Mobile/backend/service-control.php": ("setDesiredState", "strategy_service_control_events", "MASTER_ONLINE"),
     }
     for relative, markers in service_files.items():
@@ -137,8 +152,14 @@ def main() -> int:
 
     android_build = root / "Mobile" / "app" / "build.gradle.kts"
     android_text = android_build.read_text(encoding="utf-8") if android_build.is_file() else ""
-    if 'resolve("VERSION")' not in android_text or "versionName = projectVersion" not in android_text:
-        fail(errors, "Android versionName/versionCode must be derived from root VERSION")
+    android_version_markers = (
+        'rootProject.file("VERSION")',
+        "mobileVersionCodeEpoch = 1_000_000",
+        "versionName = mobileVersion",
+        "versionCode = mobileVersionCode",
+    )
+    if any(marker not in android_text for marker in android_version_markers):
+        fail(errors, "Android versionName/versionCode must be derived from Mobile/VERSION with the canonical epoch")
     if re.search(r"versionName\s*=\s*\"", android_text):
         fail(errors, "Android contains a hard-coded versionName")
 
@@ -257,7 +278,7 @@ def main() -> int:
         for error in errors:
             print(f"- {error}", file=sys.stderr)
         return 1
-    print(f"SOURCE VALIDATION PASSED version={version}")
+    print(f"SOURCE VALIDATION PASSED version={version} mobileVersion={mobile_version}")
     return 0
 
 

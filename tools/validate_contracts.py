@@ -200,6 +200,66 @@ def assert_close(actual: Any, expected: float, label: str) -> None:
         raise AssertionError(f"{label}: expected {expected}, got {actual}")
 
 
+def sql_text(value: Any) -> str:
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def seed_analytics_fixture(
+    docker: str,
+    container: str,
+    account_key: str,
+    fixture: dict[str, Any],
+    current_monday: datetime,
+    docker_env: dict[str, str],
+) -> None:
+    trade_rows = []
+    for item in fixture["closedTrades"]:
+        opened = (current_monday + timedelta(
+            weeks=int(item["weekOffset"]), days=int(item["dayOffset"]),
+        )).replace(hour=15, minute=30)
+        closed = opened + timedelta(hours=1)
+        open_price = float(item["openPrice"])
+        close_price = float(item["closePrice"])
+        profit = float(item["profit"])
+        balance_before = float(item["balanceBefore"])
+        raw_return_percent = (close_price / open_price - 1.0) * 100.0
+        trade_rows.append(
+            "({},{},'US100','BUY',1.0,{},{},{},{},{},{},{},{},{},{})".format(
+                sql_text(account_key), int(item["ticket"]),
+                sql_text(opened.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]),
+                sql_text(closed.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]),
+                open_price, close_price, profit, raw_return_percent, balance_before,
+                balance_before + profit, sql_text(item["exitReason"]), float(item["entryLeverage"]),
+            )
+        )
+    docker_sql(
+        docker, container,
+        "INSERT INTO strategy_trades(strategy_key,position_ticket,symbol,side,volume,opened_at,closed_at,open_price,close_price,profit,profit_percent,balance_before,balance_after,exit_reason,entry_leverage) VALUES "
+        + ",".join(trade_rows), docker_env,
+    )
+
+    equity_rows = []
+    for item in fixture["dailyEquity"]:
+        captured = (current_monday + timedelta(
+            weeks=int(item["weekOffset"]), days=int(item["dayOffset"]),
+        )).replace(hour=21, minute=0)
+        captured_utc = captured.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        equity = float(item["equity"])
+        equity_rows.append(
+            f"({sql_text(account_key)},{sql_text(captured_utc)},{equity},{equity},0,0,NULL)"
+        )
+    docker_sql(
+        docker, container,
+        f"DELETE FROM strategy_equity_points WHERE strategy_key={sql_text(account_key)}",
+        docker_env,
+    )
+    docker_sql(
+        docker, container,
+        "INSERT INTO strategy_equity_points(strategy_key,captured_minute,balance,equity,deposit,current_profit,position_ticket) VALUES "
+        + ",".join(equity_rows), docker_env,
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
@@ -484,9 +544,32 @@ return [
             if receipt.get("latencyMs") is None:
                 raise AssertionError("mobile receipt did not calculate delivery latency")
 
-            _, analytics, analytics_raw = http_json(
-                "GET", base_url + "analytics.php?account=DEMO&rollingWeeks=0", token=access_token,
+            seed_analytics_fixture(
+                docker, container, fixture["accountKey"], fixture["analytics"],
+                current_monday, docker_env,
             )
+            _, analytics, analytics_raw = http_json(
+                "GET", base_url + "analytics.php?account=DEMO&rolling_weeks=2", token=access_token,
+            )
+            summary = analytics["summary"]
+            for key in (
+                "averageWeeklyPreleverageReturnPercent", "averageWeeklyLeveragedReturnPercent",
+                "averageWinPreleverageReturnPercent", "averageWinLeveragedReturnPercent",
+                "averageLossPreleverageReturnPercent", "averageLossLeveragedReturnPercent",
+                "calmarRatio", "omegaRatio", "ulcerIndexPercent", "valueAtRisk95Percent",
+                "expectedShortfall95Percent",
+            ):
+                assert_close(summary[key], float(expected[key]), "analytics " + key)
+            if int(summary["riskSampleDays"]) != int(expected["riskSampleDays"]):
+                raise AssertionError(
+                    f"analytics riskSampleDays: expected {expected['riskSampleDays']}, got {summary['riskSampleDays']}"
+                )
+            class_values = {item["tradeClass"]: item for item in analytics["tradeClasses"]}
+            for trade_class, expected_return in expected["classAveragePreleverageReturnPercent"].items():
+                assert_close(
+                    class_values[trade_class]["averagePreleverageReturnPercent"],
+                    float(expected_return), f"analytics class {trade_class} average pre-leverage return",
+                )
             quality = analytics["executionQuality"]
             if quality["decisionToSend"]["sampleCount"] != 1:
                 raise AssertionError("analytics did not reconstruct the execution lifecycle")

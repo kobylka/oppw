@@ -71,4 +71,4 @@ The mandatory executable contract is defined by `contracts/` and orchestrated by
 
 ## Versioning
 
-Root `VERSION` is the product release version. Do not add independent source-file version labels. A breaking external contract requires a deliberate major-version decision and an ADR; ordinary compatible evolution uses the normal project version and migrations.
+Root `VERSION` is the product/MT5/backend/service release version. `Mobile/VERSION` is the independent Android application release version. These are the only canonical version files; do not add source-file version labels. A breaking external contract requires a deliberate product major-version decision and an ADR; ordinary compatible evolution uses the applicable release version and migrations.

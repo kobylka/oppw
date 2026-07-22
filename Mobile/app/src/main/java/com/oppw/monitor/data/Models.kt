@@ -283,6 +283,8 @@ data class AnalyticsSummary(
     val capitalAdjustedReturnPercent: Double,
     val positiveWeeksPercent: Double,
     val averageWeeklyProfit: Double,
+    val averageWeeklyPreleverageReturnPercent: Double,
+    val averageWeeklyLeveragedReturnPercent: Double,
     val totalSlippagePoints: Double,
     val grossProfit: Double,
     val grossLoss: Double,
@@ -291,6 +293,10 @@ data class AnalyticsSummary(
     val medianProfit: Double,
     val averageWin: Double,
     val averageLoss: Double,
+    val averageWinPreleverageReturnPercent: Double,
+    val averageWinLeveragedReturnPercent: Double,
+    val averageLossPreleverageReturnPercent: Double,
+    val averageLossLeveragedReturnPercent: Double,
     val payoffRatio: Double,
     val averageDurationSeconds: Double,
     val averageMfePoints: Double,
@@ -341,6 +347,8 @@ data class WeeklyAnalytics(
     val bestTrade: Double,
     val worstTrade: Double,
     val averageDurationSeconds: Double,
+    val preleverageReturnPercent: Double,
+    val leveragedReturnPercent: Double,
 )
 
 data class TradeAnalytics(

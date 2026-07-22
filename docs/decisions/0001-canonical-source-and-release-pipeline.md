@@ -1,6 +1,6 @@
 # ADR 0001: Canonical source and reproducible release pipeline
 
-- Status: Accepted; account-launcher portion superseded by ADR 0005
+- Status: Accepted; account-launcher portion superseded by ADR 0005; Android version scope clarified by ADR 0007
 - Date: 2026-07-22
 
 ## Context

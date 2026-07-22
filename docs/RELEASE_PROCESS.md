@@ -33,8 +33,10 @@ The release stops on any failure:
 6. the executable publisher/PHP/MySQL/read-API/Android contract fails;
 7. Android unit tests or APK build fail.
 
-On success, `dist/OPPW-<VERSION>.zip` and its SHA-256 file are created. The archive contains the Android APK, compiled Windows service host, installer/supervisor sources, and a per-file SHA-256 manifest. `dist/` remains ignored because releases are reproducible outputs, not source.
+On success, `dist/OPPW-<VERSION>.zip` and its SHA-256 file are created, where `<VERSION>` is root `VERSION`. The archive contains both canonical version files, the Android APK, compiled Windows service host, installer/supervisor sources, and a per-file SHA-256 manifest. `dist/` remains ignored because releases are reproducible outputs, not source.
 
 ## Version change
 
-Edit only `VERSION` using `MAJOR.MINOR.PATCH`. The MT5 build ID, strategy specification version, Android version name, Android version code, archive name, and manifest all derive from it.
+Edit root `VERSION` using `MAJOR.MINOR.PATCH` when releasing the product/MT5/backend/service line. The MT5 build ID, strategy specification version, archive name, and manifest derive from it.
+
+Edit `Mobile/VERSION` using `MAJOR.MINOR.PATCH` when releasing Android. Android `versionName` is that value. Android `versionCode` is `1,000,000 + major * 10,000 + minor * 100 + patch`; minor and patch must each be between 0 and 99. The epoch keeps the independent mobile line upgrade-safe after historical builds used the larger product-derived code.

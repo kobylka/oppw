@@ -28,6 +28,19 @@ def assignments_fresh(last_assignment_at: float, ttl_seconds: float, now: float 
     return last_assignment_at > 0 and current - last_assignment_at < ttl_seconds
 
 
+def publisher_start_ready(
+    executor_assigned: bool,
+    executor_running: bool,
+    executor_started_at: float,
+    delay_seconds: float,
+    now: float | None = None,
+) -> bool:
+    if not executor_assigned:
+        return True
+    current = time.monotonic() if now is None else now
+    return executor_running and executor_started_at > 0 and current - executor_started_at >= delay_seconds
+
+
 def utc_text() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -106,6 +119,9 @@ class Supervisor:
         self.assignment_ttl = max(5.0, min(60.0, float(self.cfg.get("assignmentTtlSeconds", 15.0))))
         self.stop_grace = max(3.0, min(60.0, float(self.cfg.get("stopGraceSeconds", 15.0))))
         self.restart_delay = max(1.0, min(30.0, float(self.cfg.get("restartDelaySeconds", 5.0))))
+        self.companion_start_delay = max(
+            10.0, min(180.0, float(self.cfg.get("companionStartDelaySeconds", 70.0)))
+        )
         self.started_at = utc_text()
         self.shutdown = threading.Event()
         self.last_assignment_at = 0.0
@@ -209,13 +225,26 @@ class Supervisor:
         item.stop_file.unlink(missing_ok=True)
 
     def reconcile(self, allow_start: bool) -> None:
-        for key, item in self.processes.items():
+        for item in self.processes.values():
             item.refresh()
+        for key, item in self.processes.items():
             should_run = allow_start and self.assignments.get(key, False)
-            if should_run and item.process is None:
-                self.start_process(item)
-            elif not should_run and item.process is not None:
+            if not should_run and item.process is not None:
                 self.stop_process(item)
+        for account in ACCOUNTS:
+            executor = self.processes[(account, "EXECUTOR")]
+            if allow_start and self.assignments.get((account, "EXECUTOR"), False) and executor.process is None:
+                self.start_process(executor)
+            publisher = self.processes[(account, "PUBLISHER")]
+            publisher_assigned = allow_start and self.assignments.get((account, "PUBLISHER"), False)
+            executor_assigned = allow_start and self.assignments.get((account, "EXECUTOR"), False)
+            if publisher_assigned and publisher.process is None and publisher_start_ready(
+                executor_assigned,
+                executor.process is not None,
+                executor.last_start_monotonic,
+                self.companion_start_delay,
+            ):
+                self.start_process(publisher)
 
     def stop_all(self) -> None:
         for item in self.processes.values():

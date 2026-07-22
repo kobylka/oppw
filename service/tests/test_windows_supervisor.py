@@ -2,7 +2,9 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from service.oppw_windows_supervisor import ACCOUNTS, ROLES, assignments_fresh, load_config
+from service.oppw_windows_supervisor import (
+    ACCOUNTS, ROLES, assignments_fresh, load_config, publisher_start_ready,
+)
 
 
 class SupervisorConfigTests(unittest.TestCase):
@@ -39,6 +41,27 @@ class SupervisorConfigTests(unittest.TestCase):
         self.assertIn("*S-1-5-18:(F)", installer)
         self.assertIn("*S-1-5-32-544:(F)", installer)
         self.assertNotIn("'Administrators:(F)'", installer)
+
+    def test_installer_runs_host_as_local_system_for_interactive_launch(self):
+        installer = (Path(__file__).resolve().parents[1] / "install-service.ps1").read_text(encoding="utf-8")
+        host = (Path(__file__).resolve().parents[1] / "OPPWServiceHost.cs").read_text(encoding="utf-8")
+        self.assertIn("$runtimeSid", installer)
+        self.assertNotIn("-Credential $ServiceCredential", installer)
+        self.assertIn("WTSQueryUserToken", host)
+        self.assertIn("CreateProcessAsUser", host)
+        self.assertIn('startup.lpDesktop = "winsta0\\\\default"', host)
+
+    def test_publisher_waits_for_executor_ipc_startup(self):
+        self.assertFalse(publisher_start_ready(True, False, 0.0, 70.0, now=100.0))
+        self.assertFalse(publisher_start_ready(True, True, 40.0, 70.0, now=109.9))
+        self.assertTrue(publisher_start_ready(True, True, 40.0, 70.0, now=110.0))
+        self.assertTrue(publisher_start_ready(False, False, 0.0, 70.0, now=1.0))
+
+    def test_installer_accepts_service_already_marked_for_deletion(self):
+        installer = (Path(__file__).resolve().parents[1] / "install-service.ps1").read_text(encoding="utf-8")
+        self.assertIn("$exitCode -ne 1072", installer)
+        self.assertIn("Remove-ServiceRegistration $serviceName", installer)
+        self.assertIn("Close Services (services.msc)", installer)
 
 
 if __name__ == "__main__":

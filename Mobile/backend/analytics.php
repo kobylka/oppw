@@ -12,6 +12,7 @@ function sample_std_values(array $values): float { $count=count($values); if($co
 function percentile_values(array $values,float $percentile): ?float { if(!$values)return null; sort($values,SORT_NUMERIC); $index=($percentile/100.0)*(count($values)-1); $lower=(int)floor($index); $upper=(int)ceil($index); if($lower===$upper)return (float)$values[$lower]; $weight=$index-$lower; return (float)$values[$lower]*(1-$weight)+(float)$values[$upper]*$weight; }
 function annualized_sharpe(array $returns,int $periods=52): ?float { if(count($returns)<2)return null; $sd=sample_std_values($returns); return $sd>1e-15?avg_values($returns)/$sd*sqrt($periods):null; }
 function annualized_sortino(array $returns,int $periods=52): array { if(count($returns)<2)return [null,false]; $sum=0.0; foreach($returns as $return){$down=min(0.0,(float)$return);$sum+=$down*$down;} $deviation=sqrt($sum/count($returns)); if($deviation<=1e-15)return [null,avg_values($returns)>0]; return [avg_values($returns)/$deviation*sqrt($periods),false]; }
+function compounded_return_percent(array $returns): float { $index=1.0; foreach($returns as $return)$index*=1.0+(float)$return; return ($index-1.0)*100.0; }
 function wilson_interval(int $wins,int $count,float $z=1.96): array { if($count<=0)return [0.0,0.0]; $p=$wins/$count; $den=1+$z*$z/$count; $centre=($p+$z*$z/(2*$count))/$den; $margin=$z*sqrt(($p*(1-$p)+$z*$z/(4*$count))/$count)/$den; return [max(0.0,$centre-$margin)*100,min(1.0,$centre+$margin)*100]; }
 function mean_interval(array $values,float $z=1.96): array { $count=count($values); if($count===0)return [0.0,0.0]; $mean=avg_values($values); if($count<2)return [$mean,$mean]; $margin=$z*sample_std_values($values)/sqrt($count); return [$mean-$margin,$mean+$margin]; }
 function iso_value(?string $value): string { if(!$value)return ''; try{return (new DateTimeImmutable($value,new DateTimeZone('UTC')))->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d\\TH:i:s.u\\Z');}catch(Throwable){return $value;} }
@@ -95,7 +96,10 @@ $metricSamples=[
     'captureEfficiency'=>$allSample,'edgeRatio'=>$allSample,'maxDrawdown'=>$allSample,'recoveryFactor'=>$allSample,'consistencyScore'=>$allSample,
     'maxWinStreak'=>$winStreakSample,'maxLossStreak'=>$lossStreakSample,'timeInMarket'=>$allSample,'bestTrade'=>metric_sample($bestTradeGroup),'worstTrade'=>metric_sample($worstTradeGroup),
     'sharpeRatio'=>$allSample,'sortinoRatio'=>$allSample,'calmarRatio'=>$allSample,'omegaRatio'=>$allSample,'ulcerIndex'=>$allSample,'valueAtRisk95'=>$allSample,'expectedShortfall95'=>$allSample,
-    'capitalAdjustedReturn'=>$allSample,'positiveWeeks'=>$allSample,'averageWeeklyProfit'=>$allSample,'benchmark'=>$allSample,
+    'capitalAdjustedReturn'=>$allSample,'positiveWeeks'=>$allSample,'averageWeeklyProfit'=>$allSample,
+    'averageWeeklyPreleverageReturn'=>$allSample,'averageWeeklyLeveragedReturn'=>$allSample,
+    'averageLossPreleverageReturn'=>$loserSample,'averageLossLeveragedReturn'=>$loserSample,
+    'averageWinPreleverageReturn'=>$winnerSample,'averageWinLeveragedReturn'=>$winnerSample,'benchmark'=>$allSample,
 ];
 
 $equity=100.0;$peak=100.0;$closedTradeMaxDrawdownPercent=0.0;$drawdownSeries=[];
@@ -125,7 +129,7 @@ foreach($exitGroups as $reason=>$group){$exitReasons[]=['reason'=>$reason,'trade
 usort($exitReasons,fn($a,$b)=>$b['trades']<=>$a['trades']);
 
 $weeklyGroups=[];foreach($closed as $trade){try{$week=(new DateTimeImmutable($trade['closedAt']))->format('o-\WW');}catch(Throwable){$week='Unknown';}$weeklyGroups[$week][]=$trade;}
-$weekly=[];foreach($weeklyGroups as $week=>$group){$weekly[]=['week'=>$week,'trades'=>count($group),'winRate'=>count(array_filter($group,fn($trade)=>$trade['profit']>0))/count($group)*100,'profit'=>array_sum(array_column($group,'profit')),'bestTrade'=>max(array_column($group,'profit')),'worstTrade'=>min(array_column($group,'profit')),'averageDurationSeconds'=>avg_values(array_map('duration_seconds',$group)),'tradeKeys'=>metric_sample($group)];}
+$weekly=[];foreach($weeklyGroups as $week=>$group){$weekly[]=['week'=>$week,'trades'=>count($group),'winRate'=>count(array_filter($group,fn($trade)=>$trade['profit']>0))/count($group)*100,'profit'=>array_sum(array_column($group,'profit')),'bestTrade'=>max(array_column($group,'profit')),'worstTrade'=>min(array_column($group,'profit')),'averageDurationSeconds'=>avg_values(array_map('duration_seconds',$group)),'preleverageReturnPercent'=>compounded_return_percent(array_map(fn($trade)=>(float)$trade['preleverageReturnPercent']/100.0,$group)),'leveragedReturnPercent'=>compounded_return_percent(array_map(fn($trade)=>(float)$trade['tradeReturn'],$group)),'tradeKeys'=>metric_sample($group)];}
 usort($weekly,fn($a,$b)=>strcmp($b['week'],$a['week']));
 
 $buildGroups=[];foreach($closed as $trade){$buildLabel=$trade['strategyBuild']?:'Legacy';$parameterLabel=$trade['parameterHash']?:'no-parameter-hash';$buildGroups[$buildLabel.'|'.$parameterLabel][]=$trade;}
@@ -191,9 +195,12 @@ $summary=[
     'totalTrades'=>count($trades),'closedTrades'=>count($closed),'openTrades'=>count($open),'wins'=>count($wins),'losses'=>count($losses),'winRate'=>count($closed)?count($wins)/count($closed)*100:0,
     'netProfit'=>array_sum($profits),'initialBalance'=>$initial,'topUps'=>$topUps,'withdrawals'=>$withdrawals,'netContributions'=>$netContributions,'capitalAdjustedReturnPercent'=>abs($netContributions)>1e-15?array_sum($profits)/$netContributions*100:0,
     'positiveWeeksPercent'=>$weekly?$positiveWeeks/count($weekly)*100:0,'averageWeeklyProfit'=>avg_values(array_column($weekly,'profit')),
+    'averageWeeklyPreleverageReturnPercent'=>avg_values(array_column($weekly,'preleverageReturnPercent')),'averageWeeklyLeveragedReturnPercent'=>avg_values(array_column($weekly,'leveragedReturnPercent')),
     'totalSlippagePoints'=>array_sum($entrySlip)+array_sum($exitSlip),'grossProfit'=>$grossProfit,'grossLoss'=>$grossLoss,
     'profitFactor'=>$grossLossAbs>1e-15?$grossProfit/$grossLossAbs:($grossProfit>0?999.999:0.0),'expectancy'=>avg_values($profits),'medianProfit'=>percentile_values($profits,50)??0,
     'averageWin'=>avg_values(array_column($wins,'profit')),'averageLoss'=>avg_values(array_column($losses,'profit')),'payoffRatio'=>abs(avg_values(array_column($losses,'profit')))>0?avg_values(array_column($wins,'profit'))/abs(avg_values(array_column($losses,'profit'))):0,
+    'averageWinPreleverageReturnPercent'=>avg_values(array_column($wins,'preleverageReturnPercent')),'averageWinLeveragedReturnPercent'=>avg_values(array_column($wins,'tradeReturn'))*100,
+    'averageLossPreleverageReturnPercent'=>avg_values(array_column($losses,'preleverageReturnPercent')),'averageLossLeveragedReturnPercent'=>avg_values(array_column($losses,'tradeReturn'))*100,
     'averageDurationSeconds'=>avg_values($durations),'averageMfePoints'=>avg_values($mfe),'averageMaePoints'=>avg_values($mae),
     'averageEntrySlippagePoints'=>avg_values($entrySlip),'averageExitSlippagePoints'=>avg_values($exitSlip),
     'captureEfficiencyPercent'=>$captureEfficiency,'edgeRatio'=>abs(avg_values($mae))>0?avg_values($mfe)/abs(avg_values($mae)):0,

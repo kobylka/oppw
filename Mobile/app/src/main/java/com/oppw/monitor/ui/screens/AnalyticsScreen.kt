@@ -131,6 +131,18 @@ private fun AnalyticsContent(state: UiState, analytics: AnalyticsResponse, onFil
         }
         item {
             AppCard(Modifier.fillMaxWidth()) {
+                SectionTitle("Average returns", "filtered closed trades")
+                MetricLink("Weekly P/L · pre-leverage", percent(summary.averageWeeklyPreleverageReturnPercent), sample(analytics, "averageWeeklyPreleverageReturn", allTradeKeys), openDrillDown)
+                MetricLink("Weekly P/L · leveraged", percent(summary.averageWeeklyLeveragedReturnPercent), sample(analytics, "averageWeeklyLeveragedReturn", allTradeKeys), openDrillDown)
+                MetricLink("All losses · pre-leverage", percent(summary.averageLossPreleverageReturnPercent), sample(analytics, "averageLossPreleverageReturn", allTradeKeys), openDrillDown)
+                MetricLink("All losses · leveraged", percent(summary.averageLossLeveragedReturnPercent), sample(analytics, "averageLossLeveragedReturn", allTradeKeys), openDrillDown)
+                MetricLink("All wins · pre-leverage", percent(summary.averageWinPreleverageReturnPercent), sample(analytics, "averageWinPreleverageReturn", allTradeKeys), openDrillDown)
+                MetricLink("All wins · leveraged", percent(summary.averageWinLeveragedReturnPercent), sample(analytics, "averageWinLeveragedReturn", allTradeKeys), openDrillDown)
+                Text("Weekly values compound closed trades inside each ISO week, then average the weekly results. Leveraged values are account returns: profit divided by balance before each trade.", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+            }
+        }
+        item {
+            AppCard(Modifier.fillMaxWidth()) {
                 SectionTitle("Excursion, timing and execution", "closed trades")
                 MetricLink("Average duration", duration(summary.averageDurationSeconds.toLong()), sample(analytics, "averageDuration", allTradeKeys), openDrillDown)
                 MetricLink("Average MFE", "${price(summary.averageMfePoints)} pts", sample(analytics, "averageMfe", allTradeKeys), openDrillDown)
@@ -190,6 +202,20 @@ private fun AnalyticsContent(state: UiState, analytics: AnalyticsResponse, onFil
         }
         item {
             AppCard(Modifier.fillMaxWidth()) {
+                SectionTitle("Average pre-leverage return by class", "filtered closed trades")
+                analytics.classProfitContribution.forEach { value ->
+                    MetricLink(
+                        "Class ${value.tradeClass} · n=${value.trades}",
+                        percent(value.averagePreleverageReturnPercent),
+                        value.tradeKeys,
+                        openDrillDown,
+                        classColor(value.tradeClass),
+                    )
+                }
+            }
+        }
+        item {
+            AppCard(Modifier.fillMaxWidth()) {
                 SectionTitle("Class distribution", "year × leverage")
                 analytics.classDistribution.sortedWith(compareByDescending<com.oppw.monitor.data.ClassDistributionPoint> { it.year }.thenBy { it.leverage }.thenBy { it.tradeClass }).forEach { value ->
                     MetricLink(
@@ -200,6 +226,17 @@ private fun AnalyticsContent(state: UiState, analytics: AnalyticsResponse, onFil
                         classColor(value.tradeClass),
                     )
                 }
+            }
+        }
+        item {
+            AppCard(Modifier.fillMaxWidth()) {
+                SectionTitle("Daily risk metrics", "${summary.riskSampleDays} cash-flow-adjusted daily returns")
+                MetricLink("Calmar ratio", ratioValue(summary.calmarRatio), emptyList(), openDrillDown)
+                MetricLink("Omega ratio", ratioValue(summary.omegaRatio), emptyList(), openDrillDown)
+                MetricLink("Ulcer index", unsignedPercent(summary.ulcerIndexPercent), emptyList(), openDrillDown)
+                MetricLink("Daily VaR 95% · loss", riskLossMagnitude(summary.valueAtRisk95Percent), emptyList(), openDrillDown)
+                MetricLink("Expected shortfall 95% · loss", riskLossMagnitude(summary.expectedShortfall95Percent), emptyList(), openDrillDown)
+                Text("VaR marks where the worst 5% of observed days begin; expected shortfall is the average loss within that tail. Loss values are shown as positive magnitudes.", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
             }
         }
         item {
@@ -590,6 +627,7 @@ private fun tradeKey(trade: TradeAnalytics): String = "${trade.strategyKey}:${tr
 private fun ratioText(value: Double, available: Boolean): String = if (available && value.isFinite()) String.format("%.2f", value) else "N/A"
 private fun nullableRatio(value: Double?): String = if (value != null && value.isFinite()) String.format("%.2f", value) else "N/A"
 private fun ratioValue(value: Double): String = if (value.isFinite()) String.format("%.2f", value) else "∞"
+private fun riskLossMagnitude(value: Double): String = unsignedPercent(max(0.0, -value))
 private fun formatNumber(value: Double): String = String.format("%.2f", value)
 private fun fullDays(seconds: Double): String {
     val days = (abs(seconds) / 86_400.0).toLong()

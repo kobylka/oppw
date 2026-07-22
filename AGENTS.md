@@ -7,19 +7,21 @@ These instructions apply to every task in this repository. They are mandatory fo
 Before planning or editing, read in this order:
 
 1. `VERSION`
-2. `README.md`
-3. `docs/CURRENT_ARCHITECTURE.md`
-4. `docs/CONTRACT_POLICY.md`
-5. `docs/CHANGE_CHECKLIST.md`
-6. relevant architecture decisions in `docs/decisions/`
-7. `git status --short`
-8. the canonical implementation and its current tests
+2. `Mobile/VERSION`
+3. `README.md`
+4. `docs/CURRENT_ARCHITECTURE.md`
+5. `docs/CONTRACT_POLICY.md`
+6. `docs/CHANGE_CHECKLIST.md`
+7. relevant architecture decisions in `docs/decisions/`
+8. `git status --short`
+9. the canonical implementation and its current tests
 
 Repeat this protocol after context compaction, after inheriting work from another task, or whenever remembered details conflict with repository evidence. The repository is authoritative; chat history and release archives are not.
 
 ## Canonical source rules
 
-- The project version exists only in root `VERSION` and uses `MAJOR.MINOR.PATCH`.
+- The product/MT5/backend/service release version exists only in root `VERSION` and uses `MAJOR.MINOR.PATCH`.
+- The Android app release version exists only in `Mobile/VERSION`, uses `MAJOR.MINOR.PATCH`, and is independent of root `VERSION`.
 - The sole MT5 implementation is `mt5/oppw_mt5_continuous.py`.
 - The sole committed MT5 config template is `mt5/oppw_mt5_config.example.py`.
 - `mt5/oppw_mt5_continuous.py` is the sole MT5 entrypoint; account selection always uses `--account demo|real`.
@@ -30,7 +32,7 @@ Repeat this protocol after context compaction, after inheriting work from anothe
 
 ## Change discipline
 
-- Keep each change set bounded and coherent. Do not assign a new release version until the complete validation gate passes.
+- Keep each change set bounded and coherent. Do not assign a new product or Android release version until the complete validation gate passes.
 - Inspect the working tree first and preserve unrelated user changes.
 - Fix the canonical source in place. Do not solve merge uncertainty by making another copy.
 - A defect fix requires a regression test that fails for the defect and exercises the current canonical source.

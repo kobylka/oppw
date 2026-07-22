@@ -33,7 +33,7 @@ Use the applicable items for every change. The release validator confirms that t
 
 ## Release and deployment
 
-- [ ] Change only root `VERSION` for release identity.
+- [ ] Change only root `VERSION` for product release identity and/or `Mobile/VERSION` for Android release identity.
 - [ ] Commit the coherent change set; release only from a clean commit.
 - [ ] Run `tools/release.ps1`; do not hand-assemble a release ZIP.
 - [ ] Verify archive and per-file checksums.
