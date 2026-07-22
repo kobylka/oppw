@@ -30,7 +30,8 @@ The release stops on any failure:
 3. Python compilation or MT5 regression tests fail;
 4. a PHP file fails linting;
 5. the ordered SQL chain fails against temporary MySQL or immutable tables/triggers are missing;
-6. Android unit tests or APK build fail.
+6. the executable publisher/PHP/MySQL/read-API/Android contract fails;
+7. Android unit tests or APK build fail.
 
 On success, `dist/OPPW-<VERSION>.zip` and its SHA-256 file are created. The archive contains a per-file SHA-256 manifest. `dist/` remains ignored because releases are reproducible outputs, not source.
 

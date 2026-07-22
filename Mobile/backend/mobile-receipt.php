@@ -3,7 +3,7 @@ declare(strict_types=1);
 require __DIR__ . '/lib.php';
 require __DIR__ . '/authority.php';
 require_method('POST');
-$data = read_json_body();
+$data = request_json();
 $accountKey = trim((string)($data['accountKey'] ?? ''));
 $session = require_mobile_session($accountKey !== '' ? $accountKey : null);
 if ($accountKey === '') json_response(['ok'=>false,'error'=>'accountKey required'],400);

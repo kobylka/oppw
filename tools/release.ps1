@@ -52,6 +52,9 @@ try {
     & (Join-Path $root 'tools\validate_mysql.ps1') -RepoRoot $root
     if ($LASTEXITCODE -ne 0) { throw 'Temporary-MySQL migration validation failed.' }
 
+    & $PythonPath (Join-Path $root 'tools\validate_contracts.py') --root $root --php $php.Source
+    if ($LASTEXITCODE -ne 0) { throw 'Cross-component contract validation failed.' }
+
     Push-Location (Join-Path $root 'Mobile')
     try {
         & .\gradlew.bat --no-daemon clean testDebugUnitTest assembleDebug
@@ -75,6 +78,7 @@ try {
         $selected = $tracked | Where-Object {
             $_ -in @('VERSION','README.md','AGENTS.md','requirements_mt5','.github/pull_request_template.md') -or
             $_ -like 'docs/*' -or
+            $_ -like 'contracts/*' -or
             $_ -in @(
                 'mt5/oppw_mt5_continuous.py','mt5/oppw_mt5_config.example.py',
                 'mt5/README.md','mt5/demo/oppw_mt5_continuous.py',
@@ -88,7 +92,10 @@ try {
                 'Mobile/build.gradle.kts','Mobile/settings.gradle.kts','Mobile/gradle.properties',
                 'Mobile/gradlew','Mobile/gradlew.bat','Mobile/local.properties.example','Mobile/README.md'
             ) -or
-            $_ -in @('tools/release.ps1','tools/validate_source.py','tools/validate_mysql.ps1')
+            $_ -in @(
+                'tools/release.ps1','tools/validate_source.py','tools/validate_mysql.ps1',
+                'tools/validate_contracts.py'
+            )
         }
         $selected = $selected | Where-Object {
             $_ -notlike 'Mobile/backend/private/*' -and

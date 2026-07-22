@@ -1,0 +1,172 @@
+{
+  "accountKey": "DEMO",
+  "executionId": "contract-execution-001",
+  "positionTicket": 990001,
+  "strategyDocument": {
+    "strategy": {"key": "OPPW24", "direction": "LONG_ONLY"},
+    "instruments": {"execution": "US100", "signal": "QQQ"},
+    "contractFixture": "open-position"
+  },
+  "decision": {
+    "decisionWeek": "CONTRACT",
+    "decision": "WEEKLY_ENTRY",
+    "outcome": "READY",
+    "selectedLeverage": 10,
+    "leverageReason": "CONTRACT_FIXTURE",
+    "parameterHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "inputs": {
+      "previousFullWeekChange": -0.01,
+      "previousFullWeekSource": "CONTRACT",
+      "previousTradeChange": -0.005,
+      "previousTradeSource": "CONTRACT"
+    },
+    "sizing": {
+      "symbol": "US100",
+      "side": "BUY",
+      "price": 29000.0,
+      "volume": 0.02,
+      "requiredDeposit": 4393.0,
+      "requiredBalance": 7753.645,
+      "requiredBalanceMultiplier": 1.765,
+      "balanceMultiplierProfile": "GROWTH_1_765",
+      "effectiveLeverage": 10.0,
+      "positionNotional": 80000.0,
+      "sizingUnits": 2,
+      "marginUsagePercent": 54.9125,
+      "marginLevelAfterPercent": 185.0
+    },
+    "risk": {
+      "potentialStopLossPercent": -5.0,
+      "potentialStopLossPrice": 27550.0,
+      "potentialStopLossCash": -4000.0,
+      "accountLossPercentAtStop": -50.0,
+      "accountLossCapApplied": false
+    },
+    "error": ""
+  },
+  "snapshot": {
+    "connection": {
+      "connected": true,
+      "lastSync": "${CAPTURED_AT}",
+      "accountId": "CONTRACT-DEMO",
+      "week": "CONTRACT",
+      "health": "OK",
+      "phase": "REGULAR",
+      "regime": "HARD_SL",
+      "nextAction": "CH",
+      "nextActionAt": "${NEXT_ACTION_AT}",
+      "us100AgeSeconds": 0.2,
+      "qqqAgeSeconds": 0.3
+    },
+    "account": {
+      "currency": "PLN",
+      "strategyCapital": 8000.0,
+      "deposit": 4393.0,
+      "balance": 8000.0,
+      "equity": 8125.5
+    },
+    "position": {
+      "open": true,
+      "identifier": 990001,
+      "symbol": "US100",
+      "side": "BUY",
+      "volume": 0.02,
+      "ticket": 990001,
+      "openedAt": "${OPENED_AT}",
+      "openPrice": 29000.0,
+      "bid": 29050.0,
+      "ask": 29051.0,
+      "priceTime": "${CAPTURED_AT}",
+      "profit": 125.5,
+      "profitPercent": 0.1724,
+      "strategyLeverage": 10.0,
+      "leveragedProfitPercent": 1.724,
+      "exposure": 80000.0,
+      "effectiveLeverage": 9.846,
+      "stopLoss": 27550.0,
+      "takeProfit": 0.0,
+      "potentialTakeProfit": 0.02,
+      "breakEvenArmed": false,
+      "protectionRegime": "HARD_SL",
+      "activeSlReason": "SL",
+      "activeTpReason": "",
+      "breakEvenCheck": {
+        "status": "SCHEDULED",
+        "nextCheckAt": "${NEXT_ACTION_AT}",
+        "signalReference": 500.0,
+        "threshold": 498.0,
+        "condition": "QQQ close < 498.0"
+      }
+    },
+    "potentialPosition": {
+      "available": true,
+      "symbol": "US100",
+      "side": "BUY",
+      "price": 29051.0,
+      "volume": 0.02,
+      "requiredDeposit": 4393.0,
+      "balance": 8000.0,
+      "effectiveLeverage": 10.0,
+      "strategyLeverage": 10.0,
+      "leverageReason": "CONTRACT_FIXTURE",
+      "positionNotional": 80000.0,
+      "sizingUnits": 2,
+      "error": ""
+    },
+    "execution": {
+      "executionId": "contract-execution-001",
+      "decisionId": "${DECISION_ID}",
+      "positionTicket": 990001,
+      "scheduledAt": "${SCHEDULED_AT}",
+      "startedAt": "${STARTED_AT}"
+    },
+    "closestCondition": {
+      "name": "SL",
+      "targetPrice": 27550.0,
+      "currentPrice": 29050.0,
+      "distancePoints": 1500.0,
+      "distancePercent": 5.1635,
+      "direction": "BELOW",
+      "active": true,
+      "source": "BROKER_SL"
+    },
+    "conditions": [],
+    "market": {
+      "symbol": "US100",
+      "currentPrice": 29050.0,
+      "bid": 29050.0,
+      "ask": 29051.0,
+      "currentM1": {
+        "time": "${CAPTURED_AT}",
+        "open": 29040.0,
+        "high": 29060.0,
+        "low": 29030.0,
+        "close": 29050.0
+      }
+    },
+    "metrics": {
+      "currentPrice": 29050.0,
+      "currentProfit": 125.5,
+      "currentProfitPercent": 0.1724,
+      "currentLeveragedProfitPercent": 1.724,
+      "equity": 8125.5,
+      "balance": 8000.0,
+      "deposit": 4393.0,
+      "strategyLeverage": 10.0,
+      "currency": "PLN"
+    },
+    "equityHistory": [
+      {"time": "${CAPTURED_AT}", "value": 8125.5, "deposits": 4393.0}
+    ]
+  },
+  "stages": [
+    {"stage": "DECISION", "offsetMs": 100, "result": true},
+    {"stage": "CHECKED", "offsetMs": 150, "result": true, "retcode": 0},
+    {"stage": "SENT", "offsetMs": 200, "result": true, "fillingMode": "FOK", "referencePrice": 29000.0},
+    {"stage": "ACCEPTED", "offsetMs": 350, "result": true, "retcode": 10009, "latencyMs": 150.0},
+    {"stage": "FILLED", "offsetMs": 500, "result": true, "retcode": 10009, "latencyMs": 300.0, "referencePrice": 29000.0, "actualPrice": 29001.0, "dealTicket": 880001, "orderTicket": 770001, "volume": 0.02, "side": "BUY"},
+    {"stage": "POSITION_VISIBLE", "offsetMs": 650, "result": true},
+    {"stage": "PROTECTED", "offsetMs": 800, "result": true, "oldSl": 0.0, "newSl": 27550.0, "reason": "SL"},
+    {"stage": "PUBLISHED", "offsetMs": 900, "result": true}
+  ]
+}

@@ -45,6 +45,7 @@ def main() -> int:
         "docs/decisions/0001-canonical-source-and-release-pipeline.md": ("Status: Accepted",),
         "docs/decisions/0002-immutable-mysql-authority.md": ("Status: Accepted",),
         "docs/decisions/0003-atomic-cross-component-contracts.md": ("Status: Accepted",),
+        "docs/decisions/0004-executable-cross-component-contracts.md": ("Status: Accepted",),
         ".github/pull_request_template.md": ("Contract impact", "Architecture and safety", "Validation"),
     }
     for relative, markers in required_governance.items():
@@ -115,6 +116,30 @@ def main() -> int:
     if re.search(r"versionName\s*=\s*\"", android_text):
         fail(errors, "Android contains a hard-coded versionName")
 
+    contract_files = {
+        "contracts/README.md": ("Executable cross-component contracts",),
+        "contracts/expectations.json": ('"decisionToSendMs"', '"backendPublicationMs"', '"authorityStages"'),
+        "contracts/fixtures/open-position.json": ('"strategyDocument"', '"PUBLISHED"'),
+        "tools/validate_contracts.py": (
+            "coordination.php", "ingest.php", "status.php", "analytics.php",
+            "mobile-receipt.php", "ContractResponseParserTest",
+        ),
+        "Mobile/app/src/test/java/com/oppw/monitor/data/ContractResponseParserTest.kt": (
+            "parseAccounts", "parseResponse", "parseAnalytics",
+        ),
+    }
+    for relative, markers in contract_files.items():
+        path = root / relative
+        if not path.is_file():
+            fail(errors, f"required executable-contract file is missing: {relative}")
+            continue
+        content = path.read_text(encoding="utf-8")
+        for marker in markers:
+            if marker not in content:
+                fail(errors, f"executable-contract marker missing from {relative}: {marker}")
+    if 'testImplementation("org.json:json:' not in android_text:
+        fail(errors, "Android JVM contract test requires a real org.json implementation")
+
     release_script = root / "tools" / "release.ps1"
     release_text = release_script.read_text(encoding="utf-8") if release_script.is_file() else ""
     release_gates = (
@@ -122,6 +147,7 @@ def main() -> int:
         "-m unittest discover",
         "Get-Command php",
         "validate_mysql.ps1",
+        "validate_contracts.py",
         "testDebugUnitTest assembleDebug",
         "git diff --cached --quiet",
     )

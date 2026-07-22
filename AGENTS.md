@@ -55,8 +55,9 @@ Before declaring a change complete:
 4. lint affected PHP;
 5. validate the ordered migrations against disposable MySQL when SQL/backend persistence changed;
 6. run Android unit tests and build when Android or its API contract changed;
-7. run `git diff --check` and inspect the final staged/unstaged scope;
-8. state any validation that could not run and the precise environmental reason.
+7. run `tools/validate_contracts.py` when a cross-component contract changed;
+8. run `git diff --check` and inspect the final staged/unstaged scope;
+9. state any validation that could not run and the precise environmental reason.
 
 Only `tools/release.ps1` may produce a release archive. It must run from a clean commit and must not be bypassed because a task is urgent.
 

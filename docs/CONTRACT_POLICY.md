@@ -66,6 +66,8 @@ For an affected contract, test at least:
 
 Contract validation belongs in the canonical test/release gate. A manual app refresh is supporting evidence, not the only test.
 
+The mandatory executable contract is defined by `contracts/` and orchestrated by `tools/validate_contracts.py`. It persists a representative publisher payload through the real PHP endpoints and ordered MySQL schema, reads it through the real status and analytics endpoints, and passes those exact JSON responses to the production Android `JsonParser`. Component mocks do not replace this test.
+
 ## Versioning
 
 Root `VERSION` is the product release version. Do not add independent source-file version labels. A breaking external contract requires a deliberate major-version decision and an ADR; ordinary compatible evolution uses the normal project version and migrations.

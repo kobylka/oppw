@@ -18,6 +18,7 @@ This document describes the present repository. It is deliberately not a changel
 | Release orchestration | `tools/release.ps1` |
 | Repository invariants | `tools/validate_source.py` |
 | Disposable MySQL validation | `tools/validate_mysql.ps1` |
+| Executable cross-component contracts | `contracts/` and `tools/validate_contracts.py` |
 
 ## Runtime topology
 
@@ -86,7 +87,7 @@ Any payload change must follow `docs/CONTRACT_POLICY.md`.
 
 MT5 build identity, strategy specification version, Android version name/code, release archive, and manifest derive from root `VERSION`. Releases are reproducible outputs in ignored `dist/`; they are never alternative source trees.
 
-The release gate requires a clean Git commit, canonical-source validation, Python compilation/tests, PHP lint, complete SQL migration validation in disposable MySQL, and Android tests/build.
+The release gate requires a clean Git commit, canonical-source validation, Python compilation/tests, PHP lint, complete SQL migration validation in disposable MySQL, an actual PHP/MySQL/API-to-Android contract run, and Android tests/build.
 
 ## Runtime/private material
 
