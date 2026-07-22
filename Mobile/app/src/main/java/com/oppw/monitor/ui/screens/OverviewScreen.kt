@@ -34,6 +34,7 @@ import com.oppw.monitor.ui.theme.PrimaryBlue
 import com.oppw.monitor.ui.theme.TextSecondary
 import com.oppw.monitor.util.age
 import com.oppw.monitor.util.countdown
+import com.oppw.monitor.util.dailyMarketChanges
 import com.oppw.monitor.util.humanProtection
 import com.oppw.monitor.util.leverage
 import com.oppw.monitor.util.liveSourceAge
@@ -211,18 +212,11 @@ private fun WeekMarketCard(title: String, stats: MarketWeekStats?, currentLabel:
             Metric("Close %", optionalPercent(stats.weeklyClosePercent), Modifier.weight(1f), pnlColor(stats.weeklyClosePercent ?: 0.0))
         }
         SectionTitle("Latest day", stats.dailyDate.ifBlank { "—" })
+        val dailyChanges = dailyMarketChanges(stats)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            Metric("Open", optionalPrice(stats.dailyOpen), Modifier.weight(1f))
-            Metric("High", optionalPrice(stats.dailyHigh), Modifier.weight(1f))
-        }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            Metric("Low", optionalPrice(stats.dailyLow), Modifier.weight(1f))
-            Metric("Close", optionalPrice(stats.dailyClose), Modifier.weight(1f))
-        }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            Metric("High %", optionalPercent(stats.dailyHighPercent), Modifier.weight(1f), pnlColor(stats.dailyHighPercent ?: 0.0))
-            Metric("Low %", optionalPercent(stats.dailyLowPercent), Modifier.weight(1f), pnlColor(stats.dailyLowPercent ?: 0.0))
-            Metric("Close %", optionalPercent(stats.dailyClosePercent), Modifier.weight(1f), pnlColor(stats.dailyClosePercent ?: 0.0))
+            Metric("High change", optionalPercent(dailyChanges.highPercent), Modifier.weight(1f), pnlColor(dailyChanges.highPercent ?: 0.0))
+            Metric("Low change", optionalPercent(dailyChanges.lowPercent), Modifier.weight(1f), pnlColor(dailyChanges.lowPercent ?: 0.0))
+            Metric("Close change", optionalPercent(dailyChanges.closePercent), Modifier.weight(1f), pnlColor(dailyChanges.closePercent ?: 0.0))
         }
     }
 }
