@@ -129,6 +129,13 @@ def main() -> int:
         if gate not in release_text:
             fail(errors, f"release pipeline is missing required gate: {gate}")
 
+    mysql_validator = root / "tools" / "validate_mysql.ps1"
+    mysql_text = mysql_validator.read_text(encoding="utf-8") if mysql_validator.is_file() else ""
+    if "MYSQL_ALLOW_EMPTY_PASSWORD=yes" not in mysql_text:
+        fail(errors, "MySQL validator must use an isolated passwordless disposable container")
+    if re.search(r"mysql(?:admin)?[^\n]*\s-p(?:ass|\$|\"|'|\s)", mysql_text, re.IGNORECASE):
+        fail(errors, "MySQL validator must not pass passwords on a command line")
+
     forbidden_worktree = []
     source_roots = (root / "mt5", root / "Mobile", root / "tools", root / "docs")
     for source_root in source_roots:

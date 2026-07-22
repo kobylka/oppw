@@ -18,7 +18,6 @@ New-Item -ItemType Directory -Path $dockerConfig -Force | Out-Null
 $previousDockerConfig = $env:DOCKER_CONFIG
 $env:DOCKER_CONFIG = $dockerConfig
 $container = 'oppw-mysql-validation-' + [Guid]::NewGuid().ToString('N').Substring(0, 12)
-$password = [Guid]::NewGuid().ToString('N')
 $containerStarted = $false
 
 try {
@@ -26,18 +25,29 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Docker engine is not available.' }
 
     & $docker.Source run --detach --rm --name $container `
-        --env "MYSQL_ROOT_PASSWORD=$password" `
+        --env 'MYSQL_ALLOW_EMPTY_PASSWORD=yes' `
         --env 'MYSQL_DATABASE=oppw_monitor' $Image | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Could not start temporary MySQL container.' }
     $containerStarted = $true
 
     $ready = $false
     for ($attempt = 0; $attempt -lt 60; $attempt++) {
-        & $docker.Source exec $container mysqladmin ping --silent -uroot "-p$password" 2>$null
-        if ($LASTEXITCODE -eq 0) { $ready = $true; break }
+        $savedErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Continue'
+            $schemaName = (& $docker.Source exec $container mysql -N -uroot `
+                -e "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='oppw_monitor'" 2>$null)
+            $schemaExitCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $savedErrorActionPreference
+        }
+        if ($schemaExitCode -eq 0 -and ($schemaName -join '').Trim() -eq 'oppw_monitor') {
+            $ready = $true
+            break
+        }
         Start-Sleep -Milliseconds 500
     }
-    if (-not $ready) { throw 'Temporary MySQL did not become ready within 30 seconds.' }
+    if (-not $ready) { throw 'Temporary MySQL/database initialization did not finish within 30 seconds.' }
 
     $migrations = Get-Content -LiteralPath $orderFile |
         ForEach-Object { $_.Trim() } |
@@ -49,16 +59,18 @@ try {
         }
         Write-Host "Applying $migration"
         Get-Content -LiteralPath $path -Raw |
-            & $docker.Source exec -i $container mysql -uroot "-p$password" --database=oppw_monitor
+            & $docker.Source exec -i $container mysql -uroot --database=oppw_monitor
         if ($LASTEXITCODE -ne 0) { throw "MySQL rejected migration: $migration" }
     }
 
     $tableQuery = "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='oppw_monitor' AND TABLE_NAME IN ('strategy_specifications','strategy_account_spec_assignments','strategy_decisions','strategy_execution_stages','strategy_fills','strategy_protection_changes','strategy_trade_ledger','account_cash_flows');"
-    $tableCount = (& $docker.Source exec $container mysql -N -uroot "-p$password" --database=oppw_monitor -e $tableQuery).Trim()
+    $tableCount = (& $docker.Source exec $container `
+        mysql -N -uroot --database=oppw_monitor -e $tableQuery).Trim()
     if ($LASTEXITCODE -ne 0 -or [int]$tableCount -ne 8) { throw "Authority-table validation failed: $tableCount/8" }
 
     $triggerQuery = "SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA='oppw_monitor' AND TRIGGER_NAME REGEXP '_no_(update|delete)$';"
-    $triggerCount = (& $docker.Source exec $container mysql -N -uroot "-p$password" --database=oppw_monitor -e $triggerQuery).Trim()
+    $triggerCount = (& $docker.Source exec $container `
+        mysql -N -uroot --database=oppw_monitor -e $triggerQuery).Trim()
     if ($LASTEXITCODE -ne 0 -or [int]$triggerCount -ne 16) { throw "Immutability-trigger validation failed: $triggerCount/16" }
 
     Write-Host "MYSQL VALIDATION PASSED tables=$tableCount triggers=$triggerCount image=$Image"
