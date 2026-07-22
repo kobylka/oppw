@@ -52,12 +52,6 @@ def evaluate_strategy(
         friday_stop=(
             params.friday_stop_fraction
         ),
-        minute_open=(
-            params.minute_open
-        ),
-        minute_close=(
-            params.minute_close
-        ),
         initial_balance=INITIAL_BALANCE,
         allow_deposits=ALLOW_DEPOSITS,
         apply_tax=APPLY_TAX,

@@ -64,8 +64,9 @@ fun OverviewScreen(state: UiState, onRetry: () -> Unit) {
             val health = priceHealth(lastTickAge)
             val lastTick = connection.lastTick.ifBlank { position?.priceTime?.takeIf { it.isNotBlank() } ?: connection.lastSync }
             val effectivePnlPercent = if (account.balance != 0.0) (position?.profit ?: 0.0) / account.balance * 100.0 else 0.0
-            val exposure = if (position != null) account.deposit * 20.0 else 0.0
-            val effectiveLeverage = if (account.equity > 0.0) exposure / account.equity else 0.0
+            val exposure = position?.exposure?.takeIf { it > 0.0 } ?: if (position != null) account.deposit * 20.0 else 0.0
+            val effectiveLeverage = position?.effectiveLeverage?.takeIf { it > 0.0 }
+                ?: if (account.balance > 0.0) exposure / account.balance else 0.0
             val phase = if (weekend) "Weekend" else connection.phase
             val regime = if (weekend) "None" else humanProtection(position?.protectionRegime?.ifBlank { null } ?: connection.regime.ifBlank { "None" })
             val nextAction = if (weekend) "None" else connection.nextAction

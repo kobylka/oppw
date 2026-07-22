@@ -144,6 +144,14 @@ data class LastClosedTrade(
     val tradeClass: String  = "",
 )
 
+data class BreakEvenCheck(
+    val status: String = "UNAVAILABLE",
+    val nextCheckAt: String = "",
+    val signalReference: Double = 0.0,
+    val threshold: Double = 0.0,
+    val condition: String = "",
+)
+
 data class PositionStatus(
     val symbol: String,
     val side: String,
@@ -170,6 +178,7 @@ data class PositionStatus(
     val protectionRegime: String,
     val activeSlReason: String,
     val activeTpReason: String,
+    val breakEvenCheck: BreakEvenCheck = BreakEvenCheck(),
 )
 
 data class PriceCondition(
@@ -181,6 +190,7 @@ data class PriceCondition(
     val direction: String,
     val active: Boolean,
     val source: String,
+    val potentialTpPercent: Double? = null,
 )
 
 data class MarketWeekStats(
@@ -360,7 +370,7 @@ data class AnalyticsFilters(
     val scope: String = "SELECTED",
     val leverage: String = "",
     val exitReason: String = "",
-    val year: String = "",
+    val rollingWeeks: Int = 4,
     val tradeClass: String = "",
 )
 
@@ -369,7 +379,9 @@ data class AnalyticsFilterOptions(
     val accounts: List<AnalyticsAccountOption> = emptyList(),
     val leverages: List<Double> = emptyList(),
     val exitReasons: List<String> = emptyList(),
-    val years: List<Int> = emptyList(),
+    val availableWeeks: Int = 0,
+    val defaultRollingWeeks: Int = 4,
+    val effectiveRollingWeeks: Int = 0,
     val classes: List<String> = listOf("A", "B", "C", "D"),
 )
 

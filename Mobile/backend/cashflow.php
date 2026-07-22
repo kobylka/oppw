@@ -19,6 +19,9 @@ if (!$accountStmt->fetchColumn()) json_response(['ok' => false, 'error' => 'Unkn
 
 $occurredAt = normalize_datetime($data['occurredAt'] ?? null);
 $reference = trim((string)($data['referenceKey'] ?? 'manual:' . $accountKey . ':' . bin2hex(random_bytes(8))));
-$stmt = $db->prepare('INSERT INTO account_cash_flows(strategy_key, occurred_at, flow_type, amount, balance_after, source, reference_key, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
-$stmt->execute([$accountKey, $occurredAt, $type, (float)$amount, (float)$balanceAfter, 'MANUAL_API', substr($reference, 0, 100), substr((string)($data['note'] ?? ''), 0, 255)]);
+$reference = substr($reference, 0, 100);
+$note = substr((string)($data['note'] ?? ''), 0, 255);
+$payloadHash = hash('sha256', implode('|', [$accountKey,$occurredAt,$type,(string)(float)$amount,(string)(float)$balanceAfter,'MANUAL_API',$reference,$note]));
+$stmt = $db->prepare('INSERT INTO account_cash_flows(strategy_key,occurred_at,flow_type,amount,balance_after,source,reference_key,note,payload_hash) VALUES (?,?,?,?,?,?,?,?,?)');
+$stmt->execute([$accountKey,$occurredAt,$type,(float)$amount,(float)$balanceAfter,'MANUAL_API',$reference,$note,$payloadHash]);
 json_response(['ok' => true], 201);

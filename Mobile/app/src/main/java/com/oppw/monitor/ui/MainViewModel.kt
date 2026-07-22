@@ -114,8 +114,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.value = current.copy(analyticsLoading = true, analyticsError = null)
         viewModelScope.launch {
             runCatching { repository.analytics(key, filters) }
-                .onSuccess { analytics -> _uiState.value = _uiState.value.copy(analytics = analytics, analyticsLoading = false, analyticsError = null) }
-                .onFailure { error -> _uiState.value = _uiState.value.copy(analyticsLoading = false, analyticsError = error.message ?: error::class.java.simpleName) }
+                .onSuccess { analytics ->
+                    val latest = _uiState.value
+                    if (latest.selectedAccountKey == key && latest.analyticsFilters == filters) {
+                        _uiState.value = latest.copy(analytics = analytics, analyticsFilters = analytics.filters, analyticsLoading = false, analyticsError = null)
+                    }
+                }
+                .onFailure { error ->
+                    val latest = _uiState.value
+                    if (latest.selectedAccountKey == key && latest.analyticsFilters == filters) {
+                        _uiState.value = latest.copy(analyticsLoading = false, analyticsError = error.message ?: error::class.java.simpleName)
+                    }
+                }
         }
     }
 

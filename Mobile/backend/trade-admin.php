@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 require __DIR__ . '/lib.php';
+require __DIR__ . '/authority.php';
 
 require_https();
 header('Cache-Control: no-store, max-age=0');
@@ -117,6 +118,50 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
                 max(0.0, $profit), min(0.0, $profit), substr($form['exit_reason'] ?: 'MANUAL', 0, 100), $balanceBefore, $balanceAfter,
             ]);
 
+            // The mutable strategy_trades row above is an Analytics projection.
+            // Record the imported trade and its inferred fills separately in the
+            // immutable authority ledgers. No current strategy specification is
+            // attributed to historical data that predates specification capture.
+            $manualPosition = [
+                'ticket' => $ticket, 'symbol' => substr($form['symbol'], 0, 32),
+                'side' => $side, 'volume' => $volume, 'openPrice' => $openPrice,
+                'bid' => $closePrice,
+            ];
+            $manualSnapshot = [
+                'authorityNoSpecFallback' => true,
+                'authoritySkipReconciledFill' => true,
+                'execution' => ['executionId' => 'manual-import:' . $ticket],
+                'market' => ['currentPrice' => $closePrice],
+            ];
+            oppw_store_trade_transition($db, $form['account_key'], 'OPENED', $manualPosition, $manualSnapshot, $openedSql, 'MANUAL_HISTORY_IMPORT');
+            oppw_store_trade_transition($db, $form['account_key'], 'CLOSED', $manualPosition, $manualSnapshot, $closedSql, substr($form['exit_reason'] ?: 'MANUAL', 0, 100));
+
+            $fillStmt = $db->prepare(
+                'INSERT IGNORE INTO strategy_fills(
+                    strategy_key,fill_record_id,execution_id,decision_id,spec_id,position_ticket,
+                    order_ticket,deal_ticket,side,filled_at,reference_price,fill_price,volume,
+                    retcode,filling_mode,fill_source,is_exact,payload,payload_hash,received_at
+                 ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
+            );
+            foreach ([
+                [$side, $openedSql, $openPrice, 'ENTRY'],
+                [$side === 'BUY' ? 'SELL' : 'BUY', $closedSql, $closePrice, 'EXIT'],
+            ] as [$fillSide, $fillTime, $fillPrice, $fillKind]) {
+                $fillPayload = [
+                    'source' => 'MANUAL_HISTORY_IMPORT', 'kind' => $fillKind,
+                    'positionTicket' => $ticket, 'side' => $fillSide,
+                    'price' => $fillPrice, 'volume' => $volume,
+                ];
+                $fillPayloadJson = oppw_canonical_json($fillPayload);
+                $fillPayloadHash = hash('sha256', $fillPayloadJson);
+                $fillRecordId = hash('sha256', $form['account_key'] . '|' . $ticket . '|' . $fillKind . '|' . $fillTime . '|' . $fillPayloadHash);
+                $fillStmt->execute([
+                    $form['account_key'], $fillRecordId, 'manual-import:' . $ticket, null, null,
+                    $ticket, 0, 0, $fillSide, $fillTime, $fillPrice, $fillPrice, $volume,
+                    null, '', 'MANUAL_HISTORY_IMPORT', 0, $fillPayloadJson, $fillPayloadHash, $fillTime,
+                ]);
+            }
+
             $equityStmt = $db->prepare(
                 'INSERT INTO strategy_equity_points(strategy_key, captured_minute, balance, equity, deposit, current_profit, position_ticket)
                  VALUES (?, ?, ?, ?, 0, 0, NULL)
@@ -128,11 +173,15 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
                 $initialStmt->execute([$form['account_key']]);
                 $initial = $initialStmt->fetch();
                 if (!$initial) {
-                    $insertInitial = $db->prepare("INSERT INTO account_cash_flows(strategy_key, occurred_at, flow_type, amount, balance_after, source, reference_key, note) VALUES (?, ?, 'INITIAL', ?, ?, 'MANUAL_API', ?, 'Initial balance supplied with historical trade')");
-                    $insertInitial->execute([$form['account_key'], $openedSql, $balanceBefore, $balanceBefore, 'manual-initial:' . $form['account_key']]);
+                    $reference = 'manual-initial:' . $form['account_key'];
+                    $flowHash = hash('sha256', implode('|', [$form['account_key'],$openedSql,'INITIAL',(string)$balanceBefore,(string)$balanceBefore,'MANUAL_API',$reference]));
+                    $insertInitial = $db->prepare("INSERT INTO account_cash_flows(strategy_key,occurred_at,flow_type,amount,balance_after,source,reference_key,note,payload_hash) VALUES (?,?,'INITIAL',?,?,'MANUAL_API',?,'Initial balance supplied with historical trade',?)");
+                    $insertInitial->execute([$form['account_key'],$openedSql,$balanceBefore,$balanceBefore,$reference,$flowHash]);
                 } elseif (new DateTimeImmutable((string)$initial['occurred_at'], new DateTimeZone('UTC')) > $opened) {
-                    $updateInitial = $db->prepare("UPDATE account_cash_flows SET occurred_at = ?, amount = ?, balance_after = ?, source = 'MANUAL_API', note = 'Initial balance moved earlier by historical trade import' WHERE id = ?");
-                    $updateInitial->execute([$openedSql, $balanceBefore, $balanceBefore, (int)$initial['id']]);
+                    $reference = 'historical-baseline:' . $form['account_key'] . ':' . $ticket;
+                    $flowHash = hash('sha256', implode('|', [$form['account_key'],$openedSql,'ADJUSTMENT',(string)$balanceBefore,(string)$balanceBefore,'MANUAL_API',$reference]));
+                    $appendBaseline = $db->prepare("INSERT IGNORE INTO account_cash_flows(strategy_key,occurred_at,flow_type,amount,balance_after,source,reference_key,note,payload_hash) VALUES (?,?,'ADJUSTMENT',?,?,'MANUAL_API',?,'Historical baseline appended; immutable INITIAL retained',?)");
+                    $appendBaseline->execute([$form['account_key'],$openedSql,$balanceBefore,$balanceBefore,$reference,$flowHash]);
                 }
             }
             if ($balanceAfter !== null) $equityStmt->execute([$form['account_key'], $closed->format('Y-m-d H:i:00'), $balanceAfter, $balanceAfter]);

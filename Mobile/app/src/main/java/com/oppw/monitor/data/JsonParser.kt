@@ -74,7 +74,7 @@ object JsonParser {
             generatedAt = root.optString("generatedAt"),
             filters = AnalyticsFilters(
                 scope = filters.optString("scope", "SELECTED"), leverage = filters.optString("leverage"),
-                exitReason = filters.optString("exitReason"), year = filters.optString("year"), tradeClass = filters.optString("tradeClass"),
+                exitReason = filters.optString("exitReason"), rollingWeeks = filters.optInt("rollingWeeks", 4), tradeClass = filters.optString("tradeClass"),
             ),
             filterOptions = AnalyticsFilterOptions(
                 accounts = buildList {
@@ -84,7 +84,9 @@ object JsonParser {
                     )) }
                 },
                 leverages = options.optJSONArray("leverages").toDoubles(), exitReasons = options.optJSONArray("exitReasons").toStrings(),
-                years = options.optJSONArray("years").toInts(), classes = options.optJSONArray("classes").toStrings().ifEmpty { listOf("A", "B", "C", "D") },
+                availableWeeks = options.optInt("availableWeeks"), defaultRollingWeeks = options.optInt("defaultRollingWeeks", 4),
+                effectiveRollingWeeks = options.optInt("effectiveRollingWeeks"),
+                classes = options.optJSONArray("classes").toStrings().ifEmpty { listOf("A", "B", "C", "D") },
             ),
             summary = AnalyticsSummary(
                 totalTrades = summary.optInt("totalTrades"), closedTrades = summary.optInt("closedTrades"), openTrades = summary.optInt("openTrades"),
@@ -352,12 +354,22 @@ object JsonParser {
         leveragedProfitPercent = json.optDouble("leveragedProfitPercent"), exposure = json.optDouble("exposure"), effectiveLeverage = json.optDouble("effectiveLeverage"),
         stopLoss = json.optDouble("stopLoss"), takeProfit = json.optDouble("takeProfit"), potentialTakeProfit = json.optDouble("potentialTakeProfit"), breakEvenArmed = json.optBoolean("breakEvenArmed"),
         protectionRegime = json.optString("protectionRegime"), activeSlReason = json.optString("activeSlReason"), activeTpReason = json.optString("activeTpReason"),
+        breakEvenCheck = json.optJSONObject("breakEvenCheck")?.let(::parseBreakEvenCheck) ?: BreakEvenCheck(),
+    )
+
+    private fun parseBreakEvenCheck(json: JSONObject) = BreakEvenCheck(
+        status = json.optString("status", "UNAVAILABLE"),
+        nextCheckAt = json.optString("nextCheckAt"),
+        signalReference = json.optDouble("signalReference"),
+        threshold = json.optDouble("threshold"),
+        condition = json.optString("condition"),
     )
 
     private fun parseCondition(json: JSONObject) = PriceCondition(
         name = json.optString("name"), targetPrice = json.optDouble("targetPrice"), currentPrice = json.optDouble("currentPrice"),
         distancePoints = json.optDouble("distancePoints"), distancePercent = json.optDouble("distancePercent"), direction = json.optString("direction"),
         active = json.optBoolean("active", true), source = json.optString("source", "US100"),
+        potentialTpPercent = json.optNullableFiniteDouble("potentialTpPercent"),
     )
 
     private fun parseConditions(array: JSONArray): List<PriceCondition> = buildList { for (i in 0 until array.length()) add(parseCondition(array.getJSONObject(i))) }

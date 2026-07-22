@@ -1,0 +1,17 @@
+{
+  "accountKey": "DEMO",
+  "positionTicket": 990001,
+  "positionVolume": 0.02,
+  "balance": 8000.0,
+  "equity": 8125.5,
+  "deposit": 4393.0,
+  "decisionToSendMs": 100.0,
+  "brokerAcknowledgementMs": 150.0,
+  "fillMs": 300.0,
+  "protectionAttachmentMs": 300.0,
+  "backendPublicationMs": 400.0,
+  "authorityStages": 9,
+  "authorityFills": 1,
+  "strategyDecisions": 1,
+  "strategySpecifications": 1
+}

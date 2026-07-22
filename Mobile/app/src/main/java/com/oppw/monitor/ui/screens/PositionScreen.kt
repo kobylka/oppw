@@ -27,6 +27,7 @@ import com.oppw.monitor.ui.theme.DangerRed
 import com.oppw.monitor.ui.theme.PrimaryBlue
 import com.oppw.monitor.ui.theme.TextSecondary
 import com.oppw.monitor.util.age
+import com.oppw.monitor.util.countdown
 import com.oppw.monitor.util.humanProtection
 import com.oppw.monitor.util.leverage
 import com.oppw.monitor.util.liveSourceAge
@@ -161,6 +162,14 @@ fun PositionScreen(state: UiState, onRetry: () -> Unit) {
             val effectiveLeverage = position.effectiveLeverage.takeIf { it > 0.0 } ?: if (account.balance > 0.0) exposure / account.balance else 0.0
             val potentialTakeProfit = position.potentialTakeProfit.takeIf { it > 0.0 } ?: visibleConditions.firstOrNull { it.name.equals("OH", true) || it.name.equals("CH", true) }?.targetPrice ?: 0.0
             val liveTickAge = liveSourceAge(position.tickAgeSeconds, position.priceTime.ifBlank { snapshot.connection.lastSync }, state.nowEpochMs)
+            val breakEvenCheck = position.breakEvenCheck
+            val breakEvenStatus = breakEvenCheck.status.uppercase()
+            val breakEvenCheckTime = when (breakEvenStatus) {
+                "ARMED" -> "Already armed"
+                "NO_FURTHER_CHECK" -> "None before weekly TO"
+                "DUE" -> "Due now"
+                else -> shortDateTime(breakEvenCheck.nextCheckAt)
+            }
             LazyColumn(Modifier.fillMaxSize().padding(horizontal = 14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 item {
                     AppCard(Modifier.fillMaxWidth()) {
@@ -173,6 +182,21 @@ fun PositionScreen(state: UiState, onRetry: () -> Unit) {
                             StatusChip(position.side, "green")
                         }
                         MetricRow("Volume", volume(position.volume), "Open price", price(position.openPrice))
+                        MetricRow(
+                            "Next break-even check",
+                            breakEvenCheckTime,
+                            "Countdown",
+                            if (breakEvenStatus == "SCHEDULED" && breakEvenCheck.nextCheckAt.isNotBlank()) countdown(breakEvenCheck.nextCheckAt, state.nowEpochMs) else breakEvenStatus.replace('_', ' '),
+                            if (breakEvenStatus == "ARMED") BrightGreen else PrimaryBlue,
+                        )
+                        if (breakEvenCheck.threshold > 0.0) {
+                            Text(
+                                "Arms immediately after CH if the live signal price is below ${price(breakEvenCheck.threshold)} " +
+                                    "(reference ${price(breakEvenCheck.signalReference)}).",
+                                color = TextSecondary,
+                                style = MaterialTheme.typography.labelMedium,
+                            )
+                        }
                         MetricRow("Current bid", price(position.bid), "Current ask", price(position.ask), if (position.profit >= 0) BrightGreen else DangerRed)
                         MetricRow("Bid time", timeOnly(position.bidAt.ifBlank { position.priceTime }), "Ask time", timeOnly(position.askAt.ifBlank { position.priceTime }))
                         Text("Price age: ${age(liveTickAge)}", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
@@ -221,6 +245,13 @@ private fun ConditionCard(title: String, condition: PriceCondition?, nearest: Bo
             if (nearest) StatusChip("NEAREST")
         }
         MetricRow("Target price", price(condition.targetPrice), "Distance", "${price(condition.distancePoints)} pts\n(${String.format("%.2f", condition.distancePercent)}%)", if (nearest) PrimaryBlue else MaterialTheme.colorScheme.onSurface)
+        if (condition.name.equals("PRE H", true) && condition.potentialTpPercent != null) {
+            Text(
+                "Current potential TP level: ${percent(condition.potentialTpPercent)}",
+                color = if (nearest) PrimaryBlue else MaterialTheme.colorScheme.onSurface,
+                style = MaterialTheme.typography.titleMedium,
+            )
+        }
         MetricRow("Current price", price(condition.currentPrice), "Direction", condition.direction.replaceFirstChar { it.uppercase() })
     }
 }

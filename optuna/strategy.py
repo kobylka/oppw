@@ -8,6 +8,7 @@ import math
 import random
 import pickle
 
+
 def add_days(date, D):
         date_obj = datetime.strptime(date, "%Y%m%d")
         new_date = date_obj + timedelta(days=D)
@@ -21,6 +22,42 @@ def date_diff(date_str1, date_str2):
 
         # Calculate the difference in days
         return (date2 - date1).days
+
+def weekly_trading_day_indices(quote_dates):
+        """Return each quote date's zero-based trading-session index in its ISO week."""
+        indices = {}
+        session_counts = {}
+
+        for date in sorted(quote_dates):
+                date_obj = datetime.strptime(date, "%Y%m%d").date()
+
+                if date_obj.weekday() > 4:
+                        continue
+
+                iso_year, iso_week, _ = date_obj.isocalendar()
+                week_key = (iso_year, iso_week)
+                session_index = session_counts.get(week_key, 0)
+                indices[date] = session_index
+                session_counts[week_key] = session_index + 1
+
+        return indices
+
+def interpolated_premarket_tpp(
+        start_tpp,
+        end_tpp,
+        bar_index,
+        first_bar_index=4,
+        cash_open_index=934,
+):
+        """Linearly scale TPP from midnight to the cash-session open."""
+        interval = cash_open_index - first_bar_index
+
+        if interval <= 0:
+                raise ValueError("cash_open_index must be greater than first_bar_index")
+
+        progress = (bar_index - first_bar_index) / interval
+        progress = min(max(progress, 0.0), 1.0)
+        return start_tpp + (end_tpp - start_tpp) * progress
 
 def plotting(equity_history,deposit_history):
         y = np.array(equity_history)
@@ -64,12 +101,12 @@ class Sim:
         
         self.prev_change = 0
         self.prev_open = 0
-        
-        self.loses = []
-        self.wins = []
             
         self.lost = 0
         self.dd = 0
+        
+        self.wins = []
+        self.loses = []
             
         self.equity_history = []
         self.deposit_history = []
@@ -122,7 +159,19 @@ class Sim:
                         continue
 
                     dukascopy_date = parts[0].strip()  # '03.01.2022'
-                    date = datetime.strptime(dukascopy_date, "%d.%m.%Y").strftime("%Y%m%d")
+                    date = dukascopy_date
+                    
+                    if date == "20200309": continue
+                    if date == "20200310": continue
+                    if date == "20200311": continue
+                    if date == "20200312": continue
+                    if date == "20200313": continue
+                    if date == "20200316": continue
+                    if date == "20200317": continue
+                    if date == "20200318": continue
+                    if date == "20200319": continue
+                    if date == "20200320": continue
+                    if date == "20251128": continue
                     
                     if(date not in self.quotes):
                         continue
@@ -167,6 +216,19 @@ class Sim:
                     if line[0] == "<TICKER>":
                         continue
                     date = line[2]
+                    
+                    if date == "20200309": continue
+                    if date == "20200310": continue
+                    if date == "20200311": continue
+                    if date == "20200312": continue
+                    if date == "20200313": continue
+                    if date == "20200316": continue
+                    if date == "20200317": continue
+                    if date == "20200318": continue
+                    if date == "20200319": continue
+                    if date == "20200320": continue
+                    if date == "20251128": continue
+                    
                     if date == start_date:
                         init = True
                     elif init is False:
@@ -320,8 +382,6 @@ class Sim:
         BE,
         thursday_stop,
         friday_stop,
-        minute_open,
-        minute_close,
         initial_balance=12000.0,
         allow_deposits=False,
         apply_tax=False,
@@ -396,6 +456,11 @@ class Sim:
             
         thursday_SL = 1-thursday_stop
         friday_SL = 1-friday_stop
+
+        # TPP levels follow the order of actual trading sessions in each ISO
+        # week. For example, when Monday is absent, Tuesday receives tpps[0],
+        # Wednesday tpps[1], and subsequent sessions advance from there.
+        trading_day_indices = weekly_trading_day_indices(self.quotes.keys())
         
         for date in sorted(self.quotes):
             if date < start_date: continue
@@ -418,15 +483,16 @@ class Sim:
             qqq_close = quotes[3]
             
             openest = quotes[4][0]
-            opon = quotes[minute_open][0]
-            close = quotes[minute_close][3]
+            opon = quotes[934][0]
+            close = quotes[1324][3]
 
-            tpp = tpps[weekday_index]
+            trading_day_index = trading_day_indices[date]
+            tpp = tpps[min(trading_day_index, len(tpps) - 1)]
 
             close_price = 0
             close_date = date
             trade_type = ""
-            i = minute_close
+            i = 1324
 
             new_week_entry = (date_diff(prev_date, date) > 1 and weekday_index in (0, 1))
 
@@ -508,7 +574,7 @@ class Sim:
                     trade_type = "GAP DOWN"
 
             if close_price == 0 and open_price > 0:
-                for i in range(4, minute_open):
+                for i in range(4, 934):
                     o = quotes[i][0]
                     l = quotes[i][2]
 
@@ -535,6 +601,22 @@ class Sim:
                         close_price = o
                         trade_type = "BEPRE"
                         break
+                    elif(
+                        trading_day_index == 1
+                        and (is_tuesday or is_wednesday)
+                        and date_diff(open_date, date) == 1
+                    ):
+                        premarket_tpp = interpolated_premarket_tpp(
+                            tpps[0],
+                            tpps[1],
+                            i,
+                        )
+                        if(o > open_price * (1 + premarket_tpp)):
+                            close_date = date
+                            close_price = o
+                            trade_type = "PREOH"
+                            break
+
 
             if close_price > 0 and open_price > 0:
                 self.sell(i,open_price,close_price,open_date,close_date,trade_type,LEVERAGE,debug)
@@ -559,7 +641,7 @@ class Sim:
             # Cash-open exits.
             # --------------------------------------------------------
 
-            i = minute_open
+            i = 934
 
             if open_price > 0:
                 if open_price * SL > opon:
@@ -592,7 +674,7 @@ class Sim:
             # --------------------------------------------------------
 
             if close_price == 0 and open_price > 0:
-                for i in range(minute_open, minute_close+1):
+                for i in range(934, 1325):
                     o = quotes[i][0]
                     h = quotes[i][1]
                     l = quotes[i][2]
@@ -633,13 +715,20 @@ class Sim:
 
             if open_price > 0 and close_price == 0:
                 if qqq_close > qqq_open_price * (1 + tpp):
-                    i = minute_close
+                    i = 1324
                     close_date = date
                     close_price = close
                     trade_type = "CH"
+                    
+                #elif (is_wednesday and (close+1) / open_price < thursday_SL):
+                elif (is_wednesday and (close+100000) / open_price < thursday_SL):
+                    i = 1324
+                    close_date = date
+                    close_price = close
+                    trade_type = "TSL0"
 
                 elif is_friday:
-                    i = minute_close
+                    i = 1324
                     close_date = date
                     close_price = close
                     trade_type = "TO"
@@ -699,6 +788,7 @@ class Sim:
         total_cagr = round(self.balance/self.deposited, 2)
         years = (self.trade_no*7)/365
         cagr = round(pow(total_cagr, 1/years), 2)
+        
         
         return build_backtest_result(initial_balance=initial_balance, final_balance=self.balance, deposited=self.deposited, daily_equity_points=self.daily_equity_points,
             trade_returns=self.trade_returns, days_in_position=self.days_in_position, start_date=start_date, end_date=end_date)

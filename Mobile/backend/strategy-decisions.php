@@ -20,7 +20,7 @@ $beforeId = max(0,(int)($_GET['before_id'] ?? 0));
 $where = 'strategy_key = ?';
 $params = [$accountKey];
 if ($beforeId > 0) { $where .= ' AND id < ?'; $params[] = $beforeId; }
-$sql = "SELECT id,decision_id,decision_week,recorded_at,strategy_build,parameter_hash,decision_type,outcome,selected_leverage,leverage_reason,previous_full_week_change,previous_full_week_source,previous_trade_change,previous_trade_source,symbol,side,proposed_price,proposed_volume,required_deposit,required_balance,required_balance_multiplier,balance_multiplier_profile,effective_leverage,stop_loss_percent,stop_loss_price,stop_loss_cash,account_return_at_stop_percent,account_loss_cap_applied,error_text,payload FROM strategy_decisions WHERE $where ORDER BY id DESC LIMIT $limit";
+$sql = "SELECT id,decision_id,strategy_spec_id,strategy_spec_hash,decision_week,recorded_at,strategy_build,parameter_hash,decision_type,outcome,selected_leverage,leverage_reason,previous_full_week_change,previous_full_week_source,previous_trade_change,previous_trade_source,symbol,side,proposed_price,proposed_volume,required_deposit,required_balance,required_balance_multiplier,balance_multiplier_profile,effective_leverage,stop_loss_percent,stop_loss_price,stop_loss_cash,account_return_at_stop_percent,account_loss_cap_applied,error_text,payload,payload_hash FROM strategy_decisions WHERE $where ORDER BY id DESC LIMIT $limit";
 $statement = $db->prepare($sql);
 $statement->execute($params);
 $rows = $statement->fetchAll();

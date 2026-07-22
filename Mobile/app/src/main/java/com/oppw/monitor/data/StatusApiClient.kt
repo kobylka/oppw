@@ -58,7 +58,7 @@ class StatusApiClient(context: Context, private val baseUrl: String = BuildConfi
             append("&scope=").append(encode(filters.scope))
             if (filters.leverage.isNotBlank()) append("&leverage=").append(encode(filters.leverage))
             if (filters.exitReason.isNotBlank()) append("&exit_reason=").append(encode(filters.exitReason))
-            if (filters.year.isNotBlank()) append("&year=").append(encode(filters.year))
+            append("&rolling_weeks=").append(filters.rollingWeeks.coerceAtLeast(1))
             if (filters.tradeClass.isNotBlank()) append("&class=").append(encode(filters.tradeClass))
         }
         return JsonParser.parseAnalytics(authenticatedRequest("GET", query).body)

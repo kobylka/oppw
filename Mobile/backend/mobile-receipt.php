@@ -1,8 +1,9 @@
 <?php
 declare(strict_types=1);
 require __DIR__ . '/lib.php';
+require __DIR__ . '/authority.php';
 require_method('POST');
-$data = read_json_body();
+$data = request_json();
 $accountKey = trim((string)($data['accountKey'] ?? ''));
 $session = require_mobile_session($accountKey !== '' ? $accountKey : null);
 if ($accountKey === '') json_response(['ok'=>false,'error'=>'accountKey required'],400);
@@ -17,7 +18,13 @@ $receivedAt = normalize_datetime(null);
 $snapshotGeneratedAt = trim((string)($data['snapshotGeneratedAt'] ?? ''));
 $latencyMs = null;
 if ($snapshotGeneratedAt !== '') {
-    try { $latencyMs = max(0.0,(new DateTimeImmutable($receivedAt))->format('Uv')-(new DateTimeImmutable($snapshotGeneratedAt))->format('Uv')); } catch (Throwable) {}
+    try {
+        $receivedDt = new DateTimeImmutable($receivedAt, new DateTimeZone('UTC'));
+        $snapshotDt = new DateTimeImmutable($snapshotGeneratedAt, new DateTimeZone('UTC'));
+        $receivedMs = ((float)$receivedDt->format('U') * 1000.0) + ((float)$receivedDt->format('u') / 1000.0);
+        $snapshotMs = ((float)$snapshotDt->format('U') * 1000.0) + ((float)$snapshotDt->format('u') / 1000.0);
+        $latencyMs = max(0.0, $receivedMs - $snapshotMs);
+    } catch (Throwable) {}
 }
 $details = [
     'execution_id'=>$executionId,'decision_id'=>substr((string)($data['decisionId'] ?? ''),0,64),
@@ -27,5 +34,14 @@ $details = [
 $message = sprintf('EVENT EXECUTION_STAGE execution_id=%s decision_id=%s stage=MOBILE_RECEIPT position_ticket=%d latency_ms=%s', $details['execution_id'] ?: 'none', $details['decision_id'] ?: 'none', $details['position_ticket'], $latencyMs === null ? 'none' : (string)$latencyMs);
 $hash = hash('sha256',$accountKey.'|'.$session['device_id'].'|'.$executionId.'|MOBILE_RECEIPT');
 $statement = $db->prepare("INSERT IGNORE INTO strategy_events(strategy_key,event_time,level,name,result,message,details,event_hash) VALUES (?,?,'INFO','EXECUTION_STAGE',TRUE,?,?,?)");
-$statement->execute([$accountKey,$receivedAt,substr($message,0,1000),json_encode($details,JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR),$hash]);
+$db->beginTransaction();
+try {
+    oppw_authority_event($db,$accountKey,['name'=>'EXECUTION_STAGE','time'=>$receivedAt,'result'=>true,'details'=>$details],$hash,$receivedAt);
+    $statement->execute([$accountKey,$receivedAt,substr($message,0,1000),json_encode($details,JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR),$hash]);
+    $db->commit();
+} catch (Throwable $error) {
+    if ($db->inTransaction()) $db->rollBack();
+    error_log('OPPW mobile receipt authority write failed: '.$error->getMessage());
+    json_response(['ok'=>false,'error'=>'Database write failed'],500);
+}
 json_response(['ok'=>true,'receivedAt'=>atom_datetime(new DateTimeImmutable($receivedAt,new DateTimeZone('UTC'))),'latencyMs'=>$latencyMs]);

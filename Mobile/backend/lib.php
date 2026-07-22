@@ -1,6 +1,11 @@
 <?php
 declare(strict_types=1);
 
+if (PHP_SAPI !== 'cli') {
+    @ini_set('display_errors', '0');
+    @ini_set('log_errors', '1');
+}
+
 function config(): array
 {
     static $config;
@@ -130,7 +135,7 @@ function mysql_datetime(DateTimeImmutable $value): string
 
 function atom_datetime(DateTimeImmutable $value): string
 {
-    return $value->setTimezone(new DateTimeZone('UTC'))->format(DATE_ATOM);
+    return $value->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d\\TH:i:s.vP');
 }
 
 function normalize_datetime(?string $value): string
@@ -190,6 +195,57 @@ function require_write_token(): void
     if ($expected === '' || $provided === '' || !hash_equals($expected, $provided)) {
         json_response(['ok' => false, 'error' => 'Unauthorized'], 401);
     }
+}
+
+function require_coordination_actor(PDO $db, string $accountKey, mixed $rawActor, string $purpose): array
+{
+    if (!is_array($rawActor)) {
+        json_response(['ok' => false, 'error' => 'coordination object required'], 409);
+    }
+    $role = strtoupper(trim((string)($rawActor['role'] ?? '')));
+    $ownerId = strtolower(trim((string)($rawActor['ownerId'] ?? '')));
+    $fencingToken = (int)($rawActor['fencingToken'] ?? 0);
+    if (!in_array($role, ['EXECUTOR', 'PUBLISHER'], true)
+        || !preg_match('/^[a-f0-9]{32}$/', $ownerId)
+        || $fencingToken <= 0) {
+        json_response(['ok' => false, 'error' => 'invalid coordination actor'], 409);
+    }
+
+    try {
+        $stmt = $db->prepare(
+            'SELECT owner_id, fencing_token, expires_at > UTC_TIMESTAMP(3) AS active
+               FROM strategy_runtime_leases
+              WHERE strategy_key = ? AND lease_name = ?
+              LIMIT 1'
+        );
+        $stmt->execute([$accountKey, $role]);
+        $lease = $stmt->fetch();
+        $valid = is_array($lease)
+            && (int)($lease['active'] ?? 0) === 1
+            && hash_equals((string)$lease['owner_id'], $ownerId)
+            && (int)$lease['fencing_token'] === $fencingToken;
+        if (!$valid) {
+            json_response(['ok' => false, 'error' => 'stale or invalid global role lease'], 409);
+        }
+
+        if ($purpose === 'snapshot' && $role === 'EXECUTOR') {
+            $publisherStmt = $db->prepare(
+                "SELECT 1 FROM strategy_runtime_leases
+                  WHERE strategy_key = ? AND lease_name = 'PUBLISHER'
+                    AND expires_at > UTC_TIMESTAMP(3)
+                  LIMIT 1"
+            );
+            $publisherStmt->execute([$accountKey]);
+            if ($publisherStmt->fetchColumn()) {
+                json_response(['ok' => false, 'error' => 'dedicated publisher lease is active'], 409);
+            }
+        }
+    } catch (Throwable $e) {
+        error_log('OPPW coordination validation failed: ' . $e->getMessage());
+        json_response(['ok' => false, 'error' => 'Global coordination unavailable'], 503);
+    }
+
+    return ['role' => $role, 'ownerId' => $ownerId, 'fencingToken' => $fencingToken];
 }
 
 function create_access_token(PDO $db, string $deviceId): array
@@ -352,7 +408,6 @@ function http_request_json(string $url, string $method, string $body, array $hea
     $raw = curl_exec($handle);
     $status = (int)curl_getinfo($handle, CURLINFO_RESPONSE_CODE);
     $error = curl_error($handle);
-    curl_close($handle);
     if ($raw === false) throw new RuntimeException('HTTP request failed: ' . $error);
     $decoded = [];
     if (trim((string)$raw) !== '') {

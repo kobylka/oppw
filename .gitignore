@@ -1,10 +1,5 @@
 # OPPW MT5 secrets and account-specific configuration
-mt5/**/oppw-mt5-config.py
-mt5/**/oppw_mt5_config.py
-mt5/**/real-mt5-config.py
-mt5/**/real_mt5_config.py
 mt5/**/*_mt5_config.py
-mt5/**/*-mt5-config.py
 !mt5/**/*.example.py
 
 # MT5 runtime state, coordination and event spools
@@ -21,12 +16,23 @@ mt5/**/*presence*.json
 mt5/**/*.tmp
 mt5/**/*.bak
 mt5/**/__pycache__/
+mt5/**/oppw_monitor_equity*.json
+
+# Historical source copies belong in Git history and release tags, not beside
+# the canonical runtime source.
+mt5/**/oppw_mt5_continuous_v*.py
+mt5/**/*_mt5_config_v*.example.py
 
 # Local Android/backend secrets and generated output
 Mobile/local.properties
 Mobile/**/google-services.json
 Mobile/app/build/
 Mobile/.gradle/
+Mobile/.idea/
+Mobile/.kotlin/
+Mobile/**/*.bak
+Mobile/**/*.diff
+Mobile/abc
 Mobile/backend/config.local.php
 Mobile/backend/.env
 .env
@@ -37,6 +43,10 @@ Mobile/backend/.env
 .venv/
 __pycache__/
 *.pyc
+*.bak
+*.diff
+.idea/
+.codex-docker-config/
 data/raw/
 data/cache/
 logs/
@@ -47,7 +57,6 @@ spy.csv
 quotes.pkl
 optuna/data/cache/quotes.pkl
 Nowy folder/qqq.csv
-mt5/oppw_mt5_config.py
 Mobile/backend/config.php
 Mobile/local.properties
 Mobile/*.jks
@@ -61,3 +70,14 @@ Mobile/backend/private/firebase-service-account.json
 mt5/real/MetaTrader 5/
 mt5/demo/MetaTrader 5/
 /config
+
+# Release products are generated exclusively by tools/release.ps1.
+dist/
+/*.zip
+/*.zip.sha256
+/OPPW_MT5_v*/
+/v*_diffs/
+/install_v*.ps1
+/OPPW_*_v*.md
+/OPPW_V*.md
+/MT5_V*.md

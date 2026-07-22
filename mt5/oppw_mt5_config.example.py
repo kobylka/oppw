@@ -1,10 +1,9 @@
-"""OPPW MT5 v47.4 account configuration template.
+"""Canonical OPPW MT5 account configuration template.
 
-Copy this file beside oppw_mt5_continuous.py using the account-specific local
-name expected by the launcher:
+Copy it into the selected account directory using its local private name:
 
-DEMO: oppw-mt5-config.py
-REAL: real-mt5-config.py
+DEMO: mt5/demo/demo_mt5_config.py
+REAL: mt5/real/real_mt5_config.py
 
 Keep the local file out of Git. Environment variables override the values here.
 """
@@ -17,6 +16,7 @@ from datetime import time
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
+ACCOUNT_DEFAULT = "REAL" if BASE_DIR.name.lower() == "real" else "DEMO"
 
 
 def env_bool(name: str, default: bool) -> bool:
@@ -52,7 +52,7 @@ MONITOR_WRITE_TOKEN = ""
 @dataclass(frozen=True)
 class Config:
     # Identity and symbols
-    config_name: str = os.getenv("OPPW_CONFIG_NAME", "DEMO")
+    config_name: str = os.getenv("OPPW_CONFIG_NAME", ACCOUNT_DEFAULT)
     trade_symbol: str = os.getenv("OPPW_TRADE_SYMBOL", "US100")
     signal_symbol: str = os.getenv("OPPW_SIGNAL_SYMBOL", "US100")
     timezone_name: str = os.getenv("OPPW_TIMEZONE", "Europe/Warsaw")
@@ -117,25 +117,41 @@ class Config:
     close_bar_open: time = env_time("OPPW_CLOSE_BAR_OPEN", time(16, 0))
     close_processing: time = env_time("OPPW_CLOSE_PROCESSING", time(16, 1))
 
-    # Runtime state and coordination
+    # Runtime state. These files contain strategy state/history only; they are
+    # not locks and are never used for cross-process ownership.
     state_file: Path = Path(os.getenv("OPPW_STATE_FILE", str(BASE_DIR / "oppw_mt5_state.json")))
     log_dir: Path = Path(os.getenv("OPPW_LOG_DIR", str(BASE_DIR / "log")))
-    lock_file: Path = Path(os.getenv("OPPW_LOCK_FILE", str(BASE_DIR / "oppw_mt5.lock")))
-    publisher_heartbeat_interval_seconds: float = env_float("OPPW_PUBLISHER_HEARTBEAT_INTERVAL_SECONDS", 1.0)
-    publisher_heartbeat_stale_seconds: float = env_float("OPPW_PUBLISHER_HEARTBEAT_STALE_SECONDS", 8.0)
-    publisher_presence_check_interval_seconds: float = env_float("OPPW_PUBLISHER_PRESENCE_CHECK_INTERVAL_SECONDS", 0.5)
     account_funding_check_interval_seconds: float = env_float("OPPW_ACCOUNT_FUNDING_CHECK_INTERVAL_SECONDS", 5.0)
     mysql_trade_refresh_seconds: float = env_float("OPPW_MYSQL_TRADE_REFRESH_SECONDS", 60.0)
     mysql_trade_error_log_interval_seconds: float = env_float("OPPW_MYSQL_TRADE_ERROR_LOG_INTERVAL_SECONDS", 60.0)
     leverage_inputs_refresh_seconds: float = env_float("OPPW_LEVERAGE_INPUTS_REFRESH_SECONDS", 60.0)
-    event_spool_lock_timeout_seconds: float = env_float("OPPW_EVENT_SPOOL_LOCK_TIMEOUT_SECONDS", 5.0)
-    event_spool_lock_retry_seconds: float = env_float("OPPW_EVENT_SPOOL_LOCK_RETRY_SECONDS", 0.02)
 
-    # Backend publisher
+    # Global MySQL-backed coordination. Both executor and publisher use the
+    # same account key and backend so leases are global across computers.
+    coordination_url: str = os.getenv(
+        "OPPW_COORDINATION_URL",
+        "https://eloski.eu/oppw-backend/coordination.php",
+    )
+    events_ingest_url: str = os.getenv(
+        "OPPW_EVENTS_INGEST_URL",
+        "https://eloski.eu/oppw-backend/events-ingest.php",
+    )
+    coordination_timeout_seconds: float = env_float("OPPW_COORDINATION_TIMEOUT_SECONDS", 5.0)
+    role_lease_ttl_seconds: float = env_float("OPPW_ROLE_LEASE_TTL_SECONDS", 30.0)
+    role_lease_heartbeat_seconds: float = env_float("OPPW_ROLE_LEASE_HEARTBEAT_SECONDS", 3.0)
+    role_lease_safety_margin_seconds: float = env_float("OPPW_ROLE_LEASE_SAFETY_MARGIN_SECONDS", 5.0)
+    publisher_presence_check_interval_seconds: float = env_float(
+        "OPPW_PUBLISHER_PRESENCE_CHECK_INTERVAL_SECONDS",
+        1.0,
+    )
+    trade_gate_ttl_seconds: float = env_float("OPPW_TRADE_GATE_TTL_SECONDS", 10.0)
+    trade_gate_max_hold_seconds: float = env_float("OPPW_TRADE_GATE_MAX_HOLD_SECONDS", 5.0)
+
+    # Backend publishing
     monitor_enabled: bool = env_bool("OPPW_MONITOR_ENABLED", True)
     monitor_ingest_url: str = os.getenv("OPPW_MONITOR_INGEST_URL", "https://eloski.eu/oppw-backend/ingest.php")
     monitor_write_token: str = os.getenv("OPPW_MONITOR_WRITE_TOKEN", MONITOR_WRITE_TOKEN)
-    monitor_account_key: str = os.getenv("OPPW_MONITOR_ACCOUNT_KEY", "DEMO")
+    monitor_account_key: str = os.getenv("OPPW_MONITOR_ACCOUNT_KEY", ACCOUNT_DEFAULT)
     monitor_publish_interval_seconds: float = env_float("OPPW_MONITOR_PUBLISH_INTERVAL_SECONDS", 5.0)
     monitor_timeout_seconds: float = env_float("OPPW_MONITOR_TIMEOUT_SECONDS", 10.0)
     monitor_error_log_interval_seconds: float = env_float("OPPW_MONITOR_ERROR_LOG_INTERVAL_SECONDS", 30.0)

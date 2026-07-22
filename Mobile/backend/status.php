@@ -102,9 +102,9 @@ if ($weekendIdle) {
 // even before the upgraded publisher sends its first v35 snapshot.
 if (is_array($snapshot['position'] ?? null) && (!array_key_exists('open', $snapshot['position']) || (bool)$snapshot['position']['open'])) {
     $depositValue = is_numeric($snapshot['account']['deposit'] ?? null) ? (float)$snapshot['account']['deposit'] : 0.0;
-    $equityValue = is_numeric($snapshot['account']['equity'] ?? null) ? (float)$snapshot['account']['equity'] : 0.0;
+    $balanceValue = is_numeric($snapshot['account']['balance'] ?? null) ? (float)$snapshot['account']['balance'] : 0.0;
     $snapshot['position']['exposure'] = $depositValue * 20.0;
-    $snapshot['position']['effectiveLeverage'] = $equityValue > 0 ? $snapshot['position']['exposure'] / $equityValue : 0.0;
+    $snapshot['position']['effectiveLeverage'] = $balanceValue > 0 ? $snapshot['position']['exposure'] / $balanceValue : 0.0;
 
     $nextAction = strtoupper(trim((string)($snapshot['connection']['nextAction'] ?? '')));
     if ($nextAction !== 'OH' && is_array($snapshot['conditions'] ?? null)) {
@@ -372,29 +372,61 @@ function market_point_price(array $row, string $field, ?float $fallback = null):
     return positive_number($row, $field) ?? $fallback;
 }
 
+function is_regular_market_phase(mixed $phase): bool
+{
+    $normalized = strtoupper(trim(str_replace(['_', '-'], ' ', (string)$phase)));
+    if ($normalized === '') return false;
+    return preg_match('/(^|\s)REGULAR(\s|$)/', $normalized) === 1;
+}
+
 
 function build_market_week_stats(array $rows, DateTimeImmutable $weekStart, DateTimeZone $localTimezone): ?array
 {
     $weekStartKey = $weekStart->format('Y-m-d');
     $currentWeekKey = strategy_week_start(new DateTimeImmutable('now', $localTimezone))->format('Y-m-d');
     $isCurrentWeek = $weekStartKey === $currentWeekKey;
-    $weekRows = []; $regularRows = []; $currentPrice = null;
+    $weekRows = []; $currentPrice = null;
     foreach ($rows as $row) {
         $local = (new DateTimeImmutable((string)$row['captured_minute'], new DateTimeZone('UTC')))->setTimezone($localTimezone);
         if (strategy_week_start($local)->format('Y-m-d') !== $weekStartKey) continue;
         $weekRows[] = [$row, $local];
         $price = positive_number($row, 'current_price') ?? positive_number($row, 'bid') ?? positive_number($row, 'ask');
         if ($price !== null) $currentPrice = $price;
-        if (strtoupper(trim((string)($row['phase'] ?? ''))) === 'REGULAR') $regularRows[] = [$row, $local];
     }
     if (!$weekRows) return null;
-    if (!$isCurrentWeek && !$regularRows) $regularRows = $weekRows;
+    usort($weekRows, static fn(array $a,array $b):int=>$a[1]->getTimestamp()<=>$b[1]->getTimestamp());
+
+    // The weekly observation window begins at the first regular-session row
+    // of the week. Once that boundary has been reached, include every later
+    // weekday candle, including overnight and premarket candles on Tuesday
+    // through Friday. This excludes only the first trading day's premarket
+    // data instead of incorrectly excluding premarket data every day.
+    $firstRegularTimestamp = null;
+    foreach ($weekRows as [$row, $local]) {
+        if (is_regular_market_phase($row['phase'] ?? '')) {
+            $firstRegularTimestamp = $local->getTimestamp();
+            break;
+        }
+    }
+    $eligibleRows = [];
+    if ($firstRegularTimestamp !== null) {
+        foreach ($weekRows as [$row, $local]) {
+            if ($local->getTimestamp() >= $firstRegularTimestamp && (int)$local->format('N') <= 5) {
+                $eligibleRows[] = [$row, $local];
+            }
+        }
+    } elseif (!$isCurrentWeek) {
+        // Compatibility for older completed weeks that predate phase storage.
+        $eligibleRows = array_values(array_filter(
+            $weekRows,
+            static fn(array $item): bool => (int)$item[1]->format('N') <= 5,
+        ));
+    }
     $weekEnd = $weekStart->modify('+6 days');
     $result = ['week'=>$weekStart->format('d M').' – '.$weekEnd->format('d M Y'),'currentPrice'=>$currentPrice,'weekOpen'=>null,'weekOpenDate'=>'','weeklyHigh'=>null,'weeklyLow'=>null,'weeklyClose'=>null,'weeklyHighPercent'=>null,'weeklyLowPercent'=>null,'weeklyClosePercent'=>null,'dailyDate'=>'','dailyOpen'=>null,'dailyHigh'=>null,'dailyLow'=>null,'dailyClose'=>null,'dailyHighPercent'=>null,'dailyLowPercent'=>null,'dailyClosePercent'=>null,'fridayOpen'=>null,'dailyLowDate'=>''];
-    if (!$regularRows) return $result;
-    usort($regularRows, static fn(array $a,array $b):int=>$a[1]->getTimestamp()<=>$b[1]->getTimestamp());
+    if (!$eligibleRows) return $result;
     $days=[];
-    foreach ($regularRows as [$row,$local]) {
+    foreach ($eligibleRows as [$row,$local]) {
         $day=$local->format('Y-m-d'); $price=positive_number($row,'current_price')??positive_number($row,'bid')??positive_number($row,'ask');
         $open=market_point_price($row,'m1_open',$price); $high=market_point_price($row,'m1_high',$price); $low=market_point_price($row,'m1_low',$price); $close=market_point_price($row,'m1_close',$price);
         if (!isset($days[$day])) $days[$day]=['open'=>$open,'high'=>null,'low'=>null,'close'=>null];
