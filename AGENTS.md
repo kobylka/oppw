@@ -22,7 +22,8 @@ Repeat this protocol after context compaction, after inheriting work from anothe
 - The project version exists only in root `VERSION` and uses `MAJOR.MINOR.PATCH`.
 - The sole MT5 implementation is `mt5/oppw_mt5_continuous.py`.
 - The sole committed MT5 config template is `mt5/oppw_mt5_config.example.py`.
-- Files under `mt5/demo/` and `mt5/real/` may only be thin compatibility launchers and ignored private runtime/configuration files.
+- `mt5/oppw_mt5_continuous.py` is the sole MT5 entrypoint; account selection always uses `--account demo|real`.
+- Files under `mt5/demo/` and `mt5/real/` are ignored private runtime/configuration files only. Do not add account launchers or copied strategy sources.
 - Never create version-suffixed implementation copies, copied backend endpoints, patcher-generated backups, parallel installers, or source trees inside release folders.
 - Tests must import the canonical implementation, never a historical copy.
 - `dist/`, build outputs, IDE metadata, logs, state, locks, credentials, and local configuration are generated/runtime material and must remain untracked.

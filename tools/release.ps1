@@ -81,8 +81,7 @@ try {
             $_ -like 'contracts/*' -or
             $_ -in @(
                 'mt5/oppw_mt5_continuous.py','mt5/oppw_mt5_config.example.py',
-                'mt5/README.md','mt5/demo/oppw_mt5_continuous.py',
-                'mt5/real/oppw_mt5_continuous.py'
+                'mt5/README.md'
             ) -or
             $_ -like 'mt5/tests/*' -or
             $_ -like 'Mobile/app/src/*' -or

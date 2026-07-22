@@ -37,7 +37,7 @@ Key execution rules
 * Weekends remain market-idle after startup. A lightweight MT5 account-balance watcher runs regardless of position state and may publish a fresh next-trade What-if snapshot after a top-up or withdrawal; no recurring market checks or minute publishing follow.
 
 Run with `--mode executor|publisher` and `--account demo|real`. DEMO loads
-oppw-mt5-config.py and REAL loads real-mt5-config.py. Live trading is disabled
+demo/demo_mt5_config.py and REAL loads real/real_mt5_config.py. Live trading is disabled
 unless LIVE_ENABLED=True in the selected account configuration or OPPW_LIVE=1 is set.
 """
 
@@ -86,8 +86,7 @@ INSTANCE_MODE_EXECUTOR = "EXECUTOR"
 INSTANCE_MODE_PUBLISHER = "PUBLISHER"
 ACCOUNT_DEMO = "DEMO"
 ACCOUNT_REAL = "REAL"
-ACCOUNT_CONFIG_FILES = {ACCOUNT_DEMO: "oppw-mt5-config.py", ACCOUNT_REAL: "real-mt5-config.py"}
-ACCOUNT_CONFIG_FALLBACKS = {ACCOUNT_DEMO: ("oppw_mt5_config.py",), ACCOUNT_REAL: ("real_mt5_config.py",)}
+ACCOUNT_CONFIG_FILES = {ACCOUNT_DEMO: "demo_mt5_config.py", ACCOUNT_REAL: "real_mt5_config.py"}
 
 try:
     import exchange_calendars as xcals
@@ -107,17 +106,9 @@ except ImportError as exc:
 def load_account_config(account: str):
     account = account.upper()
     account_dir = BASE_DIR / account.lower()
-    primary = account_dir / ACCOUNT_CONFIG_FILES[account]
-    candidates = (
-        primary,
-        *(account_dir / name for name in ACCOUNT_CONFIG_FALLBACKS[account]),
-        BASE_DIR / ACCOUNT_CONFIG_FILES[account],
-        *(BASE_DIR / name for name in ACCOUNT_CONFIG_FALLBACKS[account]),
-    )
-    config_path = next((path for path in candidates if path.exists()), None)
-    if config_path is None:
-        names = ", ".join(path.name for path in candidates)
-        raise RuntimeError(f"Missing {account} configuration. Expected one of: {names}")
+    config_path = account_dir / ACCOUNT_CONFIG_FILES[account]
+    if not config_path.is_file():
+        raise RuntimeError(f"Missing {account} configuration: {config_path}")
 
     module_name = f"oppw_mt5_config_{account.lower()}_{uuid.uuid4().hex}"
     spec = importlib.util.spec_from_file_location(module_name, config_path)
@@ -5115,7 +5106,7 @@ def parse_arguments(argv: Optional[list[str]] = None) -> argparse.Namespace:
         "--account",
         choices=(ACCOUNT_DEMO.lower(), ACCOUNT_REAL.lower()),
         default=ACCOUNT_DEMO.lower(),
-        help="demo loads oppw-mt5-config.py; real loads real-mt5-config.py",
+        help="demo loads demo/demo_mt5_config.py; real loads real/real_mt5_config.py",
     )
     parser.add_argument(
         "--conservative-multiplier",

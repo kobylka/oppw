@@ -2,8 +2,8 @@
 
 Copy it into the selected account directory using its local private name:
 
-DEMO: mt5/demo/oppw-mt5-config.py
-REAL: mt5/real/real-mt5-config.py
+DEMO: mt5/demo/demo_mt5_config.py
+REAL: mt5/real/real_mt5_config.py
 
 Keep the local file out of Git. Environment variables override the values here.
 """

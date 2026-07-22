@@ -1,10 +1,5 @@
 # OPPW MT5 secrets and account-specific configuration
-mt5/**/oppw-mt5-config.py
-mt5/**/oppw_mt5_config.py
-mt5/**/real-mt5-config.py
-mt5/**/real_mt5_config.py
 mt5/**/*_mt5_config.py
-mt5/**/*-mt5-config.py
 !mt5/**/*.example.py
 
 # MT5 runtime state, coordination and event spools
@@ -62,7 +57,6 @@ spy.csv
 quotes.pkl
 optuna/data/cache/quotes.pkl
 Nowy folder/qqq.csv
-mt5/oppw_mt5_config.py
 Mobile/backend/config.php
 Mobile/local.properties
 Mobile/*.jks

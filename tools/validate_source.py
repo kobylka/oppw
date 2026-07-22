@@ -46,6 +46,7 @@ def main() -> int:
         "docs/decisions/0002-immutable-mysql-authority.md": ("Status: Accepted",),
         "docs/decisions/0003-atomic-cross-component-contracts.md": ("Status: Accepted",),
         "docs/decisions/0004-executable-cross-component-contracts.md": ("Status: Accepted",),
+        "docs/decisions/0005-single-mt5-entrypoint.md": ("Status: Accepted", "Supersedes"),
         ".github/pull_request_template.md": ("Contract impact", "Architecture and safety", "Validation"),
     }
     for relative, markers in required_governance.items():
@@ -89,14 +90,22 @@ def main() -> int:
     if versioned_sources:
         fail(errors, "versioned MT5 source copies found: " + ", ".join(versioned_sources))
 
-    for account in ("demo", "real"):
-        launcher = root / "mt5" / account / "oppw_mt5_continuous.py"
-        if not launcher.is_file():
-            fail(errors, f"missing {account} compatibility launcher")
-            continue
-        content = launcher.read_text(encoding="utf-8")
-        if "CANONICAL_SOURCE" not in content or len(content.splitlines()) > 20:
-            fail(errors, f"{account} launcher is not a thin canonical-source launcher")
+    loop_entrypoints = sorted(
+        path.relative_to(root).as_posix()
+        for path in (root / "mt5").rglob("oppw_mt5_continuous.py")
+    )
+    if loop_entrypoints != ["mt5/oppw_mt5_continuous.py"]:
+        fail(errors, "exactly one MT5 entrypoint is allowed; found: " + ", ".join(loop_entrypoints))
+
+    required_config_names = (
+        'ACCOUNT_CONFIG_FILES = {ACCOUNT_DEMO: "demo_mt5_config.py", ACCOUNT_REAL: "real_mt5_config.py"}',
+        'account_dir / ACCOUNT_CONFIG_FILES[account]',
+    )
+    for marker in required_config_names:
+        if marker not in canonical_text:
+            fail(errors, f"canonical MT5 account-config mapping is missing: {marker}")
+    if "ACCOUNT_CONFIG_FALLBACKS" in canonical_text:
+        fail(errors, "legacy MT5 account-config aliases are not allowed")
 
     config_examples = sorted((root / "mt5").rglob("*config*.example.py"))
     expected_config = root / "mt5" / "oppw_mt5_config.example.py"

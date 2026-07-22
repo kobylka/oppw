@@ -10,7 +10,14 @@ OPPW has one canonical source tree and one project version.
 - `Mobile/` contains the Android application and PHP/MySQL backend.
 - `Mobile/backend/sql/migration-order.txt` defines the database migration order.
 
-The files under `mt5/demo/` and `mt5/real/` are compatibility launchers. They execute the canonical loop and do not contain strategy code. Private account configuration files remain local and ignored by Git.
+Run the canonical entrypoint directly and select the account explicitly:
+
+```powershell
+python .\mt5\oppw_mt5_continuous.py --account demo
+python .\mt5\oppw_mt5_continuous.py --account real
+```
+
+Private account configuration files remain local and ignored as `mt5/demo/demo_mt5_config.py` and `mt5/real/real_mt5_config.py`.
 
 ## Validate and release
 

@@ -9,7 +9,7 @@ This document describes the present repository. It is deliberately not a changel
 | Project version | `VERSION` |
 | MT5 strategy/execution loop | `mt5/oppw_mt5_continuous.py` |
 | MT5 configuration template | `mt5/oppw_mt5_config.example.py` |
-| Demo/Real entrypoints | thin launchers in `mt5/demo/` and `mt5/real/` |
+| Demo/Real selection | canonical entrypoint with `--account demo|real` |
 | MT5 regression tests | `mt5/tests/` |
 | Android application | `Mobile/app/` |
 | PHP API | `Mobile/backend/` |
@@ -92,3 +92,5 @@ The release gate requires a clean Git commit, canonical-source validation, Pytho
 ## Runtime/private material
 
 Populated account configs, backend `config.php`, Android `local.properties`, secrets, logs, state, equity caches, event spools, and build outputs remain local and ignored. Example files contain placeholders only.
+
+The canonical loop loads exactly one private account configuration: `mt5/demo/demo_mt5_config.py` or `mt5/real/real_mt5_config.py`. Configuration aliases and account-specific loop launchers are not supported.
