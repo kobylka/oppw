@@ -1,0 +1,17 @@
+windows service. make sure continous loop is running for both demo and real loops. allow for force service stop/start from Mobile app Settings screen. two instances allowed: master and backup on two different machines. if master is trying to turn on, stop backup. if master is not responding, backup must turn on automatically
+
+
+[[[[[[[[[[[[[[[[[[[[[[[Every startup should refuse to run unless the script path, build ID, configuration source, account, mode, and source checksum match an explicitly approved release manifest.
+
+
+drawdown curve all time
+
+
+
+
+
+
+
+The project’s biggest engineering weakness is the speed and volume of changes, which repeatedly creates regressions, duplicated endpoints, mismatched models, incorrect installers, and version confusion.
+
+suggest cleanup steps for the entire project and look for regressions through all of github commits from the beginning of the project. also look for version confusion, models mismatch and duplicated endpoints

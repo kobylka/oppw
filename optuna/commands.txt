@@ -1,4 +1,4 @@
-	cd D:\OneDrive\su\oppw\optuna\
+	cd D:\oppw\optuna\
 	powershell -ep bypass
 	.venv\Scripts\Activate.ps1
 	#run docker

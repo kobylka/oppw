@@ -41,9 +41,9 @@ if(TRAIN_END_YEAR == 2015):
 if(TRAIN_END_YEAR == 2014):
     TRAIN_END_DATE = "20150105"
     
-TRAIN_START_YEAR = 2018
+TRAIN_START_YEAR = 2022
 TRAIN_END_YEAR = 2026
-TRAIN_START_DATE = f"20180413"
+TRAIN_START_DATE = f"20220103"
 TRAIN_END_DATE = f"20260717"
 
 QUARANTINE_START_DATE = "20200101"
@@ -62,7 +62,7 @@ STUDY_NAME = (
 )
 
 INITIAL_BALANCE = 30_000.0
-LEVERAGE = 3.0
+LEVERAGE = 8.0
 
 # Existing general/disaster stop expressed as price ratio.
 # Example: 0.95 means exit at 5% below entry.
@@ -85,11 +85,11 @@ MIN_WORST_YEAR_CAGR = -0.9
 MIN_NEIGHBORHOOD_P10_CAGR = 0.0
 
 # Parameter ranges expressed in 0.001 increments.
-P1_RANGE = (7, 7)
-P2_RANGE = (7, 43)
-P3_RANGE = (50, 50)
-P4_RANGE = (50, 50)
-P5_RANGE = (50, 50)
+P1_RANGE = (4, 24)
+P2_RANGE = (16, 20)
+P3_RANGE = (20, 50)
+P4_RANGE = (20, 50)
+P5_RANGE = (20, 50)
 
 THURSDAY_STOP = (4, 4)
 FRIDAY_STOP = (4, 4)

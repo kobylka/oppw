@@ -1,0 +1,449 @@
+warning: in the working copy of 'Mobile/backend/analytics.php', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'Mobile/backend/cashflow.php', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'Mobile/backend/events-ingest.php', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'Mobile/backend/ingest.php', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'Mobile/backend/mobile-receipt.php', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'Mobile/backend/strategy-decisions.php', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'Mobile/backend/trade-admin.php', LF will be replaced by CRLF the next time Git touches it
+diff --git a/Mobile/backend/analytics.php b/Mobile/backend/analytics.php
+index b31f942..45c8b2c 100644
+--- a/Mobile/backend/analytics.php
++++ b/Mobile/backend/analytics.php
+@@ -139,9 +139,13 @@ $benchmark=['label'=>'Unleveraged US100 over the same trade windows','strategyRe
+ $hasTradeSpecificFilter=$effectiveRollingWeeks>0||$leverage!==''||$exitReason!==''||in_array($class,['A','B','C','D'],true);
+ $filteredDecisionSet=[];$filteredTicketSet=[];$tradeKeyByDecision=[];$tradeKeyByTicket=[];
+ foreach($trades as $trade){$tradeKey=trade_key($trade);if($trade['decisionId']!==''){$compound=$trade['strategyKey'].'|'.$trade['decisionId'];$filteredDecisionSet[$compound]=true;$tradeKeyByDecision[$compound]=$tradeKey;}if($trade['ticket']>0){$compound=$trade['strategyKey'].'|'.$trade['ticket'];$filteredTicketSet[$compound]=true;$tradeKeyByTicket[$compound]=$tradeKey;}}
+-$eventSql="SELECT strategy_key,event_time,result,details FROM strategy_events WHERE strategy_key IN ($placeholders) AND name='EXECUTION_STAGE' ORDER BY event_time,id";
+-$eventStmt=$db->prepare($eventSql);$eventStmt->execute($accountKeys);$lifecycleGroups=[];
+-foreach($eventStmt->fetchAll() as $row){$details=[];try{$details=json_decode((string)$row['details'],true,512,JSON_THROW_ON_ERROR);}catch(Throwable){}if(!is_array($details))continue;$executionId=trim((string)($details['execution_id']??''));if($executionId==='')continue;$stage=strtoupper((string)($details['stage']??''));if($stage==='')continue;$eventStrategyKey=(string)$row['strategy_key'];$eventDecisionId=(string)($details['decision_id']??'');$eventTicket=(int)($details['position_ticket']??0);if($hasTradeSpecificFilter&&!isset($filteredDecisionSet[$eventStrategyKey.'|'.$eventDecisionId])&&!isset($filteredTicketSet[$eventStrategyKey.'|'.$eventTicket]))continue;$entry=['stage'=>$stage,'eventAt'=>iso_value((string)($details['event_at']??$row['event_time'])),'result'=>$row['result']===null?null:(bool)$row['result'],'retcode'=>$details['retcode']??null,'fillingMode'=>(string)($details['filling_mode']??''),'referencePrice'=>n($details['reference_price']??0),'actualPrice'=>n($details['actual_price']??0),'latencyMs'=>isset($details['latency_ms'])&&is_numeric($details['latency_ms'])?(float)$details['latency_ms']:null,'reason'=>(string)($details['reason']??'')];if(!isset($lifecycleGroups[$executionId]))$lifecycleGroups[$executionId]=['executionId'=>$executionId,'strategyKey'=>(string)$row['strategy_key'],'decisionId'=>$eventDecisionId,'positionTicket'=>$eventTicket,'stages'=>[]];if($eventDecisionId!=='')$lifecycleGroups[$executionId]['decisionId']=$eventDecisionId;if($eventTicket>0)$lifecycleGroups[$executionId]['positionTicket']=$eventTicket;$lifecycleGroups[$executionId]['stages'][]=$entry;}
++$lifecycleGroups=[];
++$appendLifecycle=function(array $row)use(&$lifecycleGroups,$hasTradeSpecificFilter,$filteredDecisionSet,$filteredTicketSet):void{$executionId=trim((string)($row['execution_id']??''));if($executionId==='')return;$stage=strtoupper((string)($row['stage']??''));if($stage==='')return;$eventStrategyKey=(string)$row['strategy_key'];$eventDecisionId=(string)($row['decision_id']??'');$eventTicket=(int)($row['position_ticket']??0);if($hasTradeSpecificFilter&&!isset($filteredDecisionSet[$eventStrategyKey.'|'.$eventDecisionId])&&!isset($filteredTicketSet[$eventStrategyKey.'|'.$eventTicket]))return;$entry=['stage'=>$stage,'eventAt'=>iso_value((string)$row['event_time']),'result'=>$row['result']===null?null:(bool)$row['result'],'retcode'=>$row['retcode']??null,'fillingMode'=>(string)($row['filling_mode']??''),'referencePrice'=>n($row['reference_price']??0),'actualPrice'=>n($row['actual_price']??0),'latencyMs'=>isset($row['latency_ms'])&&is_numeric($row['latency_ms'])?(float)$row['latency_ms']:null,'reason'=>(string)($row['reason']??'')];if(!isset($lifecycleGroups[$executionId]))$lifecycleGroups[$executionId]=['executionId'=>$executionId,'strategyKey'=>$eventStrategyKey,'decisionId'=>$eventDecisionId,'positionTicket'=>$eventTicket,'stages'=>[]];if($eventDecisionId!=='')$lifecycleGroups[$executionId]['decisionId']=$eventDecisionId;if($eventTicket>0)$lifecycleGroups[$executionId]['positionTicket']=$eventTicket;$lifecycleGroups[$executionId]['stages'][]=$entry;};
++$stageSql="SELECT strategy_key,execution_id,decision_id,position_ticket,stage,occurred_at AS event_time,result,retcode,filling_mode,reference_price,actual_price,latency_ms,reason FROM strategy_execution_stages WHERE strategy_key IN ($placeholders) ORDER BY occurred_at,id";
++$stageStmt=$db->prepare($stageSql);$stageStmt->execute($accountKeys);foreach($stageStmt->fetchAll() as $row)$appendLifecycle($row);
++// Historical records created before v51 remain available from the diagnostic stream.
++$eventSql="SELECT e.strategy_key,e.event_time,e.result,e.details FROM strategy_events e WHERE e.strategy_key IN ($placeholders) AND e.name='EXECUTION_STAGE' AND NOT EXISTS(SELECT 1 FROM strategy_execution_stages s WHERE s.strategy_key=e.strategy_key AND s.stage_record_id=e.event_hash) ORDER BY e.event_time,e.id";
++$eventStmt=$db->prepare($eventSql);$eventStmt->execute($accountKeys);foreach($eventStmt->fetchAll() as $row){$details=[];try{$details=json_decode((string)$row['details'],true,512,JSON_THROW_ON_ERROR);}catch(Throwable){}if(!is_array($details))continue;$appendLifecycle(['strategy_key'=>$row['strategy_key'],'execution_id'=>$details['execution_id']??'','decision_id'=>$details['decision_id']??'','position_ticket'=>$details['position_ticket']??0,'stage'=>$details['stage']??'','event_time'=>$details['event_at']??$row['event_time'],'result'=>$row['result'],'retcode'=>$details['retcode']??null,'filling_mode'=>$details['filling_mode']??'','reference_price'=>$details['reference_price']??0,'actual_price'=>$details['actual_price']??0,'latency_ms'=>$details['latency_ms']??null,'reason'=>$details['reason']??'']);}
+ $lifecycles=[];$decisionLatencies=[];$decisionLatencyKeys=[];$ackLatencies=[];$ackLatencyKeys=[];$fillLatencies=[];$fillLatencyKeys=[];$protectionLatencies=[];$protectionLatencyKeys=[];$publicationLatencies=[];$publicationLatencyKeys=[];$mobileLatencies=[];$mobileLatencyKeys=[];$rejections=0;$attemptCount=0;$sentCount=0;$missed=0;$retcodes=[];$filling=[];$executionTradeKeys=[];$rejectionTradeKeys=[];$sentTradeKeys=[];$missedTradeKeys=[];$retcodeTradeKeys=[];$fillingTradeKeys=[];
+ foreach($lifecycleGroups as $lifecycle){
+     $stageMap=[];foreach($lifecycle['stages'] as $stage){$stageName=$stage['stage'];if(!isset($stageMap[$stageName])){$stageMap[$stageName]=$stage;continue;}if($stageName==='MODIFIED'||($stageMap[$stageName]['result']===false&&$stage['result']!==false))$stageMap[$stageName]=$stage;}
+diff --git a/Mobile/backend/cashflow.php b/Mobile/backend/cashflow.php
+index 06bb92c..740e27c 100644
+--- a/Mobile/backend/cashflow.php
++++ b/Mobile/backend/cashflow.php
+@@ -19,6 +19,9 @@ if (!$accountStmt->fetchColumn()) json_response(['ok' => false, 'error' => 'Unkn
+ 
+ $occurredAt = normalize_datetime($data['occurredAt'] ?? null);
+ $reference = trim((string)($data['referenceKey'] ?? 'manual:' . $accountKey . ':' . bin2hex(random_bytes(8))));
+-$stmt = $db->prepare('INSERT INTO account_cash_flows(strategy_key, occurred_at, flow_type, amount, balance_after, source, reference_key, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+-$stmt->execute([$accountKey, $occurredAt, $type, (float)$amount, (float)$balanceAfter, 'MANUAL_API', substr($reference, 0, 100), substr((string)($data['note'] ?? ''), 0, 255)]);
++$reference = substr($reference, 0, 100);
++$note = substr((string)($data['note'] ?? ''), 0, 255);
++$payloadHash = hash('sha256', implode('|', [$accountKey,$occurredAt,$type,(string)(float)$amount,(string)(float)$balanceAfter,'MANUAL_API',$reference,$note]));
++$stmt = $db->prepare('INSERT INTO account_cash_flows(strategy_key,occurred_at,flow_type,amount,balance_after,source,reference_key,note,payload_hash) VALUES (?,?,?,?,?,?,?,?,?)');
++$stmt->execute([$accountKey,$occurredAt,$type,(float)$amount,(float)$balanceAfter,'MANUAL_API',$reference,$note,$payloadHash]);
+ json_response(['ok' => true], 201);
+diff --git a/Mobile/backend/events-ingest.php b/Mobile/backend/events-ingest.php
+index ae19334..eb3df05 100644
+--- a/Mobile/backend/events-ingest.php
++++ b/Mobile/backend/events-ingest.php
+@@ -2,6 +2,7 @@
+ declare(strict_types=1);
+ 
+ require __DIR__ . '/lib.php';
++require __DIR__ . '/authority.php';
+ require_method('POST');
+ require_write_token();
+ 
+@@ -45,9 +46,7 @@ foreach (array_slice($events, 0, 5000) as $event) {
+         'time' => $eventTime,
+         'level' => substr((string)($event['level'] ?? 'INFO'), 0, 16),
+         'name' => substr($name, 0, 100),
+-        'result' => array_key_exists('result', $event) && $event['result'] !== null
+-            ? (int)(bool)$event['result']
+-            : null,
++        'result' => oppw_nullable_bool($event['result'] ?? null),
+         'message' => $message,
+         'details' => is_array($event['details'] ?? null) ? $event['details'] : [],
+         'hash' => hash('sha256', $accountKey . '|' . $eventTime . '|' . $name . '|' . $message),
+@@ -56,14 +55,35 @@ foreach (array_slice($events, 0, 5000) as $event) {
+ 
+ $inserted = 0;
+ $critical = [];
++$strategySpecificationStored = false;
++$strategySpecificationId = '';
++$strategySpecificationHash = '';
+ $db->beginTransaction();
+ try {
++    $specification = is_array($data['strategySpecification'] ?? null) ? $data['strategySpecification'] : null;
++    if ($specification !== null) {
++        $specResult = oppw_store_strategy_specification(
++            $db,$accountKey,$specification,
++            is_array($data['coordination'] ?? null) ? $data['coordination'] : [],
++            normalize_datetime(null)
++        );
++        $strategySpecificationStored = (bool)$specResult['stored'];
++        $strategySpecificationId = (string)$specResult['specId'];
++        $strategySpecificationHash = (string)$specResult['specHash'];
++    }
+     $stmt = $db->prepare(
+         'INSERT IGNORE INTO strategy_events(
+             strategy_key, event_time, level, name, result, message, details, event_hash
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+     );
+     foreach ($normalized as $event) {
++        $authorityCounts = oppw_authority_event(
++            $db,
++            $accountKey,
++            $event,
++            $event['hash'],
++            normalize_datetime(null)
++        );
+         $detailsJson = $event['details']
+             ? json_encode($event['details'], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)
+             : null;
+@@ -112,4 +132,7 @@ json_response([
+     'accountKey' => $accountKey,
+     'receivedEvents' => count($normalized),
+     'storedEvents' => $inserted,
++    'strategySpecificationStored' => $strategySpecificationStored,
++    'strategySpecificationId' => $strategySpecificationId,
++    'strategySpecificationHash' => $strategySpecificationHash,
+ ], 201);
+diff --git a/Mobile/backend/ingest.php b/Mobile/backend/ingest.php
+index f705759..300b2ce 100644
+--- a/Mobile/backend/ingest.php
++++ b/Mobile/backend/ingest.php
+@@ -1,6 +1,7 @@
+ <?php
+ declare(strict_types=1);
+ require __DIR__ . '/lib.php';
++require __DIR__ . '/authority.php';
+ require_method('POST');
+ require_write_token();
+ 
+@@ -69,7 +70,7 @@ foreach ($events as $event) {
+         'time' => $eventTime,
+         'level' => substr((string)($event['level'] ?? 'INFO'), 0, 16),
+         'name' => substr($name, 0, 100),
+-        'result' => array_key_exists('result', $event) && $event['result'] !== null ? (int)(bool)$event['result'] : null,
++        'result' => oppw_nullable_bool($event['result'] ?? null),
+         'message' => $message,
+         'details' => $details,
+         'hash' => hash('sha256', $accountKey . '|' . $eventTime . '|' . $name . '|' . $message),
+@@ -82,10 +83,21 @@ $closedTradeReason = "closed";
+ // OPPW_V47_4_DECISION_ACK_INIT_BEGIN
+ $strategyDecisionStored = false;
+ $strategyDecisionId = '';
++$strategySpecificationStored = false;
++$strategySpecificationId = '';
++$strategySpecificationHash = '';
+ // OPPW_V47_4_DECISION_ACK_INIT_END
+ 
+ $db->beginTransaction();
+ try {
++    $coordination = is_array($data['coordination'] ?? null) ? $data['coordination'] : [];
++    $specification = is_array($data['strategySpecification'] ?? null) ? $data['strategySpecification'] : null;
++    if ($specification !== null) {
++        $specResult = oppw_store_strategy_specification($db, $accountKey, $specification, $coordination, $capturedAt);
++        $strategySpecificationStored = (bool)$specResult['stored'];
++        $strategySpecificationId = (string)$specResult['specId'];
++        $strategySpecificationHash = (string)$specResult['specHash'];
++    }
+     $snapshotStmt = $db->prepare('INSERT INTO strategy_snapshots(strategy_key, captured_at, payload) VALUES (?, ?, ?)');
+     $snapshotStmt->execute([$accountKey, $capturedAt, $payload]);
+   // OPPW_V47_4_STRATEGY_DECISION_PERSISTENCE_BEGIN
+@@ -99,38 +111,33 @@ try {
+       $sizing = is_array($decision['sizing'] ?? null) ? $decision['sizing'] : [];
+       $risk = is_array($decision['risk'] ?? null) ? $decision['risk'] : [];
+       $strategyDecisionId = substr(trim((string)$decision['decisionId']), 0, 32);
+-      $decisionPayload = json_encode($decision, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
++      $decisionPayload = oppw_canonical_json($decision);
++      $decisionPayloadHash = hash('sha256', $decisionPayload);
+       $decisionRecordedAt = normalize_datetime($decision['recordedAt'] ?? $capturedAt);
++      $decisionSpecId = substr((string)($decision['strategySpecId'] ?? $strategySpecificationId), 0, 32);
++      $decisionSpecHash = substr((string)($decision['strategySpecHash'] ?? $strategySpecificationHash), 0, 64);
++      if ($decisionSpecId === '') $decisionSpecId = (string)(oppw_current_spec_id($db, $accountKey) ?? '');
++      if ($decisionSpecId === '') throw new RuntimeException('strategy decision has no canonical specification');
++      if ($decisionSpecHash === '') {
++          $specHashStmt = $db->prepare('SELECT spec_hash FROM strategy_specifications WHERE spec_id=?');
++          $specHashStmt->execute([$decisionSpecId]);
++          $decisionSpecHash = (string)($specHashStmt->fetchColumn() ?: '');
++      }
+       $decisionStmt = $db->prepare(
+-          'INSERT INTO strategy_decisions(
+-              strategy_key, decision_id, decision_week, recorded_at, first_received_at, last_received_at,
++          'INSERT IGNORE INTO strategy_decisions(
++              strategy_key, decision_id, strategy_spec_id, strategy_spec_hash, decision_week, recorded_at, first_received_at, last_received_at,
+               strategy_build, parameter_hash, decision_type, outcome, selected_leverage, leverage_reason,
+               previous_full_week_change, previous_full_week_source, previous_trade_change, previous_trade_source,
+               symbol, side, proposed_price, proposed_volume, required_deposit, required_balance,
+               required_balance_multiplier, balance_multiplier_profile, effective_leverage,
+               position_notional, sizing_units, margin_usage_percent, margin_level_after_percent,
+               stop_loss_percent, stop_loss_price, stop_loss_cash, account_return_at_stop_percent,
+-              account_loss_cap_applied, error_text, payload
+-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+-          ON DUPLICATE KEY UPDATE
+-              last_received_at=VALUES(last_received_at), recorded_at=LEAST(recorded_at, VALUES(recorded_at)),
+-              decision_week=VALUES(decision_week), strategy_build=VALUES(strategy_build), parameter_hash=VALUES(parameter_hash),
+-              decision_type=VALUES(decision_type), outcome=VALUES(outcome), selected_leverage=VALUES(selected_leverage),
+-              leverage_reason=VALUES(leverage_reason), previous_full_week_change=VALUES(previous_full_week_change),
+-              previous_full_week_source=VALUES(previous_full_week_source), previous_trade_change=VALUES(previous_trade_change),
+-              previous_trade_source=VALUES(previous_trade_source), symbol=VALUES(symbol), side=VALUES(side),
+-              proposed_price=VALUES(proposed_price), proposed_volume=VALUES(proposed_volume),
+-              required_deposit=VALUES(required_deposit), required_balance=VALUES(required_balance),
+-              required_balance_multiplier=VALUES(required_balance_multiplier),
+-              balance_multiplier_profile=VALUES(balance_multiplier_profile), effective_leverage=VALUES(effective_leverage),
+-              position_notional=VALUES(position_notional), sizing_units=VALUES(sizing_units),
+-              margin_usage_percent=VALUES(margin_usage_percent), margin_level_after_percent=VALUES(margin_level_after_percent),
+-              stop_loss_percent=VALUES(stop_loss_percent), stop_loss_price=VALUES(stop_loss_price),
+-              stop_loss_cash=VALUES(stop_loss_cash), account_return_at_stop_percent=VALUES(account_return_at_stop_percent),
+-              account_loss_cap_applied=VALUES(account_loss_cap_applied), error_text=VALUES(error_text), payload=VALUES(payload)'
++              account_loss_cap_applied, error_text, payload, payload_hash
++          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+       );
+       $decisionStmt->execute([
+-          $accountKey, $strategyDecisionId, substr((string)($decision['decisionWeek'] ?? ''), 0, 10),
++          $accountKey, $strategyDecisionId, $decisionSpecId, $decisionSpecHash,
++          substr((string)($decision['decisionWeek'] ?? ''), 0, 10),
+           $decisionRecordedAt, $capturedAt, $capturedAt,
+           substr((string)($decision['build'] ?? ''), 0, 160), substr((string)($decision['parameterHash'] ?? ''), 0, 64),
+           substr((string)($decision['decision'] ?? ''), 0, 64), substr((string)($decision['outcome'] ?? ''), 0, 32),
+@@ -154,8 +161,20 @@ try {
+           is_numeric($risk['potentialStopLossCash'] ?? null) ? (float)$risk['potentialStopLossCash'] : null,
+           is_numeric($risk['accountLossPercentAtStop'] ?? null) ? (float)$risk['accountLossPercentAtStop'] : null,
+           !empty($risk['accountLossCapApplied']) ? 1 : 0,
+-          substr((string)($decision['error'] ?? ''), 0, 1000), $decisionPayload,
++          substr((string)($decision['error'] ?? ''), 0, 1000), $decisionPayload, $decisionPayloadHash,
+       ]);
++      $decisionVerify = $db->prepare(
++          'SELECT strategy_spec_id,strategy_spec_hash,payload_hash FROM strategy_decisions
++            WHERE strategy_key=? AND decision_id=?'
++      );
++      $decisionVerify->execute([$accountKey, $strategyDecisionId]);
++      $storedDecision = $decisionVerify->fetch();
++      if (!is_array($storedDecision)
++          || !hash_equals($decisionSpecId, (string)$storedDecision['strategy_spec_id'])
++          || !hash_equals($decisionSpecHash, (string)$storedDecision['strategy_spec_hash'])
++          || !hash_equals($decisionPayloadHash, (string)$storedDecision['payload_hash'])) {
++          throw new RuntimeException('immutable strategy decision conflict');
++      }
+       $strategyDecisionStored = true;
+   }
+   // OPPW_V47_4_STRATEGY_DECISION_PERSISTENCE_END
+@@ -189,8 +208,10 @@ try {
+     $initialCheck = $db->prepare("SELECT 1 FROM account_cash_flows WHERE strategy_key = ? AND flow_type = 'INITIAL' LIMIT 1");
+     $initialCheck->execute([$accountKey]);
+     if (!$initialCheck->fetchColumn() && $balance != 0.0) {
+-        $initialFlow = $db->prepare("INSERT INTO account_cash_flows(strategy_key, occurred_at, flow_type, amount, balance_after, source, reference_key, note) VALUES (?, ?, 'INITIAL', ?, ?, 'AUTO', ?, 'Initial balance observed by publisher')");
+-        $initialFlow->execute([$accountKey, $capturedAt, $balance, $balance, 'initial:' . $accountKey]);
++        $initialReference = 'initial:' . $accountKey;
++        $initialHash = hash('sha256', implode('|', [$accountKey,$capturedAt,'INITIAL',(string)$balance,(string)$balance,'AUTO',$initialReference]));
++        $initialFlow = $db->prepare("INSERT INTO account_cash_flows(strategy_key,occurred_at,flow_type,amount,balance_after,source,reference_key,note,payload_hash) VALUES (?,?,'INITIAL',?,?,'AUTO',?,'Initial balance observed by publisher',?)");
++        $initialFlow->execute([$accountKey,$capturedAt,$balance,$balance,$initialReference,$initialHash]);
+     }
+ 
+     if ($currentPosition !== null) {
+@@ -290,21 +311,25 @@ try {
+       $linkedBuild = substr((string)($decision['build'] ?? ''), 0, 160);
+       $linkedParameterHash = substr((string)($decision['parameterHash'] ?? ''), 0, 64);
+       $linkedLeverage = is_numeric($decision['selectedLeverage'] ?? null) ? (float)$decision['selectedLeverage'] : null;
++      $linkedSpecId = substr((string)($decision['strategySpecId'] ?? $strategySpecificationId), 0, 32);
++      $linkedSpecHash = substr((string)($decision['strategySpecHash'] ?? $strategySpecificationHash), 0, 64);
+       if ($decision === null || $linkedBuild === '' || $linkedParameterHash === '' || $linkedLeverage === null) {
+-          $linkedDecisionStmt = $db->prepare('SELECT strategy_build,parameter_hash,selected_leverage FROM strategy_decisions WHERE strategy_key=? AND decision_id=? LIMIT 1');
++          $linkedDecisionStmt = $db->prepare('SELECT strategy_build,parameter_hash,selected_leverage,strategy_spec_id,strategy_spec_hash FROM strategy_decisions WHERE strategy_key=? AND decision_id=? LIMIT 1');
+           $linkedDecisionStmt->execute([$accountKey, $linkedDecisionId]);
+           $linkedDecisionRow = $linkedDecisionStmt->fetch();
+           if (is_array($linkedDecisionRow)) {
+               if ($linkedBuild === '') $linkedBuild = substr((string)($linkedDecisionRow['strategy_build'] ?? ''), 0, 160);
+               if ($linkedParameterHash === '') $linkedParameterHash = substr((string)($linkedDecisionRow['parameter_hash'] ?? ''), 0, 64);
+               if ($linkedLeverage === null && is_numeric($linkedDecisionRow['selected_leverage'] ?? null)) $linkedLeverage = (float)$linkedDecisionRow['selected_leverage'];
++              if ($linkedSpecId === '') $linkedSpecId = substr((string)($linkedDecisionRow['strategy_spec_id'] ?? ''), 0, 32);
++              if ($linkedSpecHash === '') $linkedSpecHash = substr((string)($linkedDecisionRow['strategy_spec_hash'] ?? ''), 0, 64);
+           }
+       }
+       $tradePosition = $currentPosition ?? $previousPosition;
+       $tradeTicket = is_array($tradePosition) ? (int)($tradePosition['ticket'] ?? 0) : 0;
+       if ($tradeTicket > 0) {
+-          $tradeDecisionStmt = $db->prepare('UPDATE strategy_trades SET decision_id=?, strategy_build=?, parameter_hash=?, entry_leverage=? WHERE strategy_key=? AND position_ticket=?');
+-          $tradeDecisionStmt->execute([$linkedDecisionId, $linkedBuild, $linkedParameterHash, $linkedLeverage, $accountKey, $tradeTicket]);
++          $tradeDecisionStmt = $db->prepare('UPDATE strategy_trades SET decision_id=?,strategy_spec_id=?,strategy_spec_hash=?,strategy_build=?,parameter_hash=?,entry_leverage=? WHERE strategy_key=? AND position_ticket=?');
++          $tradeDecisionStmt->execute([$linkedDecisionId, $linkedSpecId ?: null, $linkedSpecHash, $linkedBuild, $linkedParameterHash, $linkedLeverage, $accountKey, $tradeTicket]);
+       }
+   }
+   // OPPW_V47_4_TRADE_DECISION_LINK_END
+@@ -312,11 +337,18 @@ try {
+ $previousAccount = is_array($previousSnapshot['account'] ?? null) ? $previousSnapshot['account'] : [];
+     $previousBalance = $number($previousAccount['balance'] ?? 0);
+     $balanceDelta = $balance - $previousBalance;
+-    if ($previousSnapshot && abs($balanceDelta) >= 0.01 && !$hasTradeEvent && $previousPosition === null && $currentPosition === null) {
++    $samePositionAcrossSnapshots = (
++        $previousPosition === null && $currentPosition === null
++    ) || (
++        $previousPosition !== null && $currentPosition !== null
++        && (int)($previousPosition['ticket'] ?? 0) === (int)($currentPosition['ticket'] ?? 0)
++    );
++    if ($previousSnapshot && abs($balanceDelta) >= 0.01 && !$hasTradeEvent && $samePositionAcrossSnapshots) {
+         $flowType = $balanceDelta > 0 ? 'TOP_UP' : 'WITHDRAWAL';
+         $reference = 'auto:' . $accountKey . ':' . str_replace([' ', ':', '.'], '', $capturedAt);
+-        $autoFlow = $db->prepare('INSERT IGNORE INTO account_cash_flows(strategy_key, occurred_at, flow_type, amount, balance_after, source, reference_key, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+-        $autoFlow->execute([$accountKey, $capturedAt, $flowType, $balanceDelta, $balance, 'AUTO_DETECTED', $reference, 'Balance changed while account was flat and no trade event was received']);
++        $cashPayloadHash = hash('sha256', implode('|', [$accountKey,$capturedAt,$flowType,(string)$balanceDelta,(string)$balance,'AUTO_DETECTED',$reference]));
++        $autoFlow = $db->prepare('INSERT IGNORE INTO account_cash_flows(strategy_key,occurred_at,flow_type,amount,balance_after,source,reference_key,note,payload_hash) VALUES (?,?,?,?,?,?,?,?,?)');
++        $autoFlow->execute([$accountKey,$capturedAt,$flowType,$balanceDelta,$balance,'AUTO_DETECTED',$reference,'Balance changed without a trade transition',$cashPayloadHash]);
+     }
+ 
+     $eventStmt = $db->prepare('INSERT IGNORE INTO strategy_events(strategy_key, event_time, level, name, result, message, details, event_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+@@ -326,12 +358,19 @@ $previousAccount = is_array($previousSnapshot['account'] ?? null) ? $previousSna
+       // OPPW_V47_4_DECISION_EVENT_SKIP_END
+ 
+         $detailsJson = $event['details'] ? json_encode($event['details'], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR) : null;
++        oppw_authority_event($db, $accountKey, $event, $event['hash'], $capturedAt);
+         $eventStmt->execute([$accountKey, $event['time'], $event['level'], $event['name'], $event['result'], $event['message'], $detailsJson, $event['hash']]);
+         if ($eventStmt->rowCount() > 0 && (
+             in_array($event['name'], ['CONNECTION_LOST', 'STRATEGY_CYCLE_FAILED', 'POSITION_DISAPPEARED', 'SLTP_REJECTED'], true)
+             || str_starts_with($event['name'], 'PROTECTION_')
+         )) $insertedCriticalEvents[] = $event;
+     }
++    if ($previousPosition === null && $currentPosition !== null) {
++        oppw_store_trade_transition($db, $accountKey, 'OPENED', $currentPosition, $snapshot, $capturedAt);
++    }
++    if ($previousPosition !== null && $currentPosition === null) {
++        oppw_store_trade_transition($db, $accountKey, 'CLOSED', $previousPosition, $snapshot, $capturedAt, $closedTradeReason);
++    }
+     $db->commit();
+ } catch (Throwable $e) {
+     if ($db->inTransaction()) $db->rollBack();
+@@ -370,5 +409,8 @@ json_response([
+     'storedEvents' => count($normalizedEvents),
+     'strategyDecisionStored' => $strategyDecisionStored,
+     'strategyDecisionId' => $strategyDecisionId,
++    'strategySpecificationStored' => $strategySpecificationStored,
++    'strategySpecificationId' => $strategySpecificationId,
++    'strategySpecificationHash' => $strategySpecificationHash,
+ ], 201);
+ // OPPW_V47_4_DECISION_ACK_RESPONSE_END
+diff --git a/Mobile/backend/mobile-receipt.php b/Mobile/backend/mobile-receipt.php
+index 0f1a5fb..9a89be5 100644
+--- a/Mobile/backend/mobile-receipt.php
++++ b/Mobile/backend/mobile-receipt.php
+@@ -1,6 +1,7 @@
+ <?php
+ declare(strict_types=1);
+ require __DIR__ . '/lib.php';
++require __DIR__ . '/authority.php';
+ require_method('POST');
+ $data = read_json_body();
+ $accountKey = trim((string)($data['accountKey'] ?? ''));
+@@ -33,5 +34,14 @@ $details = [
+ $message = sprintf('EVENT EXECUTION_STAGE execution_id=%s decision_id=%s stage=MOBILE_RECEIPT position_ticket=%d latency_ms=%s', $details['execution_id'] ?: 'none', $details['decision_id'] ?: 'none', $details['position_ticket'], $latencyMs === null ? 'none' : (string)$latencyMs);
+ $hash = hash('sha256',$accountKey.'|'.$session['device_id'].'|'.$executionId.'|MOBILE_RECEIPT');
+ $statement = $db->prepare("INSERT IGNORE INTO strategy_events(strategy_key,event_time,level,name,result,message,details,event_hash) VALUES (?,?,'INFO','EXECUTION_STAGE',TRUE,?,?,?)");
+-$statement->execute([$accountKey,$receivedAt,substr($message,0,1000),json_encode($details,JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR),$hash]);
++$db->beginTransaction();
++try {
++    oppw_authority_event($db,$accountKey,['name'=>'EXECUTION_STAGE','time'=>$receivedAt,'result'=>true,'details'=>$details],$hash,$receivedAt);
++    $statement->execute([$accountKey,$receivedAt,substr($message,0,1000),json_encode($details,JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR),$hash]);
++    $db->commit();
++} catch (Throwable $error) {
++    if ($db->inTransaction()) $db->rollBack();
++    error_log('OPPW mobile receipt authority write failed: '.$error->getMessage());
++    json_response(['ok'=>false,'error'=>'Database write failed'],500);
++}
+ json_response(['ok'=>true,'receivedAt'=>atom_datetime(new DateTimeImmutable($receivedAt,new DateTimeZone('UTC'))),'latencyMs'=>$latencyMs]);
+diff --git a/Mobile/backend/strategy-decisions.php b/Mobile/backend/strategy-decisions.php
+index 0c9c3e4..2386589 100644
+--- a/Mobile/backend/strategy-decisions.php
++++ b/Mobile/backend/strategy-decisions.php
+@@ -20,7 +20,7 @@ $beforeId = max(0,(int)($_GET['before_id'] ?? 0));
+ $where = 'strategy_key = ?';
+ $params = [$accountKey];
+ if ($beforeId > 0) { $where .= ' AND id < ?'; $params[] = $beforeId; }
+-$sql = "SELECT id,decision_id,decision_week,recorded_at,strategy_build,parameter_hash,decision_type,outcome,selected_leverage,leverage_reason,previous_full_week_change,previous_full_week_source,previous_trade_change,previous_trade_source,symbol,side,proposed_price,proposed_volume,required_deposit,required_balance,required_balance_multiplier,balance_multiplier_profile,effective_leverage,stop_loss_percent,stop_loss_price,stop_loss_cash,account_return_at_stop_percent,account_loss_cap_applied,error_text,payload FROM strategy_decisions WHERE $where ORDER BY id DESC LIMIT $limit";
++$sql = "SELECT id,decision_id,strategy_spec_id,strategy_spec_hash,decision_week,recorded_at,strategy_build,parameter_hash,decision_type,outcome,selected_leverage,leverage_reason,previous_full_week_change,previous_full_week_source,previous_trade_change,previous_trade_source,symbol,side,proposed_price,proposed_volume,required_deposit,required_balance,required_balance_multiplier,balance_multiplier_profile,effective_leverage,stop_loss_percent,stop_loss_price,stop_loss_cash,account_return_at_stop_percent,account_loss_cap_applied,error_text,payload,payload_hash FROM strategy_decisions WHERE $where ORDER BY id DESC LIMIT $limit";
+ $statement = $db->prepare($sql);
+ $statement->execute($params);
+ $rows = $statement->fetchAll();
+diff --git a/Mobile/backend/trade-admin.php b/Mobile/backend/trade-admin.php
+index 3e6f513..25af4e8 100644
+--- a/Mobile/backend/trade-admin.php
++++ b/Mobile/backend/trade-admin.php
+@@ -1,6 +1,7 @@
+ <?php
+ declare(strict_types=1);
+ require __DIR__ . '/lib.php';
++require __DIR__ . '/authority.php';
+ 
+ require_https();
+ header('Cache-Control: no-store, max-age=0');
+@@ -117,6 +118,50 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
+                 max(0.0, $profit), min(0.0, $profit), substr($form['exit_reason'] ?: 'MANUAL', 0, 100), $balanceBefore, $balanceAfter,
+             ]);
+ 
++            // The mutable strategy_trades row above is an Analytics projection.
++            // Record the imported trade and its inferred fills separately in the
++            // immutable authority ledgers. No current strategy specification is
++            // attributed to historical data that predates specification capture.
++            $manualPosition = [
++                'ticket' => $ticket, 'symbol' => substr($form['symbol'], 0, 32),
++                'side' => $side, 'volume' => $volume, 'openPrice' => $openPrice,
++                'bid' => $closePrice,
++            ];
++            $manualSnapshot = [
++                'authorityNoSpecFallback' => true,
++                'authoritySkipReconciledFill' => true,
++                'execution' => ['executionId' => 'manual-import:' . $ticket],
++                'market' => ['currentPrice' => $closePrice],
++            ];
++            oppw_store_trade_transition($db, $form['account_key'], 'OPENED', $manualPosition, $manualSnapshot, $openedSql, 'MANUAL_HISTORY_IMPORT');
++            oppw_store_trade_transition($db, $form['account_key'], 'CLOSED', $manualPosition, $manualSnapshot, $closedSql, substr($form['exit_reason'] ?: 'MANUAL', 0, 100));
++
++            $fillStmt = $db->prepare(
++                'INSERT IGNORE INTO strategy_fills(
++                    strategy_key,fill_record_id,execution_id,decision_id,spec_id,position_ticket,
++                    order_ticket,deal_ticket,side,filled_at,reference_price,fill_price,volume,
++                    retcode,filling_mode,fill_source,is_exact,payload,payload_hash,received_at
++                 ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
++            );
++            foreach ([
++                [$side, $openedSql, $openPrice, 'ENTRY'],
++                [$side === 'BUY' ? 'SELL' : 'BUY', $closedSql, $closePrice, 'EXIT'],
++            ] as [$fillSide, $fillTime, $fillPrice, $fillKind]) {
++                $fillPayload = [
++                    'source' => 'MANUAL_HISTORY_IMPORT', 'kind' => $fillKind,
++                    'positionTicket' => $ticket, 'side' => $fillSide,
++                    'price' => $fillPrice, 'volume' => $volume,
++                ];
++                $fillPayloadJson = oppw_canonical_json($fillPayload);
++                $fillPayloadHash = hash('sha256', $fillPayloadJson);
++                $fillRecordId = hash('sha256', $form['account_key'] . '|' . $ticket . '|' . $fillKind . '|' . $fillTime . '|' . $fillPayloadHash);
++                $fillStmt->execute([
++                    $form['account_key'], $fillRecordId, 'manual-import:' . $ticket, null, null,
++                    $ticket, 0, 0, $fillSide, $fillTime, $fillPrice, $fillPrice, $volume,
++                    null, '', 'MANUAL_HISTORY_IMPORT', 0, $fillPayloadJson, $fillPayloadHash, $fillTime,
++                ]);
++            }
++
+             $equityStmt = $db->prepare(
+                 'INSERT INTO strategy_equity_points(strategy_key, captured_minute, balance, equity, deposit, current_profit, position_ticket)
+                  VALUES (?, ?, ?, ?, 0, 0, NULL)
+@@ -128,11 +173,15 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
+                 $initialStmt->execute([$form['account_key']]);
+                 $initial = $initialStmt->fetch();
+                 if (!$initial) {
+-                    $insertInitial = $db->prepare("INSERT INTO account_cash_flows(strategy_key, occurred_at, flow_type, amount, balance_after, source, reference_key, note) VALUES (?, ?, 'INITIAL', ?, ?, 'MANUAL_API', ?, 'Initial balance supplied with historical trade')");
+-                    $insertInitial->execute([$form['account_key'], $openedSql, $balanceBefore, $balanceBefore, 'manual-initial:' . $form['account_key']]);
++                    $reference = 'manual-initial:' . $form['account_key'];
++                    $flowHash = hash('sha256', implode('|', [$form['account_key'],$openedSql,'INITIAL',(string)$balanceBefore,(string)$balanceBefore,'MANUAL_API',$reference]));
++                    $insertInitial = $db->prepare("INSERT INTO account_cash_flows(strategy_key,occurred_at,flow_type,amount,balance_after,source,reference_key,note,payload_hash) VALUES (?,?,'INITIAL',?,?,'MANUAL_API',?,'Initial balance supplied with historical trade',?)");
++                    $insertInitial->execute([$form['account_key'],$openedSql,$balanceBefore,$balanceBefore,$reference,$flowHash]);
+                 } elseif (new DateTimeImmutable((string)$initial['occurred_at'], new DateTimeZone('UTC')) > $opened) {
+-                    $updateInitial = $db->prepare("UPDATE account_cash_flows SET occurred_at = ?, amount = ?, balance_after = ?, source = 'MANUAL_API', note = 'Initial balance moved earlier by historical trade import' WHERE id = ?");
+-                    $updateInitial->execute([$openedSql, $balanceBefore, $balanceBefore, (int)$initial['id']]);
++                    $reference = 'historical-baseline:' . $form['account_key'] . ':' . $ticket;
++                    $flowHash = hash('sha256', implode('|', [$form['account_key'],$openedSql,'ADJUSTMENT',(string)$balanceBefore,(string)$balanceBefore,'MANUAL_API',$reference]));
++                    $appendBaseline = $db->prepare("INSERT IGNORE INTO account_cash_flows(strategy_key,occurred_at,flow_type,amount,balance_after,source,reference_key,note,payload_hash) VALUES (?,?,'ADJUSTMENT',?,?,'MANUAL_API',?,'Historical baseline appended; immutable INITIAL retained',?)");
++                    $appendBaseline->execute([$form['account_key'],$openedSql,$balanceBefore,$balanceBefore,$reference,$flowHash]);
+                 }
+             }
+             if ($balanceAfter !== null) $equityStmt->execute([$form['account_key'], $closed->format('Y-m-d H:i:00'), $balanceAfter, $balanceAfter]);

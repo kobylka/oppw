@@ -26,6 +26,8 @@ from models import StrategyParams
 
 
 def valid_parameters(params: StrategyParams) -> bool:
+    if params.p2 < params.p1:
+        raise optuna.TrialPruned()
     if params.minute_close <= params.minute_open:
         raise optuna.TrialPruned()
     return True
@@ -35,8 +37,8 @@ def suggest_parameters(
     trial: optuna.Trial,
 ) -> StrategyParams:
     params = StrategyParams(
-        p1=trial.suggest_int("p1", *P1_RANGE, step=3),
-        p2=trial.suggest_int("p2", *P2_RANGE, step=4),
+        p1=trial.suggest_int("p1", *P1_RANGE, step=1),
+        p2=trial.suggest_int("p2", *P2_RANGE, step=1),
         p3=trial.suggest_int("p3", *P3_RANGE, step=5),
         p4=trial.suggest_int("p4", *P4_RANGE, step=5),
         p5=trial.suggest_int("p5", *P5_RANGE, step=5),

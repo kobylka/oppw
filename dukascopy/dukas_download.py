@@ -8,7 +8,7 @@ from pathlib import Path
 import requests
 
 
-YEAR = 2012
+YEAR = 2011
 INSTRUMENT = "USATECH.IDX-USD"
 OFFER_SIDE = "BID"
 
@@ -94,7 +94,7 @@ def main() -> None:
 
     headers = {
         "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x32) "
             "AppleWebKit/537.36 Chrome/150.0 Safari/537.36"
         ),
         "Accept": "application/json",

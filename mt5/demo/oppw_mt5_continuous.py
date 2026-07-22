@@ -69,7 +69,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-BUILD_ID = "2026-07-21-session-indexed-tpp-premarket-ramp-v50"
+BUILD_ID = "2026-07-21-canonical-spec-immutable-authority-v51"
 INSTANCE_MODE_EXECUTOR = "EXECUTOR"
 INSTANCE_MODE_PUBLISHER = "PUBLISHER"
 ACCOUNT_DEMO = "DEMO"
@@ -245,6 +245,8 @@ class StrategyState:
     entry_signal_daily_open: float = 0.0
     entry_signal_open_pending: bool = False
     entry_leverage: int = 0
+    active_strategy_spec_id: str = ""
+    active_strategy_spec_hash: str = ""
 
     break_even: bool = False
     exit_latched_reason: str = ""
@@ -856,6 +858,8 @@ class MobileMonitorPublisher:
         self.acknowledged_strategy_decision_ids: set[str] = set()
         self.acknowledged_strategy_decision_order: deque[str] = deque()
         self.acknowledged_strategy_decision_limit = 256
+        self.acknowledged_strategy_specification_ids: set[str] = set()
+        self.canonical_strategy_specification: Optional[dict[str, Any]] = None
 
         if self.enabled and not self.ready:
             self.local_log(
@@ -1027,6 +1031,17 @@ class MobileMonitorPublisher:
             return None
         return decision
 
+    def strategy_specification_for_persistence(
+        self, snapshot: dict[str, Any]
+    ) -> Optional[dict[str, Any]]:
+        specification = snapshot.get("strategySpecification")
+        if not isinstance(specification, dict):
+            return None
+        spec_id = str(specification.get("specId", "")).strip()
+        if not spec_id or spec_id in self.acknowledged_strategy_specification_ids:
+            return None
+        return specification
+
     def remember_acknowledged_strategy_decision(self, decision_id: str) -> bool:
         decision_id = str(decision_id).strip()
         if not decision_id or decision_id in self.acknowledged_strategy_decision_ids:
@@ -1125,6 +1140,7 @@ class MobileMonitorPublisher:
         captured_at = datetime.now(UTC).isoformat()
         snapshot_copy = json.loads(json.dumps(snapshot, separators=(",", ":")))
         self.update_equity_history(snapshot_copy, captured_at)
+        strategy_specification = self.strategy_specification_for_persistence(snapshot_copy)
         strategy_decision = self.strategy_decision_for_persistence(snapshot_copy)
         execution = (
             snapshot_copy.get("execution")
@@ -1151,6 +1167,8 @@ class MobileMonitorPublisher:
                     "stage": "PUBLISHED",
                     "event_at": captured_at,
                     "reason": "snapshot_persisted",
+                    "strategy_spec_id": str(execution.get("strategySpecId", "")),
+                    "strategy_spec_hash": str(execution.get("strategySpecHash", "")),
                 },
             }
             outbound_events.append(publication_event)
@@ -1163,7 +1181,26 @@ class MobileMonitorPublisher:
         }
         if strategy_decision is not None:
             payload["strategyDecision"] = strategy_decision
+        if strategy_specification is not None:
+            payload["strategySpecification"] = strategy_specification
         response_payload = self._post_json(self.cfg.monitor_ingest_url, payload)
+        if strategy_specification is not None:
+            expected_spec_id = str(strategy_specification.get("specId", ""))
+            expected_spec_hash = str(strategy_specification.get("specHash", ""))
+            stored = bool(response_payload.get("strategySpecificationStored", False))
+            stored_id = str(response_payload.get("strategySpecificationId", ""))
+            stored_hash = str(response_payload.get("strategySpecificationHash", ""))
+            if not stored or stored_id != expected_spec_id or stored_hash != expected_spec_hash:
+                raise RuntimeError(
+                    "Backend did not acknowledge immutable strategy specification "
+                    f"(expected={expected_spec_id or 'none'} stored={stored_id or 'none'})"
+                )
+            self.acknowledged_strategy_specification_ids.add(stored_id)
+            self.local_log(
+                logging.INFO,
+                "EVENT STRATEGY_SPECIFICATION_PERSISTED spec_id=%s spec_hash=%s backend=%s",
+                stored_id, stored_hash, self.cfg.monitor_ingest_url,
+            )
         if strategy_decision is not None:
             expected_decision_id = str(strategy_decision.get("decisionId", ""))
             stored = bool(response_payload.get("strategyDecisionStored", False))
@@ -1191,7 +1228,20 @@ class MobileMonitorPublisher:
             "events": self.public_events(events),
             "coordination": self.coordinator.actor_payload(),
         }
-        self._post_json(self.cfg.events_ingest_url, payload)
+        specification = self.canonical_strategy_specification
+        if isinstance(specification, dict) and str(specification.get("specId", "")) not in self.acknowledged_strategy_specification_ids:
+            payload["strategySpecification"] = specification
+        response = self._post_json(self.cfg.events_ingest_url, payload)
+        if "strategySpecification" in payload:
+            expected_id = str(specification.get("specId", ""))
+            expected_hash = str(specification.get("specHash", ""))
+            if (
+                not bool(response.get("strategySpecificationStored", False))
+                or str(response.get("strategySpecificationId", "")) != expected_id
+                or str(response.get("strategySpecificationHash", "")) != expected_hash
+            ):
+                raise RuntimeError("Events backend did not acknowledge immutable strategy specification")
+            self.acknowledged_strategy_specification_ids.add(expected_id)
 
     def _take_events(self) -> list[dict[str, Any]]:
         maximum = max(1, self.cfg.monitor_event_buffer_size)
@@ -1419,6 +1469,7 @@ class OPPWContinuousStrategy:
         self.last_autotrading_signature: Optional[tuple[Any, ...]] = None
         self.last_autotrading_log_monotonic = 0.0
         self.last_stale_tick_log_monotonic: dict[str, float] = {}
+        self.last_signal_open_pending_log_monotonic = 0.0
         self.tsl_install_deferred = False
         self._session_times_cache: dict[date, SessionTimes] = {}
         self.last_monitor_publish_monotonic = 0.0
@@ -1438,8 +1489,10 @@ class OPPWContinuousStrategy:
         self.last_account_funding_signature: Optional[tuple[float, float]] = None
         self.weekend_idle = False
         self.started_at = datetime.now(self.tz)
+        self.strategy_specification = self.build_strategy_specification()
         self.coordinator.set_logger(self.log)
         self.monitor_publisher = MobileMonitorPublisher(config, self.log, self.tz, role, coordinator)
+        self.monitor_publisher.canonical_strategy_specification = self.strategy_specification
         self.monitor_event_handler = MobileEventHandler(self.monitor_publisher)
         if self.monitor_publisher.ready:
             self.log.addHandler(self.monitor_event_handler)
@@ -1688,7 +1741,7 @@ class OPPWContinuousStrategy:
 
     def break_even_check_payload(self, position, now: datetime) -> dict[str, Any]:
         entry = float(getattr(position, "price_open", 0.0) or self.state.entry_price or 0.0)
-        signal_reference = float(self.state.entry_signal_daily_open or entry)
+        signal_reference = float(self.state.entry_signal_daily_open or 0.0)
         threshold = signal_reference * float(self.cfg.break_even_ratio) if signal_reference > 0 else 0.0
         if self.state.break_even:
             return {
@@ -1711,6 +1764,20 @@ class OPPWContinuousStrategy:
                 "signalReference": signal_reference,
                 "threshold": threshold,
                 "condition": "Position opening date is unavailable.",
+            }
+
+        if self.state.entry_signal_open_pending or signal_reference <= 0:
+            capture_at = self.session_times(opened).cash_open
+            return {
+                "status": "WAITING_FOR_SIGNAL_OPEN" if now < capture_at else "CAPTURE_RETRY",
+                "nextCheckAt": capture_at.isoformat(),
+                "signalReference": 0.0,
+                "threshold": 0.0,
+                "condition": (
+                    "Waiting for the actual cash-session signal open; the early BUY fill price is never used as a substitute."
+                    if now < capture_at
+                    else "Cash session has opened; retrying capture of the exact cash-open signal bar."
+                ),
             }
 
         final_day = self.final_trading_day(opened)
@@ -2103,14 +2170,24 @@ class OPPWContinuousStrategy:
         leverage_source = "comment" if comment_leverage in {8, 10} else "default_L8"
         signal_open = self.signal_cash_open(self.cfg.signal_symbol, opened.date())
         cash_open = self.session_times(opened.date()).cash_open
-        signal_pending = signal_open is None and (opened < cash_open or self.state.entry_signal_open_pending)
-        if signal_open is None:
-            if signal_pending:
-                signal_open = self.state.entry_signal_daily_open if same_position else 0.0
-                self.log.warning("EVENT RECOVERY_SIGNAL_OPEN_PENDING open_day=%s cash_open=%s", opened.date(), cash_open.isoformat())
-            else:
-                signal_open = float(position.price_open)
-                self.log.warning("EVENT RECOVERY_SIGNAL_OPEN_MISSING open_day=%s fallback=entry_price", opened.date())
+        if signal_open is not None and signal_open > 0:
+            signal_pending = False
+        elif same_position and self.state.entry_signal_daily_open > 0 and not self.state.entry_signal_open_pending:
+            # Preserve an already captured cash-open reference if a later MT5
+            # historical-bar request is temporarily unavailable.
+            signal_open = float(self.state.entry_signal_daily_open)
+            signal_pending = False
+        else:
+            # An early BUY can legitimately precede the signal cash open by
+            # hours. Never fabricate that future reference from the fill price.
+            # Keep it pending after cash open too, so restart/reconnect cycles
+            # continue retrieving the exact opening M1 bar until it is present.
+            signal_open = 0.0
+            signal_pending = True
+            self.log.warning(
+                "EVENT RECOVERY_SIGNAL_OPEN_PENDING open_day=%s cash_open=%s capture_status=%s fallback=none",
+                opened.date(), cash_open.isoformat(), "WAITING" if now < cash_open else "RETRYING",
+            )
 
         recovered_break_even = self.state.break_even if same_position else False
         if signal_open > 0:
@@ -2124,6 +2201,9 @@ class OPPWContinuousStrategy:
         self.state.entry_signal_daily_open = float(signal_open)
         self.state.entry_signal_open_pending = signal_pending
         self.state.entry_leverage = leverage
+        if not self.state.active_strategy_spec_id:
+            self.state.active_strategy_spec_id = self.strategy_specification["specId"]
+            self.state.active_strategy_spec_hash = self.strategy_specification["specHash"]
         self.state.prev_open = float(position.price_open)
         self.state.last_entry_week = iso_week_key(opened.date())
         self.state.entry_pending_until_utc = 0
@@ -2168,9 +2248,17 @@ class OPPWContinuousStrategy:
             return False
         signal_open = self.signal_cash_open(self.cfg.signal_symbol, opened)
         if signal_open is None:
+            current = time_module.monotonic()
+            if current - self.last_signal_open_pending_log_monotonic >= 60.0:
+                self.last_signal_open_pending_log_monotonic = current
+                self.log.warning(
+                    "EVENT ENTRY_SIGNAL_OPEN_CAPTURE_RETRY day=%s symbol=%s cash_open=%s fallback=none",
+                    opened, self.cfg.signal_symbol, self.session_times(opened).cash_open.isoformat(),
+                )
             return False
         self.state.entry_signal_daily_open = float(signal_open)
         self.state.entry_signal_open_pending = False
+        self.last_signal_open_pending_log_monotonic = 0.0
         self.state.save(self.cfg.state_file)
         self.log.info("EVENT ENTRY_SIGNAL_OPEN_CAPTURED day=%s symbol=%s price=%.5f", opened, self.cfg.signal_symbol, signal_open)
         self.emit_status("ENTRY_SIGNAL_OPEN_CAPTURED", position, now)
@@ -2239,6 +2327,8 @@ class OPPWContinuousStrategy:
         self.state.entry_signal_daily_open = 0.0
         self.state.entry_signal_open_pending = False
         self.state.entry_leverage = 0
+        self.state.active_strategy_spec_id = ""
+        self.state.active_strategy_spec_hash = ""
         self.state.break_even = False
         self.state.entry_pending_until_utc = 0
         self.clear_current_position_exit_state(clear_last_exit=False)
@@ -2759,8 +2849,128 @@ class OPPWContinuousStrategy:
             "hardStopRatioL10": self.hard_sl_ratio(int(self.cfg.loss_leverage)),
             "hardStopRatioL8": self.hard_sl_ratio(int(self.cfg.base_leverage)),
             "sizingMethod": "MAX_VOLUME_BY_REQUIRED_BALANCE",
+            "strategySpecHash": str(getattr(self, "strategy_specification", {}).get("specHash", "")),
         }
         return hashlib.sha256(json.dumps(values, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+    def build_strategy_specification(self) -> dict[str, Any]:
+        """Return the resolved, canonical and hash-addressed strategy contract.
+
+        Credentials, account identifiers and operational file paths are
+        deliberately excluded. Every value capable of changing a trading
+        decision, order, size, timestamp or exit is included.
+        """
+        document: dict[str, Any] = {
+            "schemaVersion": 1,
+            "strategy": {"key": "OPPW24", "version": "51.0", "direction": "LONG_ONLY"},
+            "instruments": {
+                "execution": self.cfg.trade_symbol,
+                "signal": self.cfg.signal_symbol,
+                "executionSource": "MetaTrader5",
+                "signalSource": "MetaTrader5",
+            },
+            "calendarAndTime": {
+                "exchangeCalendar": self.cfg.exchange_calendar,
+                "strategyTimezone": self.cfg.timezone_name,
+                "marketTimezone": self.cfg.market_timezone_name,
+                "premarketStart": self.cfg.premarket_start.isoformat(),
+                "cashOpenFallback": self.cfg.cash_open.isoformat(),
+                "cashCloseFallback": self.cfg.close_bar_open.isoformat(),
+                "entryLeadSeconds": float(self.cfg.entry_action_lead_seconds),
+                "nonEntryLeadSeconds": float(self.cfg.non_entry_action_lead_seconds),
+                "entryWindowSeconds": int(self.cfg.entry_window_seconds),
+                "entryDayRule": "FIRST_XNYS_SESSION_OF_WEEK; Monday when open, otherwise the first later XNYS session after any closure sequence",
+                "signalOpenRule": "EXACT_ENTRY_SESSION_CASH_OPEN_M1; deferred without fill-price fallback",
+            },
+            "leverageSelection": {
+                "baseLeverage": int(self.cfg.base_leverage),
+                "lossLeverage": int(self.cfg.loss_leverage),
+                "previousFullWeekTrigger": float(self.cfg.full_week_loss_trigger),
+                "previousTradeTrigger": float(self.cfg.previous_trade_loss_trigger),
+                "rule": "loss leverage if either trigger is met; otherwise base leverage",
+            },
+            "sizing": {
+                "method": "MAX_VOLUME_BY_REQUIRED_BALANCE",
+                "brokerExposureMultiplier": float(self.cfg.sizing_multiplier),
+                "growthRequiredBalanceMultiplier": float(self.cfg.required_balance_multiplier),
+                "conservativeMultiplierL10": float(self.cfg.legacy_required_balance_multiplier_l10),
+                "conservativeMultiplierL8": float(self.cfg.legacy_required_balance_multiplier_l8),
+                "activeProfile": self.balance_multiplier_profile(),
+                "activeRequiredBalanceMultiplierRule": (
+                    "growthRequiredBalanceMultiplier"
+                    if self.balance_multiplier_profile() == "GROWTH_1_765"
+                    else "conservativeMultiplier selected by leverage"
+                ),
+                "volumeRule": "largest broker volume step whose required balance and margin are available",
+            },
+            "thresholds": {
+                "sessionIndexedTakeProfit": [float(value) for value in self.cfg.tpps],
+                "holidayShiftRule": "TPP index follows actual XNYS session ordinal, not weekday name",
+                "preHighRamp": "on second actual session after entry, linear first-to-second TPP from premarket start to cash open",
+                "preHighFormula": "execution M1 open > position fill price * (1 + active ramp TPP) causes market SELL",
+                "openHighFormula": "live execution bid at open check > position fill price * (1 + session-indexed TPP) causes market SELL",
+                "closeHighFormula": "live signal price at close check > entry-session signal cash open * (1 + session-indexed TPP) causes market SELL",
+                "breakEvenRatio": float(self.cfg.break_even_ratio),
+                "breakEvenArmFormula": "after false CH, live signal price < entry-session signal cash open * breakEvenRatio",
+                "breakEvenExitFormula": "BEPRE/BEO/BH compare execution price with position fill price * breakEvenRatio and use market SELL",
+                "thursdayTslDistance": float(self.cfg.tsl_stop),
+                "thursdayTslFormula": "position fill price * (1 - thursdayTslDistance), active from Thursday date change",
+                "hardStopPointsOverLeverage": float(self.cfg.leverage_stop_points),
+                "hardStopRatioL10": float(self.hard_sl_ratio(int(self.cfg.loss_leverage))),
+                "hardStopRatioL8": float(self.hard_sl_ratio(int(self.cfg.base_leverage))),
+                "accountLossCapPolicy": self.account_loss_cap_policy(),
+                "maximumAccountStopLossFraction": float(self.cfg.max_account_stop_loss_fraction),
+            },
+            "orderSemantics": {
+                "entry": "MARKET BUY using current ask in TRADE_ACTION_DEAL",
+                "strategyExit": "MARKET SELL using current bid in TRADE_ACTION_DEAL",
+                "weeklyTimeout": "MARKET SELL at final XNYS session close minus non-entry lead",
+                "protection": "TRADE_ACTION_SLTP broker-side SL; no pending entry or exit orders",
+                "deviationPoints": int(self.cfg.deviation_points),
+                "fillingMode": self.cfg.filling_mode,
+            },
+            "hardStopInvariant": {
+                "provisional": "attached to BUY using requested ask",
+                "definitive": "calculated once from actual fill, volume, balance, leverage and account conversion",
+                "persistence": "immutable per position",
+                "allowedTightening": ["post-fill correction", "Thursday TSL", "explicit break-even/exit protection", "restoration"],
+                "wholePointRounding": "round positive SL upward to nearest whole index point",
+            },
+            "exitHierarchy": [
+                "broker hard SL",
+                "PRE H premarket threshold",
+                "BEPRE market exit",
+                "OH market exit",
+                "BEO market exit",
+                "Thursday TSL tightening or crossed-threshold market exit",
+                "BH market exit",
+                "CH market exit",
+                "break-even arming immediately after false CH",
+                "final-session TO market exit",
+            ],
+            "persistenceAuthority": {
+                "specifications": "immutable MySQL strategy_specifications",
+                "decisions": "immutable MySQL strategy_decisions",
+                "trades": "immutable MySQL strategy_trade_ledger plus strategy_trades projection",
+                "fills": "immutable MySQL strategy_fills",
+                "cashFlows": "immutable MySQL account_cash_flows",
+                "protection": "immutable MySQL strategy_protection_changes",
+                "lifecycle": "immutable MySQL strategy_execution_stages",
+                "events": "diagnostic stream only",
+            },
+        }
+        canonical = json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        spec_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        return {
+            "specId": spec_hash[:32],
+            "specHash": spec_hash,
+            "specKey": "OPPW24",
+            "specVersion": "51.0",
+            "effectiveFrom": "2026-07-21T00:00:00+00:00",
+            "createdAt": self.started_at.astimezone(UTC).isoformat(),
+            "build": BUILD_ID,
+            "document": document,
+        }
 
     def strategy_decision_week_key(self, now: Optional[datetime] = None) -> str:
         now = now or datetime.now(self.tz)
@@ -2773,6 +2983,7 @@ class OPPWContinuousStrategy:
         preview = preview or self.potential_position_preview()
         decision_id_source = "|".join(str(value) for value in (
             self.account, self.strategy_decision_week_key(), BUILD_ID, preview.get("symbol", ""),
+            self.strategy_specification["specHash"],
             preview.get("strategyLeverage", 0.0), preview.get("previousFullWeekChange", 0.0),
             preview.get("previousTradeChange", 0.0), preview.get("volume", 0.0), preview.get("available", False),
             round(float(preview.get("balance") or 0.0), 2), round(float(preview.get("sizingFreeMargin", preview.get("freeMargin")) or 0.0), 2),
@@ -2780,6 +2991,8 @@ class OPPWContinuousStrategy:
         decision_id = uuid.uuid5(uuid.NAMESPACE_URL, decision_id_source).hex
         return {
             "decisionId": decision_id, "decisionWeek": self.strategy_decision_week_key(), "recordedAt": datetime.now(self.tz).isoformat(), "build": BUILD_ID,
+            "strategySpecId": self.strategy_specification["specId"],
+            "strategySpecHash": self.strategy_specification["specHash"],
             "parameterHash": self.strategy_parameter_hash(), "account": self.account, "decision": "NEXT_WEEK_LONG_ENTRY",
             "outcome": "READY" if bool(preview.get("available")) else "UNAVAILABLE",
             "selectedLeverage": float(preview.get("strategyLeverage", 0.0)), "leverageReason": str(preview.get("leverageReason", "")),
@@ -2825,16 +3038,18 @@ class OPPWContinuousStrategy:
         )
         self.last_strategy_decision_payload = payload
         self.state.active_decision_id = str(payload.get("decisionId", ""))
+        self.state.active_strategy_spec_id = self.strategy_specification["specId"]
+        self.state.active_strategy_spec_hash = self.strategy_specification["specHash"]
         if self.is_executor:
             self.state.save(self.cfg.state_file)
         if force or signature != self.last_strategy_decision_signature:
             self.last_strategy_decision_signature = signature
             self.log.info(
-                "EVENT STRATEGY_DECISION_CALCULATED decision_id=%s parameter_hash=%s outcome=%s leverage=%.0f "
+                "EVENT STRATEGY_DECISION_CALCULATED decision_id=%s strategy_spec_id=%s strategy_spec_hash=%s parameter_hash=%s outcome=%s leverage=%.0f "
                 "previous_full_week=%.8f full_week_source=%s previous_trade=%.8f trade_source=%s volume=%.8f required_deposit=%.2f "
                 "required_balance=%.2f required_balance_multiplier=%.3f effective_leverage=%.6f stop_loss_percent=%.4f "
                 "stop_loss_price=%.5f stop_loss_cash=%.2f error=%s",
-                payload["decisionId"], payload["parameterHash"], payload["outcome"], payload["selectedLeverage"],
+                payload["decisionId"], payload["strategySpecId"], payload["strategySpecHash"], payload["parameterHash"], payload["outcome"], payload["selectedLeverage"],
                 payload["inputs"]["previousFullWeekChange"], str(payload["inputs"].get("previousFullWeekSource", "")).replace(" ", "_"),
                 payload["inputs"]["previousTradeChange"], str(payload["inputs"].get("previousTradeSource", "")).replace(" ", "_"),
                 float(payload["sizing"].get("volume") or 0.0), float(payload["sizing"].get("requiredDeposit") or 0.0),
@@ -3222,6 +3437,7 @@ class OPPWContinuousStrategy:
             profit = float(getattr(position, "profit", 0.0)) + float(getattr(position, "swap", 0.0))
             timestamp = getattr(position, "time_msc", 0) / 1000.0 if getattr(position, "time_msc", 0) else float(position.time)
             opened = self.mt5_timestamp_to_local(timestamp)
+            signal_capture_at = self.session_times(opened.date()).cash_open
             exposure = self.monitor_position_exposure(position, deposit, account)
             info = mt5.symbol_info(position.symbol)
             tick_size = float(getattr(info, "trade_tick_size", 0.0) or getattr(info, "point", 0.0) or 0.01) if info is not None else 0.01
@@ -3253,6 +3469,13 @@ class OPPWContinuousStrategy:
                 "stopLoss": float(position.sl),
                 "takeProfit": float(position.tp),
                 "potentialTakeProfit": potential_take_profit,
+                "entrySignalOpen": float(self.state.entry_signal_daily_open or 0.0),
+                "entrySignalOpenPending": bool(self.state.entry_signal_open_pending),
+                "entrySignalCaptureAt": signal_capture_at.isoformat(),
+                "entrySignalReferenceSource": (
+                    "CASH_OPEN_M1" if self.state.entry_signal_daily_open > 0 and not self.state.entry_signal_open_pending
+                    else "PENDING_CASH_OPEN_M1"
+                ),
                 "breakEvenArmed": bool(self.state.break_even),
                 "breakEvenCheck": self.break_even_check_payload(position, now),
                 "protectionRegime": regime,
@@ -3342,6 +3565,7 @@ class OPPWContinuousStrategy:
             "position": position_payload,
             "potentialPosition": preview,
             "strategyDecision": self.strategy_decision_payload(preview) if position is None else self.last_strategy_decision_payload,
+            "strategySpecification": self.strategy_specification,
             "lastClosedTrade": self.last_closed_trade_payload(),
             "execution": self.execution_snapshot(),
             "conditions": conditions,
@@ -3407,8 +3631,10 @@ class OPPWContinuousStrategy:
 
 
     def execution_stage(self, stage: str, *, result: Optional[bool] = True, position_ticket: int = 0, reference_price: float = 0.0,
-                        actual_price: float = 0.0, retcode: Optional[int] = None, filling_mode: str = "", reason: str = "",
-                        scheduled_at: str = "", latency_ms: Optional[float] = None) -> None:
+                         actual_price: float = 0.0, retcode: Optional[int] = None, filling_mode: str = "", reason: str = "",
+                         scheduled_at: str = "", latency_ms: Optional[float] = None,
+                         order_ticket: int = 0, deal_ticket: int = 0, side: str = "", volume: float = 0.0,
+                         old_sl: float = 0.0, new_sl: float = 0.0, old_tp: float = 0.0, new_tp: float = 0.0) -> None:
         execution_id = self.state.active_execution_id
         if not execution_id:
             execution_id = uuid.uuid4().hex
@@ -3420,18 +3646,29 @@ class OPPWContinuousStrategy:
             "stage": stage, "event_at": now, "scheduled_at": scheduled_at or self.state.execution_scheduled_at,
             "reference_price": float(reference_price or 0.0), "actual_price": float(actual_price or 0.0),
             "retcode": retcode, "filling_mode": filling_mode, "reason": reason, "latency_ms": latency_ms, "result": result,
+            "order_ticket": int(order_ticket or 0), "deal_ticket": int(deal_ticket or 0),
+            "side": side, "volume": float(volume or 0.0),
+            "old_sl": float(old_sl or 0.0), "new_sl": float(new_sl or 0.0),
+            "old_tp": float(old_tp or 0.0), "new_tp": float(new_tp or 0.0),
+            "strategy_spec_id": self.state.active_strategy_spec_id or self.strategy_specification["specId"],
+            "strategy_spec_hash": self.state.active_strategy_spec_hash or self.strategy_specification["specHash"],
         }
         result_token = "none" if result is None else str(bool(result)).lower()
         tokens = [f"execution_id={execution_id}", f"decision_id={decision_id or 'none'}", f"stage={stage}", f"result={result_token}", f"position_ticket={fields['position_ticket']}",
                   f"event_at={now}", f"scheduled_at={fields['scheduled_at'] or 'none'}", f"reference_price={fields['reference_price']:.8f}",
                   f"actual_price={fields['actual_price']:.8f}", f"retcode={retcode if retcode is not None else 'none'}",
-                  f"filling_mode={filling_mode or 'none'}", f"reason={reason or 'none'}", f"latency_ms={latency_ms if latency_ms is not None else 'none'}"]
+                  f"filling_mode={filling_mode or 'none'}", f"reason={reason or 'none'}", f"latency_ms={latency_ms if latency_ms is not None else 'none'}",
+                  f"order_ticket={fields['order_ticket']}", f"deal_ticket={fields['deal_ticket']}", f"side={side or 'none'}", f"volume={fields['volume']:.8f}",
+                  f"old_sl={fields['old_sl']:.8f}", f"new_sl={fields['new_sl']:.8f}", f"old_tp={fields['old_tp']:.8f}", f"new_tp={fields['new_tp']:.8f}",
+                  f"strategy_spec_id={fields['strategy_spec_id']}", f"strategy_spec_hash={fields['strategy_spec_hash']}"]
         level = logging.INFO if result is not False else logging.ERROR
         self.log.log(level, "EVENT EXECUTION_STAGE " + " ".join(tokens))
 
     def execution_snapshot(self) -> dict[str, Any]:
         return {
             "executionId": self.state.active_execution_id, "decisionId": self.state.active_decision_id,
+            "strategySpecId": self.state.active_strategy_spec_id or self.strategy_specification["specId"],
+            "strategySpecHash": self.state.active_strategy_spec_hash or self.strategy_specification["specHash"],
             "positionTicket": int(self.state.active_position_ticket or 0), "scheduledAt": self.state.execution_scheduled_at,
             "startedAt": self.state.execution_started_at,
         }
@@ -3716,6 +3953,8 @@ class OPPWContinuousStrategy:
 
         self.state.active_execution_id = uuid.uuid4().hex
         self.state.active_decision_id = self.state.active_decision_id or str((self.last_strategy_decision_payload or {}).get("decisionId", ""))
+        self.state.active_strategy_spec_id = self.strategy_specification["specId"]
+        self.state.active_strategy_spec_hash = self.strategy_specification["specHash"]
         self.state.execution_scheduled_at = scheduled.isoformat()
         self.state.execution_started_at = datetime.now(UTC).isoformat()
         self.state.execution_fill_confirmed = False
@@ -3829,12 +4068,21 @@ class OPPWContinuousStrategy:
         self.state.active_sl_reason = "SL"
         self.state.active_sl_price = sl
         self.state.save(self.cfg.state_file)
+        if self.state.entry_signal_open_pending:
+            self.log.info(
+                "EVENT ENTRY_SIGNAL_OPEN_PENDING day=%s symbol=%s capture_at=%s entry_fill_reference=not_used",
+                current_day, self.cfg.signal_symbol, self.session_times(current_day).cash_open.isoformat(),
+            )
         actual_price = float(getattr(result, "price", 0.0) or ask)
         self.execution_stage("ACCEPTED", reference_price=ask, actual_price=actual_price, retcode=int(result.retcode),
-                             filling_mode=self.filling_mode_name(request.get("type_filling", -1)), latency_ms=acknowledgement_ms)
+                             filling_mode=self.filling_mode_name(request.get("type_filling", -1)), latency_ms=acknowledgement_ms,
+                             order_ticket=int(getattr(result, "order", 0) or 0), deal_ticket=int(getattr(result, "deal", 0) or 0),
+                             side="BUY", volume=float(volume))
         if int(getattr(result, "deal", 0) or 0) > 0:
             self.execution_stage("FILLED", reference_price=ask, actual_price=actual_price, retcode=int(result.retcode),
-                                 filling_mode=self.filling_mode_name(request.get("type_filling", -1)), latency_ms=acknowledgement_ms)
+                                 filling_mode=self.filling_mode_name(request.get("type_filling", -1)), latency_ms=acknowledgement_ms,
+                                 order_ticket=int(getattr(result, "order", 0) or 0), deal_ticket=int(getattr(result, "deal", 0) or 0),
+                                 side="BUY", volume=float(volume))
             self.state.execution_fill_confirmed = True
             self.state.save(self.cfg.state_file)
         self.log.info("EVENT BUY_ACCEPTED retcode=%s order=%s deal=%s", result.retcode, getattr(result, "order", 0), getattr(result, "deal", 0))
@@ -3869,7 +4117,11 @@ class OPPWContinuousStrategy:
             if desired_sl > 0 and not self.state.first_protection_confirmed:
                 self.state.first_protection_confirmed = True
                 self.state.save(self.cfg.state_file)
-                self.execution_stage("PROTECTED", position_ticket=int(position.ticket), actual_price=desired_sl, reason=f"{reason}:confirmed_existing")
+                self.execution_stage(
+                    "PROTECTED", position_ticket=int(position.ticket), actual_price=desired_sl,
+                    reason=f"{reason}:confirmed_existing", old_sl=float(position.sl), new_sl=desired_sl,
+                    old_tp=float(position.tp), new_tp=desired_tp,
+                )
             return True
 
         if not self.cfg.live_enabled:
@@ -3886,6 +4138,10 @@ class OPPWContinuousStrategy:
         self.log.info(
             "EVENT SLTP_REQUEST reason=%s ticket=%s SL=%.5f->%.5f TP=%.5f->%.5f",
             reason, position.ticket, float(position.sl), desired_sl, float(position.tp), desired_tp,
+        )
+        self.execution_stage(
+            "PROTECTION_REQUESTED", position_ticket=int(position.ticket), reason=reason,
+            old_sl=float(position.sl), new_sl=desired_sl, old_tp=float(position.tp), new_tp=desired_tp,
         )
         request = {
             "action": mt5.TRADE_ACTION_SLTP, "symbol": position.symbol, "position": int(position.ticket),
@@ -3908,6 +4164,11 @@ class OPPWContinuousStrategy:
                 self.coordinator.release_trade_gate(gate)
         accepted = {getattr(mt5, "TRADE_RETCODE_DONE", 10009), getattr(mt5, "TRADE_RETCODE_NO_CHANGES", 10025)}
         if result is None or int(result.retcode) not in accepted:
+            self.execution_stage(
+                "PROTECTION_REJECTED", result=False, position_ticket=int(position.ticket), reason=reason,
+                retcode=int(getattr(result, "retcode", -1)) if result is not None else None,
+                old_sl=float(position.sl), new_sl=desired_sl, old_tp=float(position.tp), new_tp=desired_tp,
+            )
             if int(getattr(result, "retcode", -1)) == int(getattr(mt5, "TRADE_RETCODE_CLIENT_DISABLES_AT", 10027)):
                 self.ensure_autotrading_enabled("SLTP_RETCODE_10027", force_log=True)
             self.log.error("EVENT SLTP_REJECTED reason=%s retcode=%s comment=%s", reason, getattr(result, "retcode", None), getattr(result, "comment", mt5.last_error()))
@@ -3918,7 +4179,8 @@ class OPPWContinuousStrategy:
         self.state.first_protection_confirmed = True
         self.state.save(self.cfg.state_file)
         self.execution_stage("MODIFIED" if was_protected else "PROTECTED", position_ticket=int(position.ticket), actual_price=desired_sl,
-                             retcode=int(result.retcode), reason=reason)
+                             retcode=int(result.retcode), reason=reason,
+                             old_sl=float(position.sl), new_sl=desired_sl, old_tp=float(position.tp), new_tp=desired_tp)
         self.log.info("EVENT SLTP_ACCEPTED reason=%s retcode=%s", reason, result.retcode)
         return True
 
@@ -3989,7 +4251,17 @@ class OPPWContinuousStrategy:
             self.log.error("EVENT SELL_REJECTED reason=%s retcode=%s comment=%s", reason_log, getattr(result, "retcode", None), getattr(result, "comment", mt5.last_error()))
             return False
         self.execution_stage("EXIT_ACCEPTED", position_ticket=int(position.ticket), reference_price=bid,
-                             actual_price=float(getattr(result, "price", 0.0) or bid), retcode=int(result.retcode), reason=reason, latency_ms=exit_ack_ms)
+                             actual_price=float(getattr(result, "price", 0.0) or bid), retcode=int(result.retcode), reason=reason, latency_ms=exit_ack_ms,
+                             order_ticket=int(getattr(result, "order", 0) or 0), deal_ticket=int(getattr(result, "deal", 0) or 0),
+                             side="SELL", volume=float(position.volume), filling_mode=self.filling_mode_name(request.get("type_filling", -1)))
+        if int(getattr(result, "deal", 0) or 0) > 0:
+            self.execution_stage(
+                "EXIT_FILLED", position_ticket=int(position.ticket), reference_price=bid,
+                actual_price=float(getattr(result, "price", 0.0) or bid), retcode=int(result.retcode), reason=reason,
+                latency_ms=exit_ack_ms, order_ticket=int(getattr(result, "order", 0) or 0),
+                deal_ticket=int(getattr(result, "deal", 0) or 0), side="SELL", volume=float(position.volume),
+                filling_mode=self.filling_mode_name(request.get("type_filling", -1)),
+            )
         self.log.info("EVENT SELL_ACCEPTED reason=%s retcode=%s", reason_log, result.retcode)
         return True
 
@@ -4227,6 +4499,8 @@ class OPPWContinuousStrategy:
             if self.state.last_missed_entry_week != week:
                 self.state.active_execution_id = uuid.uuid4().hex
                 self.state.active_decision_id = self.state.active_decision_id or str((self.last_strategy_decision_payload or {}).get("decisionId", ""))
+                self.state.active_strategy_spec_id = self.strategy_specification["specId"]
+                self.state.active_strategy_spec_hash = self.strategy_specification["specHash"]
                 self.state.execution_scheduled_at = session.buy_action.isoformat()
                 self.state.execution_started_at = datetime.now(UTC).isoformat()
                 self.state.last_missed_entry_week = week
@@ -4284,12 +4558,31 @@ class OPPWContinuousStrategy:
         if self.state.last_close_action_date == day_key or now < session.weekly_close:
             return False
 
-        signal_reference = self.state.entry_signal_daily_open or self.state.entry_price
+        is_final_day = final_day == current_day
+        signal_reference = float(self.state.entry_signal_daily_open or 0.0)
+        signal_available = signal_reference > 0 and not self.state.entry_signal_open_pending
+        if not signal_available:
+            if is_final_day:
+                self.log.warning(
+                    "EVENT SIGNAL_DEPENDENT_CLOSE_UNAVAILABLE action=CH skipped=true fallback=none final_action=TO"
+                )
+                if self.close_position_market(position, "TO", now):
+                    self.state.last_close_action_date = day_key
+                    self.state.save(self.cfg.state_file)
+                    return True
+                return False
+            current = time_module.monotonic()
+            if current - self.last_signal_open_pending_log_monotonic >= 60.0:
+                self.last_signal_open_pending_log_monotonic = current
+                self.log.warning(
+                    "EVENT SIGNAL_DEPENDENT_CLOSE_DEFERRED action=CH+BREAK_EVEN reason=signal_cash_open_unavailable retry=true fallback=none"
+                )
+            return False
+
         signal_price = self.live_signal_price()
         tpp = self.tpp_for_day(current_day)
         ch_threshold = signal_reference * (1.0 + tpp)
         ch = signal_price > ch_threshold
-        is_final_day = final_day == current_day
         self.log.info(
             "EVENT SCHEDULED_CHECK name=CH result=%s time=%s scheduled=%s signal_price=%.5f signal_open=%.5f tpp=%.6f threshold=%.5f final_day=%s",
             ch, now.isoformat(), session.weekly_close.isoformat(), signal_price, signal_reference, tpp, ch_threshold, is_final_day,
@@ -4354,7 +4647,17 @@ class OPPWContinuousStrategy:
 
         entry = float(position.price_open)
         self.log_check(now, "POSITION_IS_OPEN", True, ticket=position.ticket, entry=entry, volume=position.volume)
-        self.log_check(now, "ENTRY_SIGNAL_OPEN_AVAILABLE", self.state.entry_signal_daily_open > 0 and not self.state.entry_signal_open_pending, signal_open=self.state.entry_signal_daily_open, pending=self.state.entry_signal_open_pending)
+        opened = parse_date(self.state.open_date)
+        signal_capture_at = self.session_times(opened).cash_open.isoformat() if opened is not None else "unknown"
+        self.log_check(
+            now,
+            "ENTRY_SIGNAL_OPEN_AVAILABLE",
+            self.state.entry_signal_daily_open > 0 and not self.state.entry_signal_open_pending,
+            signal_open=self.state.entry_signal_daily_open,
+            pending=self.state.entry_signal_open_pending,
+            capture_at=signal_capture_at,
+            fallback="none",
+        )
         self.log_check(now, "EXIT_LATCH_CLEAR", not bool(self.state.exit_latched_reason), exit_latch=self.state.exit_latched_reason or "none")
 
         check_count = 3
