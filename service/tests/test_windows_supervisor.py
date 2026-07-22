@@ -34,6 +34,12 @@ class SupervisorConfigTests(unittest.TestCase):
         self.assertFalse(assignments_fresh(100.0, 15.0, now=115.0))
         self.assertFalse(assignments_fresh(0.0, 15.0, now=1.0))
 
+    def test_installer_uses_locale_independent_builtin_sids(self):
+        installer = (Path(__file__).resolve().parents[1] / "install-service.ps1").read_text(encoding="utf-8")
+        self.assertIn("*S-1-5-18:(F)", installer)
+        self.assertIn("*S-1-5-32-544:(F)", installer)
+        self.assertNotIn("'Administrators:(F)'", installer)
+
 
 if __name__ == "__main__":
     unittest.main()

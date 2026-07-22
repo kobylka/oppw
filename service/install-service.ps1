@@ -84,7 +84,9 @@ $config = [ordered]@{
 $serviceAccount = $ServiceCredential.UserName
 & icacls.exe $programData /grant:r "${serviceAccount}:(OI)(CI)(M)" | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Could not grant the service account access to OPPW runtime directories.' }
-& icacls.exe $configPath /inheritance:r /grant:r 'SYSTEM:(F)' 'Administrators:(F)' "${serviceAccount}:(R)" | Out-Null
+# Numeric SIDs are stable across localized Windows installations. icacls
+# requires the leading asterisk when a trustee is supplied as a SID.
+& icacls.exe $configPath /inheritance:r /grant:r '*S-1-5-18:(F)' '*S-1-5-32-544:(F)' "${serviceAccount}:(R)" | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Could not protect the private service configuration.' }
 
 $binaryPath = '"' + $hostPath + '" "' + $PythonPath + '" "' + $supervisorPath + '" "' + $configPath + '"'
