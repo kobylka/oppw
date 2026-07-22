@@ -3,6 +3,7 @@ package com.oppw.monitor.util
 import com.oppw.monitor.data.DrawdownPoint
 import java.time.Instant
 import java.time.OffsetDateTime
+import kotlin.math.abs
 
 data class DrawdownEpisode(
     val number: Int,
@@ -10,19 +11,18 @@ data class DrawdownEpisode(
     val troughAt: String,
     val endAt: String,
     val depthPercent: Double,
-    val lengthTrades: Int,
-    val recoveryTrades: Int?,
     val recovered: Boolean,
     val elapsedSeconds: Long,
+    val recoverySeconds: Long?,
     val tradeKeys: List<String>,
 )
 
 data class DrawdownStatistics(
     val episodes: List<DrawdownEpisode> = emptyList(),
     val averageDepthPercent: Double = 0.0,
-    val averageLengthTrades: Double = 0.0,
-    val longestLengthTrades: Int = 0,
-    val averageRecoveryTrades: Double = 0.0,
+    val averageLengthSeconds: Double = 0.0,
+    val longestLengthSeconds: Long = 0L,
+    val averageTroughRecoverySeconds: Double = 0.0,
     val timeUnderwaterPercent: Double = 0.0,
 )
 
@@ -39,17 +39,18 @@ fun drawdownStatistics(series: List<DrawdownPoint>): DrawdownStatistics {
         val trough = ordered[troughIndex]
         val end = ordered[endIndex]
         val startEpoch = parseDrawdownEpoch(ordered[start].closedAt)
+        val troughEpoch = parseDrawdownEpoch(trough.closedAt)
         val endEpoch = parseDrawdownEpoch(end.closedAt)
+        val elapsedSeconds = absoluteSeconds(startEpoch, endEpoch)
         episodes += DrawdownEpisode(
             number = episodes.size + 1,
             startAt = ordered[start].closedAt,
             troughAt = trough.closedAt,
             endAt = end.closedAt,
             depthPercent = -trough.drawdownPercent.coerceAtMost(0.0),
-            lengthTrades = endIndex - start + 1,
-            recoveryTrades = if (recovered) endIndex - troughIndex else null,
             recovered = recovered,
-            elapsedSeconds = if (startEpoch != null && endEpoch != null) ((endEpoch - startEpoch) / 1_000L).coerceAtLeast(0L) else 0L,
+            elapsedSeconds = elapsedSeconds,
+            recoverySeconds = if (recovered) absoluteSeconds(troughEpoch, endEpoch) else null,
             tradeKeys = ordered.subList(start, endIndex + 1).map { it.tradeKey }.filter(String::isNotBlank).distinct(),
         )
         startIndex = null
@@ -59,7 +60,7 @@ fun drawdownStatistics(series: List<DrawdownPoint>): DrawdownStatistics {
     ordered.forEachIndexed { index, point ->
         if (point.drawdownPercent < -DRAWDOWN_EPSILON) {
             if (startIndex == null) {
-                startIndex = index
+                startIndex = (index - 1).coerceAtLeast(0)
                 troughIndex = index
             } else if (point.drawdownPercent < ordered[troughIndex].drawdownPercent) {
                 troughIndex = index
@@ -70,10 +71,10 @@ fun drawdownStatistics(series: List<DrawdownPoint>): DrawdownStatistics {
     }
     if (startIndex != null) closeEpisode(ordered.lastIndex, recovered = false)
 
-    val completedRecoveries = episodes.mapNotNull { it.recoveryTrades }
+    val completedRecoveries = episodes.mapNotNull { it.recoverySeconds }
     val firstEpoch = parseDrawdownEpoch(ordered.first().closedAt)
     val lastEpoch = parseDrawdownEpoch(ordered.last().closedAt)
-    val observedSeconds = if (firstEpoch != null && lastEpoch != null) (lastEpoch - firstEpoch) / 1_000L else 0L
+    val observedSeconds = absoluteSeconds(firstEpoch, lastEpoch)
     val timeUnderwaterPercent = if (observedSeconds > 0L) {
         episodes.sumOf { it.elapsedSeconds }.toDouble() / observedSeconds.toDouble() * 100.0
     } else {
@@ -82,9 +83,9 @@ fun drawdownStatistics(series: List<DrawdownPoint>): DrawdownStatistics {
     return DrawdownStatistics(
         episodes = episodes,
         averageDepthPercent = episodes.map { it.depthPercent }.averageOrZero(),
-        averageLengthTrades = episodes.map { it.lengthTrades.toDouble() }.averageOrZero(),
-        longestLengthTrades = episodes.maxOfOrNull { it.lengthTrades } ?: 0,
-        averageRecoveryTrades = completedRecoveries.map(Int::toDouble).averageOrZero(),
+        averageLengthSeconds = episodes.map { it.elapsedSeconds.toDouble() }.averageOrZero(),
+        longestLengthSeconds = episodes.maxOfOrNull { it.elapsedSeconds } ?: 0L,
+        averageTroughRecoverySeconds = completedRecoveries.map(Long::toDouble).averageOrZero(),
         timeUnderwaterPercent = timeUnderwaterPercent,
     )
 }
@@ -92,6 +93,9 @@ fun drawdownStatistics(series: List<DrawdownPoint>): DrawdownStatistics {
 private fun parseDrawdownEpoch(value: String): Long? =
     runCatching { OffsetDateTime.parse(value).toInstant().toEpochMilli() }.getOrNull()
         ?: runCatching { Instant.parse(value).toEpochMilli() }.getOrNull()
+
+private fun absoluteSeconds(startEpoch: Long?, endEpoch: Long?): Long =
+    if (startEpoch != null && endEpoch != null) abs(endEpoch - startEpoch) / 1_000L else 0L
 
 private fun List<Double>.averageOrZero(): Double = if (isEmpty()) 0.0 else average()
 

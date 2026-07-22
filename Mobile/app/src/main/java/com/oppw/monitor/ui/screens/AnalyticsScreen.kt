@@ -208,15 +208,15 @@ private fun AnalyticsContent(state: UiState, analytics: AnalyticsResponse, onFil
                 DrawdownChart(analytics, Modifier.fillMaxWidth().height(190.dp))
                 MetricLink("Maximum closed-trade drawdown", percent(-abs(analytics.drawdown.maxDrawdownPercent)), analytics.drawdown.tradeKeys, openDrillDown)
                 MetricLink("Average drawdown depth", percent(-drawdowns.averageDepthPercent), drawdownTradeKeys(drawdowns.episodes), openDrillDown)
-                MetricLink("Average drawdown length", "${formatNumber(drawdowns.averageLengthTrades)} trades", drawdownTradeKeys(drawdowns.episodes), openDrillDown)
-                MetricLink("Longest drawdown length", "${drawdowns.longestLengthTrades} trades", drawdowns.episodes.maxByOrNull { it.lengthTrades }?.tradeKeys.orEmpty(), openDrillDown)
-                MetricLink("Average recovery length", "${formatNumber(drawdowns.averageRecoveryTrades)} trades", drawdownTradeKeys(drawdowns.episodes.filter { it.recovered }), openDrillDown)
+                MetricLink("Average drawdown length", fullDays(drawdowns.averageLengthSeconds), drawdownTradeKeys(drawdowns.episodes), openDrillDown)
+                MetricLink("Longest drawdown length", fullDays(drawdowns.longestLengthSeconds.toDouble()), drawdowns.episodes.maxByOrNull { it.elapsedSeconds }?.tradeKeys.orEmpty(), openDrillDown)
+                MetricLink("Average trough-to-recovery length", fullDays(drawdowns.averageTroughRecoverySeconds), drawdownTradeKeys(drawdowns.episodes.filter { it.recovered }), openDrillDown)
                 MetricLink("Time under water", unsignedPercent(drawdowns.timeUnderwaterPercent), analytics.drawdown.series.filter { it.drawdownPercent < 0.0 }.map(DrawdownPoint::tradeKey), openDrillDown)
                 MetricLink("Average MAE", percent(analytics.drawdown.averageMaePercent), analytics.drawdown.tradeKeys, openDrillDown)
-                Text("Length counts closed trades from the first point below a peak through recovery (or the latest trade if ongoing). Recovery length runs from trough to the recovered peak.", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                Text("Length is absolute wall-clock time from the last equity peak to recovery, or to the latest close when ongoing. Values show completed 24-hour days. Trough-to-recovery measures only the recovery leg.", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
             }
         }
-        item { SectionTitle("All drawdowns", "depth, length and recovery") }
+        item { SectionTitle("All drawdowns", "depth and elapsed full days") }
         if (drawdowns.episodes.isEmpty()) {
             item { AppCard(Modifier.fillMaxWidth()) { Text("No closed-trade drawdowns in the filtered sample.", color = TextSecondary) } }
         } else {
@@ -377,16 +377,16 @@ private fun DrawdownEpisodeCard(episode: DrawdownEpisode, onClick: (String, List
     AppCard(Modifier.fillMaxWidth()) {
         SectionTitle("Drawdown #${episode.number}", if (episode.recovered) "RECOVERED" else "ONGOING")
         Text(
-            "${shortDateTime(episode.startAt)} â†’ ${if (episode.recovered) shortDateTime(episode.endAt) else "latest close"}",
+            "${shortDateTime(episode.startAt)} to ${if (episode.recovered) shortDateTime(episode.endAt) else "latest close"}",
             color = TextSecondary,
             style = MaterialTheme.typography.labelMedium,
         )
         MetricLink("Depth", percent(-episode.depthPercent), episode.tradeKeys, onClick, DangerRed)
-        MetricLink("Length", "${episode.lengthTrades} trades Â· ${duration(episode.elapsedSeconds)}", episode.tradeKeys, onClick)
+        MetricLink("Length", fullDays(episode.elapsedSeconds.toDouble()), episode.tradeKeys, onClick)
         MetricLink("Trough", shortDateTime(episode.troughAt), episode.tradeKeys, onClick)
         MetricLink(
-            "Recovery from trough",
-            episode.recoveryTrades?.let { "$it trades" } ?: "Ongoing",
+            "Trough-to-recovery",
+            episode.recoverySeconds?.let { fullDays(it.toDouble()) } ?: "Ongoing",
             episode.tradeKeys,
             onClick,
             if (episode.recovered) BrightGreen else DangerRed,
@@ -591,6 +591,10 @@ private fun ratioText(value: Double, available: Boolean): String = if (available
 private fun nullableRatio(value: Double?): String = if (value != null && value.isFinite()) String.format("%.2f", value) else "N/A"
 private fun ratioValue(value: Double): String = if (value.isFinite()) String.format("%.2f", value) else "∞"
 private fun formatNumber(value: Double): String = String.format("%.2f", value)
+private fun fullDays(seconds: Double): String {
+    val days = (abs(seconds) / 86_400.0).toLong()
+    return "$days ${if (days == 1L) "day" else "days"}"
+}
 private fun milliseconds(value: Double?): String = when {
     value == null || !value.isFinite() -> "N/A"
     value >= 1000.0 -> String.format("%.2fs", value / 1000.0)
