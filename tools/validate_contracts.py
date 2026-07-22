@@ -20,6 +20,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 
 MYSQL_IMAGE = "mysql:8.4"
@@ -344,6 +345,31 @@ return [
                 if stored.get("strategySpecificationHash") != identities["specHash"]:
                     raise AssertionError(f"specification acknowledgement mismatch on delivery {delivery + 1}")
 
+            local_now = datetime.now(timezone.utc).astimezone(ZoneInfo("Europe/Warsaw"))
+            current_monday = (local_now - timedelta(days=local_now.weekday())).replace(hour=15, minute=30, second=0, microsecond=0)
+            market_rows = []
+            for week_offset, first, latest in (
+                (0, (100.0, 101.0, 99.0, 100.0), (110.0, 112.0, 108.0, 111.0)),
+                (-1, (200.0, 201.0, 199.0, 200.0), (220.0, 224.0, 216.0, 222.0)),
+            ):
+                monday = current_monday + timedelta(weeks=week_offset)
+                friday = (monday + timedelta(days=4)).replace(hour=23, minute=59)
+                for captured, (open_price, high, low, close) in ((monday, first), (friday, latest)):
+                    captured_utc = captured.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+                    market_rows.append(
+                        "('DEMO','{}',{},{},{},{},{},{},{},'REGULAR')".format(
+                            captured_utc, close, close, close + 0.1, open_price, high, low, close,
+                        )
+                    )
+            docker_sql(docker, container, "DELETE FROM strategy_market_points WHERE strategy_key='DEMO';", docker_env)
+            docker_sql(
+                docker,
+                container,
+                "INSERT INTO strategy_market_points(strategy_key,captured_minute,current_price,bid,ask,m1_open,m1_high,m1_low,m1_close,phase) VALUES "
+                + ",".join(market_rows),
+                docker_env,
+            )
+
             http_json(
                 "POST", base_url + "ingest.php", token=WRITE_TOKEN,
                 expected=(400,), raw_body=b"{invalid-json",
@@ -361,6 +387,25 @@ return [
             assert_close(snapshot["account"]["deposit"], expected["deposit"], "status deposit")
             if snapshot["strategyDecision"]["decisionId"] != identities["decisionId"]:
                 raise AssertionError("status lost the authoritative strategy decision")
+            if snapshot["closestCondition"]["name"] != "BE CHECK":
+                raise AssertionError("scheduled break-even check is not the closest mobile condition")
+            if not any(condition.get("name") == "BE CHECK" for condition in snapshot["conditions"]):
+                raise AssertionError("scheduled break-even check is missing from all mobile conditions")
+            for label, values in (
+                ("currentWeek", (110.0, 112.0, 108.0, 111.0)),
+                ("previousWeek", (220.0, 224.0, 216.0, 222.0)),
+            ):
+                stats = snapshot["marketStats"][label]
+                daily_open, daily_high, daily_low, daily_close = values
+                assert_close(stats["dailyOpen"], daily_open, f"{label} daily open")
+                assert_close(stats["dailyHigh"], daily_high, f"{label} daily high")
+                assert_close(stats["dailyLow"], daily_low, f"{label} daily low")
+                assert_close(stats["dailyClose"], daily_close, f"{label} daily close")
+                assert_close(stats["dailyHighPercent"], (daily_high / daily_open - 1.0) * 100.0, f"{label} daily high change")
+                assert_close(stats["dailyLowPercent"], (daily_low / daily_open - 1.0) * 100.0, f"{label} daily low change")
+                assert_close(stats["dailyClosePercent"], (daily_close / daily_open - 1.0) * 100.0, f"{label} daily close change")
+                if abs(float(stats["dailyHighPercent"]) - float(stats["weeklyHighPercent"])) < 0.01:
+                    raise AssertionError(f"{label} latest-day change incorrectly duplicates the weekly change")
 
             _, receipt, _ = http_json("POST", base_url + "mobile-receipt.php", {
                 "accountKey": "DEMO", "executionId": fixture["executionId"],

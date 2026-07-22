@@ -439,8 +439,10 @@ function build_market_week_stats(array $rows, DateTimeImmutable $weekStart, Date
     if ($firstKey===''||$lastKey==='') return $result; $first=$days[$firstKey]; $last=$days[$lastKey]; $weekOpen=$first['open']; if ($weekOpen===null) return $result;
     $weeklyHigh=null; $weeklyLow=null; $weeklyClose=null;
     foreach ($days as $day) { if ($day['high']!==null) $weeklyHigh=$weeklyHigh===null?$day['high']:max($weeklyHigh,$day['high']); if ($day['low']!==null) $weeklyLow=$weeklyLow===null?$day['low']:min($weeklyLow,$day['low']); if ($day['close']!==null) $weeklyClose=$day['close']; }
-    $relative=static fn(?float $v):?float=>$v!==null&&$weekOpen>0?($v/$weekOpen-1.0)*100.0:null;
-    return array_merge($result,['weekOpen'=>(float)$weekOpen,'weekOpenDate'=>$firstKey,'weeklyHigh'=>$weeklyHigh,'weeklyLow'=>$weeklyLow,'weeklyClose'=>$weeklyClose,'weeklyHighPercent'=>$relative($weeklyHigh),'weeklyLowPercent'=>$relative($weeklyLow),'weeklyClosePercent'=>$relative($weeklyClose),'dailyDate'=>$lastKey,'dailyOpen'=>$last['open'],'dailyHigh'=>$last['high'],'dailyLow'=>$last['low'],'dailyClose'=>$last['close'],'dailyHighPercent'=>$relative($last['high']),'dailyLowPercent'=>$relative($last['low']),'dailyClosePercent'=>$relative($last['close']),'fridayOpen'=>(float)$weekOpen,'dailyLowDate'=>$lastKey]);
+    $weeklyRelative=static fn(?float $v):?float=>$v!==null&&$weekOpen>0?($v/$weekOpen-1.0)*100.0:null;
+    $dailyOpen=is_numeric($last['open']??null)?(float)$last['open']:null;
+    $dailyRelative=static fn(?float $v):?float=>$v!==null&&$dailyOpen!==null&&$dailyOpen>0?($v/$dailyOpen-1.0)*100.0:null;
+    return array_merge($result,['weekOpen'=>(float)$weekOpen,'weekOpenDate'=>$firstKey,'weeklyHigh'=>$weeklyHigh,'weeklyLow'=>$weeklyLow,'weeklyClose'=>$weeklyClose,'weeklyHighPercent'=>$weeklyRelative($weeklyHigh),'weeklyLowPercent'=>$weeklyRelative($weeklyLow),'weeklyClosePercent'=>$weeklyRelative($weeklyClose),'dailyDate'=>$lastKey,'dailyOpen'=>$dailyOpen,'dailyHigh'=>$last['high'],'dailyLow'=>$last['low'],'dailyClose'=>$last['close'],'dailyHighPercent'=>$dailyRelative($last['high']),'dailyLowPercent'=>$dailyRelative($last['low']),'dailyClosePercent'=>$dailyRelative($last['close']),'fridayOpen'=>(float)$weekOpen,'dailyLowDate'=>$lastKey]);
 }
 
 function oppw_restore_market_history_cards(array $marketStats): array

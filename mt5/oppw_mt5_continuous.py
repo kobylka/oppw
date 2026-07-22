@@ -3304,7 +3304,14 @@ class OPPWContinuousStrategy:
             pass
         return "WAIT", ""
 
-    def monitor_all_conditions(self, position, now: datetime, trade_bid: float, signal_price: float) -> list[dict[str, Any]]:
+    def monitor_all_conditions(
+        self,
+        position,
+        now: datetime,
+        trade_bid: float,
+        signal_price: float,
+        break_even_check: Optional[dict[str, Any]] = None,
+    ) -> list[dict[str, Any]]:
         if position is None or trade_bid <= 0:
             return []
         entry = float(position.price_open)
@@ -3365,6 +3372,12 @@ class OPPWContinuousStrategy:
         # metadata only; the production CH execution rule is unchanged.
         if signal_price > 0:
             add("CH", ceil_step(entry * (1.0 + tpp), tick_size), signal_price, self.cfg.signal_symbol)
+
+        if not self.state.break_even and break_even_check is not None:
+            check_status = str(break_even_check.get("status", "")).upper()
+            check_threshold = float(break_even_check.get("threshold", 0.0) or 0.0)
+            if check_status in {"SCHEDULED", "DUE"}:
+                add("BE CHECK", check_threshold, signal_price, self.cfg.signal_symbol)
 
         if self.state.break_even:
             add("BE", ceil_step(entry * self.cfg.break_even_ratio, tick_size), trade_bid, self.cfg.trade_symbol)
@@ -3451,6 +3464,7 @@ class OPPWContinuousStrategy:
             info = mt5.symbol_info(position.symbol)
             tick_size = float(getattr(info, "trade_tick_size", 0.0) or getattr(info, "point", 0.0) or 0.01) if info is not None else 0.01
             potential_take_profit = ceil_step(entry * (1.0 + self.tpp_for_day(now.date())), tick_size)
+            break_even_check = self.break_even_check_payload(position, now)
             position_payload = {
                 "open": True,
                 "symbol": str(position.symbol),
@@ -3486,7 +3500,7 @@ class OPPWContinuousStrategy:
                     else "PENDING_CASH_OPEN_M1"
                 ),
                 "breakEvenArmed": bool(self.state.break_even),
-                "breakEvenCheck": self.break_even_check_payload(position, now),
+                "breakEvenCheck": break_even_check,
                 "protectionRegime": regime,
                 "activeSlReason": self.state.active_sl_reason,
                 "activeTpReason": self.state.active_tp_reason,
@@ -3506,7 +3520,7 @@ class OPPWContinuousStrategy:
                     "source": self.state.immutable_hard_sl_source,
                 },
             }
-            conditions = self.monitor_all_conditions(position, now, bid, signal_price)
+            conditions = self.monitor_all_conditions(position, now, bid, signal_price, break_even_check)
             closest = self.monitor_closest_condition(conditions)
 
         current_price = trade_bid if trade_bid > 0 else trade_ask

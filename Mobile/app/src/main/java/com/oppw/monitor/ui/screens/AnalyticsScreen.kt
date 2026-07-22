@@ -41,6 +41,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.oppw.monitor.data.AnalyticsFilters
 import com.oppw.monitor.data.AnalyticsResponse
+import com.oppw.monitor.data.DrawdownPoint
 import com.oppw.monitor.data.ExecutionLifecycle
 import com.oppw.monitor.data.LatencySummary
 import com.oppw.monitor.data.TradeAnalytics
@@ -54,6 +55,8 @@ import com.oppw.monitor.ui.theme.BrightGreen
 import com.oppw.monitor.ui.theme.DangerRed
 import com.oppw.monitor.ui.theme.PrimaryBlue
 import com.oppw.monitor.ui.theme.TextSecondary
+import com.oppw.monitor.util.DrawdownEpisode
+import com.oppw.monitor.util.drawdownStatistics
 import com.oppw.monitor.util.duration
 import com.oppw.monitor.util.executionDateTime
 import com.oppw.monitor.util.money
@@ -83,6 +86,7 @@ private fun AnalyticsContent(state: UiState, analytics: AnalyticsResponse, onFil
     val summary = analytics.summary
     val allTradeKeys = analytics.recentTrades.filter { it.closed }.map(::tradeKey)
     val distributionTradeKeys = analytics.tradeDistribution.trades.map { "${it.strategyKey}:${it.ticket}" }.distinct()
+    val drawdowns = remember(analytics.drawdown.series) { drawdownStatistics(analytics.drawdown.series) }
     var drillDown by remember(analytics.generatedAt) { mutableStateOf<DrillDown?>(null) }
     var expandedExecutions by remember { mutableStateOf(setOf<String>()) }
     val openDrillDown: (String, List<String>) -> Unit = { title, keys -> drillDown = DrillDown(title, keys.distinct()) }
@@ -200,11 +204,24 @@ private fun AnalyticsContent(state: UiState, analytics: AnalyticsResponse, onFil
         }
         item {
             AppCard(Modifier.fillMaxWidth()) {
-                SectionTitle("Closed-trade drawdown and MAE", "equity path reconstructed from trade returns")
+                SectionTitle("Closed-trade drawdowns", "${drawdowns.episodes.size} equity-curve episodes")
                 DrawdownChart(analytics, Modifier.fillMaxWidth().height(190.dp))
                 MetricLink("Maximum closed-trade drawdown", percent(-abs(analytics.drawdown.maxDrawdownPercent)), analytics.drawdown.tradeKeys, openDrillDown)
+                MetricLink("Average drawdown depth", percent(-drawdowns.averageDepthPercent), drawdownTradeKeys(drawdowns.episodes), openDrillDown)
+                MetricLink("Average drawdown length", "${formatNumber(drawdowns.averageLengthTrades)} trades", drawdownTradeKeys(drawdowns.episodes), openDrillDown)
+                MetricLink("Longest drawdown length", "${drawdowns.longestLengthTrades} trades", drawdowns.episodes.maxByOrNull { it.lengthTrades }?.tradeKeys.orEmpty(), openDrillDown)
+                MetricLink("Average recovery length", "${formatNumber(drawdowns.averageRecoveryTrades)} trades", drawdownTradeKeys(drawdowns.episodes.filter { it.recovered }), openDrillDown)
+                MetricLink("Time under water", unsignedPercent(drawdowns.timeUnderwaterPercent), analytics.drawdown.series.filter { it.drawdownPercent < 0.0 }.map(DrawdownPoint::tradeKey), openDrillDown)
                 MetricLink("Average MAE", percent(analytics.drawdown.averageMaePercent), analytics.drawdown.tradeKeys, openDrillDown)
-                Text("Drawdown compounds closed-trade account returns. MAE is shown separately from the trade-level excursion stored by the publisher/backend.", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                Text("Length counts closed trades from the first point below a peak through recovery (or the latest trade if ongoing). Recovery length runs from trough to the recovered peak.", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+            }
+        }
+        item { SectionTitle("All drawdowns", "depth, length and recovery") }
+        if (drawdowns.episodes.isEmpty()) {
+            item { AppCard(Modifier.fillMaxWidth()) { Text("No closed-trade drawdowns in the filtered sample.", color = TextSecondary) } }
+        } else {
+            items(drawdowns.episodes.reversed(), key = { it.number }) { episode ->
+                DrawdownEpisodeCard(episode, openDrillDown)
             }
         }
         item {
@@ -354,6 +371,31 @@ private fun MetricLink(label: String, value: String, tradeKeys: List<String>, on
         Text(value, color = valueColor, fontWeight = FontWeight.Medium)
     }
 }
+
+@Composable
+private fun DrawdownEpisodeCard(episode: DrawdownEpisode, onClick: (String, List<String>) -> Unit) {
+    AppCard(Modifier.fillMaxWidth()) {
+        SectionTitle("Drawdown #${episode.number}", if (episode.recovered) "RECOVERED" else "ONGOING")
+        Text(
+            "${shortDateTime(episode.startAt)} â†’ ${if (episode.recovered) shortDateTime(episode.endAt) else "latest close"}",
+            color = TextSecondary,
+            style = MaterialTheme.typography.labelMedium,
+        )
+        MetricLink("Depth", percent(-episode.depthPercent), episode.tradeKeys, onClick, DangerRed)
+        MetricLink("Length", "${episode.lengthTrades} trades Â· ${duration(episode.elapsedSeconds)}", episode.tradeKeys, onClick)
+        MetricLink("Trough", shortDateTime(episode.troughAt), episode.tradeKeys, onClick)
+        MetricLink(
+            "Recovery from trough",
+            episode.recoveryTrades?.let { "$it trades" } ?: "Ongoing",
+            episode.tradeKeys,
+            onClick,
+            if (episode.recovered) BrightGreen else DangerRed,
+        )
+    }
+}
+
+private fun drawdownTradeKeys(episodes: List<DrawdownEpisode>): List<String> =
+    episodes.flatMap { it.tradeKeys }.distinct()
 
 @Composable
 private fun LatencyMetric(label: String, value: LatencySummary, onClick: (String, List<String>) -> Unit) {

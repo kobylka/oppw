@@ -32,6 +32,26 @@ class ContractResponseParserTest {
         assertEquals(8125.5, status.snapshot.account.equity, 0.01)
         assertEquals(4393.0, status.snapshot.account.deposit, 0.01)
         assertTrue(status.snapshot.strategyDecision?.decisionId?.isNotBlank() == true)
+        assertEquals("BE CHECK", status.snapshot.closestCondition?.name)
+        assertTrue(status.snapshot.conditions.any { it.name == "BE CHECK" })
+        status.snapshot.marketStats.currentWeek!!.let { week ->
+            assertEquals(110.0, week.dailyOpen!!, 0.01)
+            assertEquals(112.0, week.dailyHigh!!, 0.01)
+            assertEquals(108.0, week.dailyLow!!, 0.01)
+            assertEquals(111.0, week.dailyClose!!, 0.01)
+            assertEquals((112.0 / 110.0 - 1.0) * 100.0, week.dailyHighPercent!!, 0.01)
+            assertEquals((108.0 / 110.0 - 1.0) * 100.0, week.dailyLowPercent!!, 0.01)
+            assertEquals((111.0 / 110.0 - 1.0) * 100.0, week.dailyClosePercent!!, 0.01)
+        }
+        status.snapshot.marketStats.previousWeek!!.let { week ->
+            assertEquals(220.0, week.dailyOpen!!, 0.01)
+            assertEquals(224.0, week.dailyHigh!!, 0.01)
+            assertEquals(216.0, week.dailyLow!!, 0.01)
+            assertEquals(222.0, week.dailyClose!!, 0.01)
+            assertEquals((224.0 / 220.0 - 1.0) * 100.0, week.dailyHighPercent!!, 0.01)
+            assertEquals((216.0 / 220.0 - 1.0) * 100.0, week.dailyLowPercent!!, 0.01)
+            assertEquals((222.0 / 220.0 - 1.0) * 100.0, week.dailyClosePercent!!, 0.01)
+        }
 
         val analytics = JsonParser.parseAnalytics(response("analytics.json"))
         val quality = analytics.executionQuality

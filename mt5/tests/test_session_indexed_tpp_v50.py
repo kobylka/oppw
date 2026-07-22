@@ -110,6 +110,29 @@ class SessionIndexedTppTests(unittest.TestCase):
         pre_h = next(condition for condition in conditions if condition["name"] == "PRE H")
         self.assertAlmostEqual(pre_h["potentialTpPercent"], 1.370967741935484)
 
+    def test_scheduled_break_even_check_participates_in_closest_condition(self):
+        sessions = [date(2026, 7, day) for day in range(20, 25)]
+        strategy = self.strategy(sessions, sessions[0])
+        strategy.cfg.signal_symbol = "QQQ"
+        strategy.weekday_sl_target = lambda _position, _now: (95.0, "SL")
+        MODULE.mt5.symbol_info = lambda _symbol: SimpleNamespace(trade_tick_size=0.25, point=0.25)
+        now = datetime.combine(sessions[2], time(16, 0), WARSAW)
+        position = SimpleNamespace(symbol="US100", price_open=100.0, sl=95.0, tp=0.0)
+
+        conditions = strategy.monitor_all_conditions(
+            position,
+            now,
+            100.0,
+            99.0,
+            {"status": "SCHEDULED", "threshold": 98.0},
+        )
+
+        break_even = next(condition for condition in conditions if condition["name"] == "BE CHECK")
+        self.assertEqual(break_even["source"], "QQQ")
+        self.assertAlmostEqual(break_even["targetPrice"], 98.0)
+        self.assertAlmostEqual(break_even["currentPrice"], 99.0)
+        self.assertEqual(strategy.monitor_closest_condition(conditions)["name"], "BE CHECK")
+
 
 if __name__ == "__main__":
     unittest.main()

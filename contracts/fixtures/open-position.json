@@ -121,16 +121,37 @@
       "startedAt": "${STARTED_AT}"
     },
     "closestCondition": {
-      "name": "SL",
-      "targetPrice": 27550.0,
-      "currentPrice": 29050.0,
-      "distancePoints": 1500.0,
-      "distancePercent": 5.1635,
+      "name": "BE CHECK",
+      "targetPrice": 498.0,
+      "currentPrice": 500.0,
+      "distancePoints": 2.0,
+      "distancePercent": 0.4,
       "direction": "BELOW",
       "active": true,
-      "source": "BROKER_SL"
+      "source": "QQQ"
     },
-    "conditions": [],
+    "conditions": [
+      {
+        "name": "BE CHECK",
+        "targetPrice": 498.0,
+        "currentPrice": 500.0,
+        "distancePoints": 2.0,
+        "distancePercent": 0.4,
+        "direction": "BELOW",
+        "active": true,
+        "source": "QQQ"
+      },
+      {
+        "name": "SL",
+        "targetPrice": 27550.0,
+        "currentPrice": 29050.0,
+        "distancePoints": 1500.0,
+        "distancePercent": 5.1635,
+        "direction": "BELOW",
+        "active": true,
+        "source": "BROKER_SL"
+      }
+    ],
     "market": {
       "symbol": "US100",
       "currentPrice": 29050.0,
