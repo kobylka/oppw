@@ -69,7 +69,19 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-BUILD_ID = "2026-07-21-canonical-spec-immutable-authority-v51"
+
+
+def read_project_version() -> str:
+    for candidate in (BASE_DIR.parent / "VERSION", BASE_DIR / "VERSION"):
+        if candidate.is_file():
+            value = candidate.read_text(encoding="utf-8").strip()
+            if value:
+                return value
+    raise RuntimeError("VERSION file is missing; run only from a complete OPPW source or release tree")
+
+
+PROJECT_VERSION = read_project_version()
+BUILD_ID = f"oppw-{PROJECT_VERSION}"
 INSTANCE_MODE_EXECUTOR = "EXECUTOR"
 INSTANCE_MODE_PUBLISHER = "PUBLISHER"
 ACCOUNT_DEMO = "DEMO"
@@ -94,8 +106,14 @@ except ImportError as exc:
 
 def load_account_config(account: str):
     account = account.upper()
-    primary = BASE_DIR / ACCOUNT_CONFIG_FILES[account]
-    candidates = (primary, *(BASE_DIR / name for name in ACCOUNT_CONFIG_FALLBACKS[account]))
+    account_dir = BASE_DIR / account.lower()
+    primary = account_dir / ACCOUNT_CONFIG_FILES[account]
+    candidates = (
+        primary,
+        *(account_dir / name for name in ACCOUNT_CONFIG_FALLBACKS[account]),
+        BASE_DIR / ACCOUNT_CONFIG_FILES[account],
+        *(BASE_DIR / name for name in ACCOUNT_CONFIG_FALLBACKS[account]),
+    )
     config_path = next((path for path in candidates if path.exists()), None)
     if config_path is None:
         names = ", ".join(path.name for path in candidates)
@@ -143,8 +161,8 @@ def validate_config(config) -> None:
     missing = [name for name in REQUIRED_CONFIG_FIELDS if not hasattr(config, name)]
     if missing:
         raise RuntimeError(
-            "Selected account config is not v48-compatible. Missing fields: " + ", ".join(missing)
-            + ". Merge the v48 config template and restore only local credential values."
+            "Selected account config is incompatible with OPPW " + PROJECT_VERSION + ". Missing fields: "
+            + ", ".join(missing) + ". Merge the canonical config template and restore only local credential values."
         )
     if not is_dataclass(config):
         raise RuntimeError("Config must be a frozen dataclass")
@@ -2862,7 +2880,7 @@ class OPPWContinuousStrategy:
         """
         document: dict[str, Any] = {
             "schemaVersion": 1,
-            "strategy": {"key": "OPPW24", "version": "51.0", "direction": "LONG_ONLY"},
+            "strategy": {"key": "OPPW24", "version": PROJECT_VERSION, "direction": "LONG_ONLY"},
             "instruments": {
                 "execution": self.cfg.trade_symbol,
                 "signal": self.cfg.signal_symbol,
@@ -2965,7 +2983,7 @@ class OPPWContinuousStrategy:
             "specId": spec_hash[:32],
             "specHash": spec_hash,
             "specKey": "OPPW24",
-            "specVersion": "51.0",
+            "specVersion": PROJECT_VERSION,
             "effectiveFrom": "2026-07-21T00:00:00+00:00",
             "createdAt": self.started_at.astimezone(UTC).isoformat(),
             "build": BUILD_ID,

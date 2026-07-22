@@ -16,7 +16,7 @@ def load_strategy_module():
     mt5 = sys.modules.setdefault("MetaTrader5", types.ModuleType("MetaTrader5"))
     mt5.ORDER_TYPE_BUY = 0
     mt5.POSITION_TYPE_BUY = 0
-    source = Path(__file__).resolve().parents[1] / "oppw_mt5_continuous_v49_1.py"
+    source = Path(__file__).resolve().parents[1] / "oppw_mt5_continuous.py"
     spec = importlib.util.spec_from_file_location("oppw_v49_1_tsl_market_test", source)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)

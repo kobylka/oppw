@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 def load_strategy_module():
     sys.modules.setdefault("exchange_calendars", types.ModuleType("exchange_calendars"))
     sys.modules.setdefault("MetaTrader5", types.ModuleType("MetaTrader5"))
-    source = Path(__file__).resolve().parents[1] / "oppw_mt5_continuous_v48.py"
+    source = Path(__file__).resolve().parents[1] / "oppw_mt5_continuous.py"
     spec = importlib.util.spec_from_file_location("oppw_v48_5_lease_test", source)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -98,6 +98,7 @@ class BreakEvenScheduleTests(unittest.TestCase):
         state = SimpleNamespace(
             entry_price=29_000.0,
             entry_signal_daily_open=29_100.0,
+            entry_signal_open_pending=False,
             break_even=armed,
             open_date="2026-07-20",
             last_close_processed_date=last_processed,
@@ -155,6 +156,7 @@ class BreakEvenAfterChTests(unittest.TestCase):
         state = SimpleNamespace(
             last_close_action_date="",
             entry_signal_daily_open=100.0,
+            entry_signal_open_pending=False,
             entry_price=100.0,
             open_date="2026-07-20",
             break_even=False,
@@ -173,6 +175,7 @@ class BreakEvenAfterChTests(unittest.TestCase):
                 weekly_close=datetime.combine(day, datetime_time(21, 59, 57), warsaw)
             ),
             final_trading_day=lambda day: day if final_day else date(2026, 7, 24),
+            tpp_for_day=lambda _day: 0.02,
             live_signal_price=lambda: signal_price,
             close_position_market=lambda _position, reason, _now: closed.append(reason) or True,
             emit_status=lambda reason, _position, _now: emitted.append(reason),

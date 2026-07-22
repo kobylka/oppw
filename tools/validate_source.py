@@ -1,0 +1,146 @@
+"""Fail-fast repository invariants for the canonical OPPW release tree."""
+
+from __future__ import annotations
+
+import argparse
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+
+SEMVER = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+VERSIONED_LOOP = re.compile(r"oppw_mt5_continuous_v.+\.py$", re.IGNORECASE)
+SECRET_MARKERS = (
+    "-----BEGIN " + "PRIVATE KEY-----",
+    '"type": "' + 'service_account"',
+    "firebase-" + "adminsdk",
+)
+
+
+def fail(errors: list[str], message: str) -> None:
+    errors.append(message)
+
+
+def tracked_files(root: Path) -> list[Path]:
+    result = subprocess.run(
+        ["git", "ls-files", "-z"], cwd=root, check=True, capture_output=True
+    )
+    return [root / value.decode("utf-8") for value in result.stdout.split(b"\0") if value]
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
+    args = parser.parse_args()
+    root = args.root.resolve()
+    errors: list[str] = []
+
+    version_file = root / "VERSION"
+    version = version_file.read_text(encoding="utf-8").strip() if version_file.is_file() else ""
+    if not SEMVER.fullmatch(version):
+        fail(errors, "VERSION must exist and contain MAJOR.MINOR.PATCH")
+
+    canonical = root / "mt5" / "oppw_mt5_continuous.py"
+    if not canonical.is_file():
+        fail(errors, "canonical MT5 source is missing: mt5/oppw_mt5_continuous.py")
+        canonical_text = ""
+    else:
+        canonical_text = canonical.read_text(encoding="utf-8")
+        for required in ("PROJECT_VERSION = read_project_version()", 'BUILD_ID = f"oppw-{PROJECT_VERSION}"'):
+            if required not in canonical_text:
+                fail(errors, f"canonical MT5 source does not derive identity from VERSION: {required}")
+
+    versioned_sources = [
+        path.relative_to(root).as_posix()
+        for path in (root / "mt5").rglob("*.py")
+        if VERSIONED_LOOP.fullmatch(path.name)
+    ]
+    if versioned_sources:
+        fail(errors, "versioned MT5 source copies found: " + ", ".join(versioned_sources))
+
+    for account in ("demo", "real"):
+        launcher = root / "mt5" / account / "oppw_mt5_continuous.py"
+        if not launcher.is_file():
+            fail(errors, f"missing {account} compatibility launcher")
+            continue
+        content = launcher.read_text(encoding="utf-8")
+        if "CANONICAL_SOURCE" not in content or len(content.splitlines()) > 20:
+            fail(errors, f"{account} launcher is not a thin canonical-source launcher")
+
+    config_examples = sorted((root / "mt5").rglob("*config*.example.py"))
+    expected_config = root / "mt5" / "oppw_mt5_config.example.py"
+    if config_examples != [expected_config]:
+        names = ", ".join(path.relative_to(root).as_posix() for path in config_examples)
+        fail(errors, "exactly one canonical MT5 config example is allowed; found: " + names)
+
+    for test in (root / "mt5" / "tests").glob("test_*.py"):
+        text = test.read_text(encoding="utf-8")
+        if re.search(r"oppw_mt5_continuous_v[^\"']+\.py", text):
+            fail(errors, f"test references a historical source copy: {test.relative_to(root)}")
+
+    android_build = root / "Mobile" / "app" / "build.gradle.kts"
+    android_text = android_build.read_text(encoding="utf-8") if android_build.is_file() else ""
+    if 'resolve("VERSION")' not in android_text or "versionName = projectVersion" not in android_text:
+        fail(errors, "Android versionName/versionCode must be derived from root VERSION")
+    if re.search(r"versionName\s*=\s*\"", android_text):
+        fail(errors, "Android contains a hard-coded versionName")
+
+    forbidden_worktree = []
+    source_roots = (root / "mt5", root / "Mobile", root / "tools", root / "docs")
+    for source_root in source_roots:
+        for path in source_root.rglob("*"):
+            if not path.is_file() or any(
+                part in {"dist", "build", ".gradle", ".idea"} for part in path.parts
+            ):
+                continue
+            if path.suffix.lower() in {".bak", ".diff"}:
+                forbidden_worktree.append(path.relative_to(root).as_posix())
+    if forbidden_worktree:
+        fail(errors, "backup/diff artifacts found in source tree: " + ", ".join(forbidden_worktree))
+
+    tracked = tracked_files(root)
+    forbidden_tracked: list[str] = []
+    for path in tracked:
+        relative = path.relative_to(root).as_posix()
+        lowered = relative.lower()
+        if (
+            lowered.startswith("dist/")
+            or lowered.startswith(".idea/")
+            or lowered.endswith((".zip", ".zip.sha256", ".apk", ".bak", ".diff", ".lock"))
+            or "__pycache__/" in lowered
+            or re.search(r"mt5/.*/oppw_monitor_equity.*\.json$", lowered)
+        ):
+            forbidden_tracked.append(relative)
+    if forbidden_tracked:
+        fail(errors, "generated/runtime files are tracked: " + ", ".join(forbidden_tracked))
+
+    backend = root / "Mobile" / "backend"
+    forbidden_endpoint_names = {
+        "latest-trade.php", "last-trade-authority.php", "oppw_latest_trade_v45_2.php"
+    }
+    endpoint_conflicts = [path.name for path in backend.glob("*.php") if path.name in forbidden_endpoint_names]
+    if endpoint_conflicts:
+        fail(errors, "duplicate/legacy backend endpoints found: " + ", ".join(endpoint_conflicts))
+
+    for path in tracked:
+        if not path.is_file() or path.stat().st_size > 2_000_000:
+            continue
+        try:
+            content = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        if any(marker in content for marker in SECRET_MARKERS):
+            fail(errors, f"private-key/service-account marker found in tracked file: {path.relative_to(root)}")
+
+    if errors:
+        print("SOURCE VALIDATION FAILED", file=sys.stderr)
+        for error in errors:
+            print(f"- {error}", file=sys.stderr)
+        return 1
+    print(f"SOURCE VALIDATION PASSED version={version}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -13,6 +13,11 @@ val localProperties = Properties().apply {
 fun quoted(value: String): String = "\"${value.replace("\\", "\\\\").replace("\"", "\\\"")}\""
 fun local(name: String, default: String = ""): String = localProperties.getProperty(name, default).trim().trim('"')
 
+val projectVersion = rootProject.projectDir.parentFile.resolve("VERSION").readText().trim()
+val versionParts = projectVersion.split('.').map { it.toInt() }
+require(versionParts.size == 3) { "VERSION must use MAJOR.MINOR.PATCH" }
+val projectVersionCode = versionParts[0] * 10_000 + versionParts[1] * 100 + versionParts[2]
+
 android {
     namespace = "com.oppw.monitor"
     compileSdk = 37
@@ -21,8 +26,8 @@ android {
         applicationId = "com.oppw.monitor"
         minSdk = 26
         targetSdk = 37
-        versionCode = 31
-        versionName = "14.3.1"
+        versionCode = projectVersionCode
+        versionName = projectVersion
 
         buildConfigField("String", "API_BASE_URL", quoted(local("OPPW_API_BASE_URL", "https://example.com/oppw-api/")))
         buildConfigField("long", "POLL_INTERVAL_MS", "5000L")

@@ -1,10 +1,9 @@
-"""OPPW MT5 v51 account configuration template.
+"""Canonical OPPW MT5 account configuration template.
 
-Copy this file beside oppw_mt5_continuous.py using the account-specific local
-name expected by the launcher:
+Copy it into the selected account directory using its local private name:
 
-DEMO: oppw-mt5-config.py
-REAL: real-mt5-config.py
+DEMO: mt5/demo/oppw-mt5-config.py
+REAL: mt5/real/real-mt5-config.py
 
 Keep the local file out of Git. Environment variables override the values here.
 """
@@ -17,6 +16,7 @@ from datetime import time
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
+ACCOUNT_DEFAULT = "REAL" if BASE_DIR.name.lower() == "real" else "DEMO"
 
 
 def env_bool(name: str, default: bool) -> bool:
@@ -52,7 +52,7 @@ MONITOR_WRITE_TOKEN = ""
 @dataclass(frozen=True)
 class Config:
     # Identity and symbols
-    config_name: str = os.getenv("OPPW_CONFIG_NAME", "DEMO")
+    config_name: str = os.getenv("OPPW_CONFIG_NAME", ACCOUNT_DEFAULT)
     trade_symbol: str = os.getenv("OPPW_TRADE_SYMBOL", "US100")
     signal_symbol: str = os.getenv("OPPW_SIGNAL_SYMBOL", "US100")
     timezone_name: str = os.getenv("OPPW_TIMEZONE", "Europe/Warsaw")
@@ -151,7 +151,7 @@ class Config:
     monitor_enabled: bool = env_bool("OPPW_MONITOR_ENABLED", True)
     monitor_ingest_url: str = os.getenv("OPPW_MONITOR_INGEST_URL", "https://eloski.eu/oppw-backend/ingest.php")
     monitor_write_token: str = os.getenv("OPPW_MONITOR_WRITE_TOKEN", MONITOR_WRITE_TOKEN)
-    monitor_account_key: str = os.getenv("OPPW_MONITOR_ACCOUNT_KEY", "DEMO")
+    monitor_account_key: str = os.getenv("OPPW_MONITOR_ACCOUNT_KEY", ACCOUNT_DEFAULT)
     monitor_publish_interval_seconds: float = env_float("OPPW_MONITOR_PUBLISH_INTERVAL_SECONDS", 5.0)
     monitor_timeout_seconds: float = env_float("OPPW_MONITOR_TIMEOUT_SECONDS", 10.0)
     monitor_error_log_interval_seconds: float = env_float("OPPW_MONITOR_ERROR_LOG_INTERVAL_SECONDS", 30.0)
