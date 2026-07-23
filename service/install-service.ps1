@@ -97,7 +97,8 @@ $config = [ordered]@{
     assignmentTtlSeconds = 15
     stopGraceSeconds = 15
     restartDelaySeconds = 5
-    companionStartDelaySeconds = 70
+    startupReadyTimeoutSeconds = 90
+    startupFailureBackoffSeconds = 60
     runtimeDir = (Join-Path $programData 'runtime')
     logDir = (Join-Path $programData 'logs')
 }

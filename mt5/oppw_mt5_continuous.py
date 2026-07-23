@@ -1453,12 +1453,16 @@ class MobileEventHandler(logging.Handler):
 
 
 class OPPWContinuousStrategy:
-    def __init__(self, config, role: str, account: str, coordinator: BackendLeaseCoordinator):
+    def __init__(
+        self, config, role: str, account: str, coordinator: BackendLeaseCoordinator,
+        service_ready_file: Optional[Path] = None,
+    ):
         self.cfg = config
         self.role = role
         self.account = account.upper()
         self.is_executor = role == INSTANCE_MODE_EXECUTOR
         self.coordinator = coordinator
+        self.service_ready_file = service_ready_file
         self.tz = ZoneInfo(config.timezone_name)
         self.market_tz = ZoneInfo(config.market_timezone_name)
         self.log = setup_logging(config.log_dir, self.tz, role, self.account)
@@ -1556,6 +1560,21 @@ class OPPWContinuousStrategy:
                 self.log.info("EVENT WEEKEND_AUTOTRADING_CHECK_SKIPPED checks=false")
         else:
             self.log.info("EVENT INSTANCE_ROLE role=PUBLISHER account=%s trading_allowed=false backend_publishing=true", self.account)
+        if self.service_ready_file is not None:
+            ready_payload = {
+                "account": self.account,
+                "role": self.role,
+                "pid": os.getpid(),
+                "connectedAt": datetime.now(UTC).isoformat(),
+                "build": BUILD_ID,
+            }
+            temporary_ready_file = self.service_ready_file.with_suffix(
+                self.service_ready_file.suffix + f".{os.getpid()}.tmp"
+            )
+            temporary_ready_file.write_text(
+                json.dumps(ready_payload, separators=(",", ":")), encoding="utf-8"
+            )
+            os.replace(temporary_ready_file, self.service_ready_file)
 
     def disconnect(self) -> None:
         if self.connected:
@@ -5132,6 +5151,11 @@ def parse_arguments(argv: Optional[list[str]] = None) -> argparse.Namespace:
         default="",
         help=argparse.SUPPRESS,
     )
+    parser.add_argument(
+        "--service-ready-file",
+        default="",
+        help=argparse.SUPPRESS,
+    )
     return parser.parse_args(argv)
 
 
@@ -5152,7 +5176,8 @@ def main() -> int:
     strategy: Optional[OPPWContinuousStrategy] = None
     try:
         coordinator.start()
-        strategy = OPPWContinuousStrategy(cfg, role, account, coordinator)
+        service_ready_file = Path(str(args.service_ready_file)).resolve() if str(args.service_ready_file).strip() else None
+        strategy = OPPWContinuousStrategy(cfg, role, account, coordinator, service_ready_file)
         if (
             role == INSTANCE_MODE_PUBLISHER
             and not strategy.monitor_publisher.ready

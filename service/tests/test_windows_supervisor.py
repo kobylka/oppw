@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from service.oppw_windows_supervisor import (
-    ACCOUNTS, ROLES, assignments_fresh, load_config, publisher_start_ready,
+    ACCOUNTS, ROLES, STARTUP_ORDER, assignments_fresh, load_config, next_start_key,
 )
 
 
@@ -51,11 +51,37 @@ class SupervisorConfigTests(unittest.TestCase):
         self.assertIn("CreateProcessAsUser", host)
         self.assertIn('startup.lpDesktop = "winsta0\\\\default"', host)
 
-    def test_publisher_waits_for_executor_ipc_startup(self):
-        self.assertFalse(publisher_start_ready(True, False, 0.0, 70.0, now=100.0))
-        self.assertFalse(publisher_start_ready(True, True, 40.0, 70.0, now=109.9))
-        self.assertTrue(publisher_start_ready(True, True, 40.0, 70.0, now=110.0))
-        self.assertTrue(publisher_start_ready(False, False, 0.0, 70.0, now=1.0))
+    def test_all_mt5_startups_are_serialized_by_explicit_readiness(self):
+        assignments = {key: True for key in STARTUP_ORDER}
+        states = {key: (False, False) for key in STARTUP_ORDER}
+        self.assertEqual(("DEMO", "EXECUTOR"), next_start_key(assignments, states))
+        states[("DEMO", "EXECUTOR")] = (True, False)
+        self.assertIsNone(next_start_key(assignments, states))
+        states[("DEMO", "EXECUTOR")] = (True, True)
+        self.assertEqual(("REAL", "EXECUTOR"), next_start_key(assignments, states))
+        states[("REAL", "EXECUTOR")] = (True, True)
+        self.assertEqual(("DEMO", "PUBLISHER"), next_start_key(assignments, states))
+
+    def test_failed_demo_backoff_does_not_block_real_startup(self):
+        assignments = {key: True for key in STARTUP_ORDER}
+        states = {key: (False, False) for key in STARTUP_ORDER}
+        eligible = {key: True for key in STARTUP_ORDER}
+        eligible[("DEMO", "EXECUTOR")] = False
+        self.assertEqual(("REAL", "EXECUTOR"), next_start_key(assignments, states, eligible))
+        states[("DEMO", "EXECUTOR")] = (True, False)
+        self.assertIsNone(next_start_key(assignments, states, eligible))
+
+    def test_supervisor_passes_unique_ready_file_to_each_child(self):
+        supervisor = (Path(__file__).resolve().parents[1] / "oppw_windows_supervisor.py").read_text(encoding="utf-8")
+        strategy = (Path(__file__).resolve().parents[2] / "mt5" / "oppw_mt5_continuous.py").read_text(encoding="utf-8")
+        self.assertIn('f"ready-{account.lower()}-{role.lower()}.json"', supervisor)
+        self.assertIn('"--service-ready-file", str(item.ready_file)', supervisor)
+        self.assertIn('os.replace(temporary_ready_file, self.service_ready_file)', strategy)
+        connect = strategy[strategy.index("    def connect(self) -> None:"):strategy.index("    def disconnect(self) -> None:")]
+        ready_position = connect.index("os.replace(temporary_ready_file, self.service_ready_file)")
+        self.assertGreater(ready_position, connect.index("mt5.account_info()"))
+        self.assertGreater(ready_position, connect.index("mt5.symbol_select(self.cfg.signal_symbol"))
+        self.assertGreater(ready_position, connect.index('self.ensure_autotrading_enabled("CONNECT"'))
 
     def test_installer_accepts_service_already_marked_for_deletion(self):
         installer = (Path(__file__).resolve().parents[1] / "install-service.ps1").read_text(encoding="utf-8")

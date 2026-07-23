@@ -50,6 +50,7 @@ def main() -> int:
         "docs/decisions/0006-two-node-windows-supervision.md": ("Status: Accepted", "OPPWContinuousSupervisor"),
         "docs/decisions/0007-independent-android-version.md": ("Status: Accepted", "Mobile/VERSION", "1,000,000"),
         "docs/decisions/0008-interactive-mt5-service-session.md": ("Status: Accepted", "CreateProcessAsUser", "winsta0\\default"),
+        "docs/decisions/0009-mt5-readiness-gated-startup.md": ("Status: Accepted", "Demo Executor", "readiness"),
         ".github/pull_request_template.md": ("Contract impact", "Architecture and safety", "Validation"),
     }
     for relative, markers in required_governance.items():
@@ -124,7 +125,7 @@ def main() -> int:
         fail(errors, "legacy MT5 account-config aliases are not allowed")
 
     service_files = {
-        "service/oppw_windows_supervisor.py": ("ACCOUNTS = (\"DEMO\", \"REAL\")", "ROLES = (\"EXECUTOR\", \"PUBLISHER\")", "assignmentTtlSeconds"),
+        "service/oppw_windows_supervisor.py": ("ACCOUNTS = (\"DEMO\", \"REAL\")", "ROLES = (\"EXECUTOR\", \"PUBLISHER\")", "assignmentTtlSeconds", "STARTUP_ORDER", "--service-ready-file"),
         "service/OPPWServiceHost.cs": ("ServiceName = \"OPPWContinuousSupervisor\"", "CreateKillOnCloseJob", "WTSQueryUserToken", "CreateProcessAsUser"),
         "service/install-service.ps1": ("ValidateSet('Master','Backup')", "delayed-auto", "RuntimeUser", "runtimeSid"),
         "Mobile/backend/service-control.php": ("setDesiredState", "strategy_service_control_events", "MASTER_ONLINE"),

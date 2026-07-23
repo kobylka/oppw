@@ -21,6 +21,12 @@ from typing import Any
 
 ACCOUNTS = ("DEMO", "REAL")
 ROLES = ("EXECUTOR", "PUBLISHER")
+STARTUP_ORDER = (
+    ("DEMO", "EXECUTOR"),
+    ("REAL", "EXECUTOR"),
+    ("DEMO", "PUBLISHER"),
+    ("REAL", "PUBLISHER"),
+)
 
 
 def assignments_fresh(last_assignment_at: float, ttl_seconds: float, now: float | None = None) -> bool:
@@ -28,17 +34,21 @@ def assignments_fresh(last_assignment_at: float, ttl_seconds: float, now: float 
     return last_assignment_at > 0 and current - last_assignment_at < ttl_seconds
 
 
-def publisher_start_ready(
-    executor_assigned: bool,
-    executor_running: bool,
-    executor_started_at: float,
-    delay_seconds: float,
-    now: float | None = None,
-) -> bool:
-    if not executor_assigned:
-        return True
-    current = time.monotonic() if now is None else now
-    return executor_running and executor_started_at > 0 and current - executor_started_at >= delay_seconds
+def next_start_key(
+    assignments: dict[tuple[str, str], bool],
+    states: dict[tuple[str, str], tuple[bool, bool]],
+    eligible: dict[tuple[str, str], bool] | None = None,
+) -> tuple[str, str] | None:
+    for key in STARTUP_ORDER:
+        if assignments.get(key, False) and states[key] == (True, False):
+            return None
+    for key in STARTUP_ORDER:
+        if not assignments.get(key, False):
+            continue
+        running, ready = states[key]
+        if not running and (eligible is None or eligible.get(key, False)):
+            return key
+    return None
 
 
 def utc_text() -> str:
@@ -67,12 +77,16 @@ class ManagedProcess:
     account: str
     role: str
     stop_file: Path
+    ready_file: Path
     process: subprocess.Popen[bytes] | None = None
     output: Any = None
     started_at: str = ""
     restart_count: int = 0
     last_exit_code: int | None = None
     last_start_monotonic: float = 0.0
+    next_start_monotonic: float = 0.0
+    startup_failed: bool = False
+    ready_reported: bool = False
 
     def refresh(self) -> None:
         if self.process is None:
@@ -81,6 +95,8 @@ class ManagedProcess:
         if code is None:
             return
         self.last_exit_code = code
+        if not self.ready_file.is_file():
+            self.startup_failed = True
         self.process = None
         if self.output is not None:
             self.output.close()
@@ -119,8 +135,11 @@ class Supervisor:
         self.assignment_ttl = max(5.0, min(60.0, float(self.cfg.get("assignmentTtlSeconds", 15.0))))
         self.stop_grace = max(3.0, min(60.0, float(self.cfg.get("stopGraceSeconds", 15.0))))
         self.restart_delay = max(1.0, min(30.0, float(self.cfg.get("restartDelaySeconds", 5.0))))
-        self.companion_start_delay = max(
-            10.0, min(180.0, float(self.cfg.get("companionStartDelaySeconds", 70.0)))
+        self.startup_ready_timeout = max(
+            30.0, min(180.0, float(self.cfg.get("startupReadyTimeoutSeconds", 90.0)))
+        )
+        self.startup_failure_backoff = max(
+            15.0, min(300.0, float(self.cfg.get("startupFailureBackoffSeconds", 60.0)))
         )
         self.started_at = utc_text()
         self.shutdown = threading.Event()
@@ -128,7 +147,10 @@ class Supervisor:
         self.assignments: dict[tuple[str, str], bool] = {}
         self.processes = {
             (account, role): ManagedProcess(
-                account, role, self.runtime_dir / f"stop-{account.lower()}-{role.lower()}.signal"
+                account,
+                role,
+                self.runtime_dir / f"stop-{account.lower()}-{role.lower()}.signal",
+                self.runtime_dir / f"ready-{account.lower()}-{role.lower()}.json",
             )
             for account in ACCOUNTS for role in ROLES
         }
@@ -182,12 +204,17 @@ class Supervisor:
         now = time.monotonic()
         if now - item.last_start_monotonic < self.restart_delay:
             return
+        if now < item.next_start_monotonic:
+            return
         item.stop_file.unlink(missing_ok=True)
+        item.ready_file.unlink(missing_ok=True)
+        item.ready_reported = False
         output_path = self.log_dir / f"{item.account.lower()}-{item.role.lower()}.console.log"
         item.output = output_path.open("ab", buffering=0)
         command = [
             str(self.python), str(self.entrypoint), "--account", item.account.lower(),
             "--mode", item.role.lower(), "--service-stop-file", str(item.stop_file),
+            "--service-ready-file", str(item.ready_file),
         ]
         creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         try:
@@ -208,6 +235,8 @@ class Supervisor:
         item.refresh()
         if item.process is None:
             item.stop_file.unlink(missing_ok=True)
+            item.ready_file.unlink(missing_ok=True)
+            item.ready_reported = False
             return
         item.stop_file.write_text(utc_text(), encoding="utf-8")
         deadline = time.monotonic() + self.stop_grace
@@ -223,28 +252,53 @@ class Supervisor:
         self.log(f"PROCESS_STOPPED account={item.account} role={item.role} exit={item.process.returncode}")
         item.refresh()
         item.stop_file.unlink(missing_ok=True)
+        item.ready_file.unlink(missing_ok=True)
+        item.ready_reported = False
 
     def reconcile(self, allow_start: bool) -> None:
+        now = time.monotonic()
         for item in self.processes.values():
             item.refresh()
+            if item.startup_failed:
+                item.startup_failed = False
+                item.next_start_monotonic = max(
+                    item.next_start_monotonic, now + self.startup_failure_backoff
+                )
+                self.log(
+                    f"PROCESS_START_FAILED account={item.account} role={item.role} "
+                    f"exit={item.last_exit_code} retryIn={self.startup_failure_backoff:.0f}s"
+                )
+            if item.process is not None and item.ready_file.is_file() and not item.ready_reported:
+                item.ready_reported = True
+                self.log(f"PROCESS_READY account={item.account} role={item.role} pid={item.process.pid}")
+            if (
+                item.process is not None
+                and not item.ready_file.is_file()
+                and now - item.last_start_monotonic >= self.startup_ready_timeout
+            ):
+                self.log(
+                    f"PROCESS_READY_TIMEOUT account={item.account} role={item.role} "
+                    f"timeout={self.startup_ready_timeout:.0f}s"
+                )
+                self.stop_process(item)
+                item.next_start_monotonic = now + self.startup_failure_backoff
         for key, item in self.processes.items():
             should_run = allow_start and self.assignments.get(key, False)
             if not should_run and item.process is not None:
                 self.stop_process(item)
-        for account in ACCOUNTS:
-            executor = self.processes[(account, "EXECUTOR")]
-            if allow_start and self.assignments.get((account, "EXECUTOR"), False) and executor.process is None:
-                self.start_process(executor)
-            publisher = self.processes[(account, "PUBLISHER")]
-            publisher_assigned = allow_start and self.assignments.get((account, "PUBLISHER"), False)
-            executor_assigned = allow_start and self.assignments.get((account, "EXECUTOR"), False)
-            if publisher_assigned and publisher.process is None and publisher_start_ready(
-                executor_assigned,
-                executor.process is not None,
-                executor.last_start_monotonic,
-                self.companion_start_delay,
-            ):
-                self.start_process(publisher)
+        if not allow_start:
+            return
+        states = {
+            key: (item.process is not None, item.ready_file.is_file())
+            for key, item in self.processes.items()
+        }
+        eligible = {
+            key: now >= item.next_start_monotonic
+            for key, item in self.processes.items()
+        }
+        key_to_start = next_start_key(self.assignments, states, eligible)
+        if key_to_start is not None:
+            self.start_process(self.processes[key_to_start])
 
     def stop_all(self) -> None:
         for item in self.processes.values():
