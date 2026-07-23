@@ -317,7 +317,14 @@ class StrategyState:
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_suffix(path.suffix + ".tmp")
         temporary.write_text(json.dumps(asdict(self), indent=2, sort_keys=True), encoding="utf-8")
-        os.replace(temporary, path)
+        for attempt in range(1, 6):
+            try:
+                os.replace(temporary, path)
+                return
+            except PermissionError:
+                if attempt >= 5:
+                    raise
+                time_module.sleep(0.05)
 
 
 @dataclass(frozen=True)
@@ -2321,6 +2328,28 @@ class OPPWContinuousStrategy:
             return "C"
         return "D"
 
+    def closed_position_contract(self) -> tuple[str, float, float]:
+        """Return the authoritative strategy close label, reference and raw return.
+
+        Broker-side protective stops can fill while this process is stopped.  In
+        that case the first post-restart quote is not the exit price.  Preserve
+        the installed protection threshold as the strategy return reference;
+        account P/L remains the authority for actual cash execution results.
+        """
+        reason = self.state.exit_latched_reason or self.state.active_tp_reason or self.state.active_sl_reason or "broker/manual"
+        reference_price = float(self.state.last_exit_price or 0.0)
+        if self.state.active_sl_reason and self.state.active_sl_price > 0:
+            reference_price = float(self.state.active_sl_price)
+        elif self.state.active_tp_reason and self.state.active_tp_price > 0:
+            reference_price = float(self.state.active_tp_price)
+
+        if str(reason).upper() == "TSL":
+            reason = f"TSL_{float(self.cfg.tsl_stop) * 100.0:g}%"
+
+        entry_price = float(self.state.entry_price or 0.0)
+        change = reference_price / entry_price - 1.0 if reference_price > 0 and entry_price > 0 else 0.0
+        return reason, reference_price, change
+
     def finalize_closed_position(self) -> None:
         """Clear local open-position state without consulting MT5 deal history.
 
@@ -2334,18 +2363,20 @@ class OPPWContinuousStrategy:
             return
 
         now = datetime.now(self.tz)
-        reason = self.state.exit_latched_reason or self.state.active_tp_reason or self.state.active_sl_reason or "broker/manual"
+        reason, exit_price, change = self.closed_position_contract()
         reason_log = shlex.quote(reason)
         self.state.last_exit_position_identifier = identifier
         self.state.last_exit_time = now.isoformat()
         self.state.last_exit_reason = reason
-        # Do not invent a return, close price or class. Keep the previous known
-        # values until MySQL confirms the newly closed trade.
+        self.state.last_exit_price = exit_price
+        # Publish the installed strategy protection as the return reference.
+        # Realized account P/L remains sourced independently from the balance.
         self.execution_stage("CLOSED", position_ticket=position_ticket, reference_price=float(self.state.entry_price or 0.0), reason=reason)
         self.log.info(
-            "EVENT POSITION_CLOSED reason=%s source=mysql_pending position_identifier=%s entry=%.5f "
-            "preleverage_return=pending trade_class=pending",
-            reason_log, identifier, float(self.state.entry_price or 0.0),
+            "EVENT POSITION_CLOSED reason=%s source=installed_strategy_protection position_identifier=%s "
+            "entry=%.5f exit=%.5f change=%.10f preleverage_return=%.10f trade_class=%s",
+            reason_log, identifier, float(self.state.entry_price or 0.0), exit_price, change, change,
+            self.trade_class(change, reason),
         )
 
         self.state.active_position_identifier = 0
@@ -3009,16 +3040,18 @@ class OPPWContinuousStrategy:
 
     def strategy_decision_payload(self, preview: Optional[dict[str, Any]] = None) -> dict[str, Any]:
         preview = preview or self.potential_position_preview()
+        recorded_at = datetime.now(self.tz).isoformat()
         decision_id_source = "|".join(str(value) for value in (
             self.account, self.strategy_decision_week_key(), BUILD_ID, preview.get("symbol", ""),
             self.strategy_specification["specHash"],
             preview.get("strategyLeverage", 0.0), preview.get("previousFullWeekChange", 0.0),
             preview.get("previousTradeChange", 0.0), preview.get("volume", 0.0), preview.get("available", False),
             round(float(preview.get("balance") or 0.0), 2), round(float(preview.get("sizingFreeMargin", preview.get("freeMargin")) or 0.0), 2),
+            recorded_at,
         ))
         decision_id = uuid.uuid5(uuid.NAMESPACE_URL, decision_id_source).hex
         return {
-            "decisionId": decision_id, "decisionWeek": self.strategy_decision_week_key(), "recordedAt": datetime.now(self.tz).isoformat(), "build": BUILD_ID,
+            "decisionId": decision_id, "decisionWeek": self.strategy_decision_week_key(), "recordedAt": recorded_at, "build": BUILD_ID,
             "strategySpecId": self.strategy_specification["specId"],
             "strategySpecHash": self.strategy_specification["specHash"],
             "parameterHash": self.strategy_parameter_hash(), "account": self.account, "decision": "NEXT_WEEK_LONG_ENTRY",
@@ -3064,6 +3097,8 @@ class OPPWContinuousStrategy:
             round(float(payload["sizing"].get("balance") or 0.0), 2), round(float(payload["sizing"].get("sizingFreeMargin", payload["sizing"].get("freeMargin")) or 0.0), 2),
             bool(payload["sizing"].get("minimumVolumeFloor")), payload["error"].split(":", 1)[0],
         )
+        if not force and signature == self.last_strategy_decision_signature and self.last_strategy_decision_payload:
+            return self.last_strategy_decision_payload
         self.last_strategy_decision_payload = payload
         self.state.active_decision_id = str(payload.get("decisionId", ""))
         self.state.active_strategy_spec_id = self.strategy_specification["specId"]
@@ -3438,6 +3473,13 @@ class OPPWContinuousStrategy:
             "returnSource": "strategy state fallback",
         }
 
+    def snapshot_strategy_decision(self, position, preview: dict[str, Any]) -> Optional[dict[str, Any]]:
+        if self.last_strategy_decision_payload is not None:
+            return self.last_strategy_decision_payload
+        if position is None:
+            return self.record_strategy_decision_if_changed(preview=preview)
+        return None
+
     def build_mobile_snapshot(self, position, now: datetime, current_bar: Optional[M1Bar], potential_position: Optional[dict[str, Any]] = None) -> dict[str, Any]:
         account = mt5.account_info()
         balance = float(getattr(account, "balance", 0.0)) if account is not None else 0.0
@@ -3606,7 +3648,7 @@ class OPPWContinuousStrategy:
             },
             "position": position_payload,
             "potentialPosition": preview,
-            "strategyDecision": self.strategy_decision_payload(preview) if position is None else self.last_strategy_decision_payload,
+            "strategyDecision": self.snapshot_strategy_decision(position, preview),
             "strategySpecification": self.strategy_specification,
             "lastClosedTrade": self.last_closed_trade_payload(),
             "execution": self.execution_snapshot(),
@@ -4969,10 +5011,27 @@ class OPPWContinuousStrategy:
             self.publish_mobile_if_due(position, now, current_bar)
 
     def reload_state_read_only(self) -> None:
-        try:
-            self.state = StrategyState.load(self.cfg.state_file)
-        except Exception as exc:
-            self.log.warning("EVENT PUBLISHER_STATE_READ_FAILED path=%s error=%s", self.cfg.state_file, exc)
+        last_error: Optional[Exception] = None
+        for attempt in range(1, 6):
+            try:
+                self.state = StrategyState.load(self.cfg.state_file)
+                if attempt > 1:
+                    self.log.info(
+                        "EVENT PUBLISHER_STATE_READ_RECOVERED path=%s attempt=%s",
+                        self.cfg.state_file, attempt,
+                    )
+                return
+            except PermissionError as exc:
+                last_error = exc
+                if attempt < 5:
+                    time_module.sleep(0.05)
+            except Exception as exc:
+                last_error = exc
+                break
+        self.log.warning(
+            "EVENT PUBLISHER_STATE_READ_FAILED path=%s attempts=%s error=%s",
+            self.cfg.state_file, 5 if isinstance(last_error, PermissionError) else 1, last_error,
+        )
 
     def publisher_startup(self) -> None:
         if not self.monitor_publisher.ready:

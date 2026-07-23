@@ -77,7 +77,7 @@ Authentication endpoints live under `Mobile/backend/auth/`; push endpoints live 
 | Trade transition | `strategy_trade_ledger` |
 | Cash flow | `account_cash_flows` |
 | Current mobile snapshot | `strategy_snapshots` projection |
-| Mobile analytics trade projection | `strategy_trades` |
+| Mobile analytics trade projection | `strategy_trades`, with protective-close price/reason recovered from `strategy_protection_changes` when event and flat snapshot delivery are separated |
 | Diagnostics and low-volume operational messages | `strategy_events` |
 | Desired process state and supervisor heartbeat | `strategy_service_desired_state` and `strategy_supervisor_nodes` |
 | Service-control audit | `strategy_service_control_events` |

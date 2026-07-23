@@ -270,14 +270,42 @@ try {
     if ($previousPosition !== null && $currentPosition === null) {
         $details = is_array($closedEvent['details'] ?? null) ? $closedEvent['details'] : [];
         $ticket = (int)($previousPosition['ticket'] ?? 0);
-        $closePrice = $number($details['exit'] ?? $currentPrice ?? $previousPosition['bid'] ?? 0);
-        $change = $number($details['change'] ?? 0);
-        $reason = substr((string)($details['reason'] ?? $closedEvent['name'] ?? 'POSITION_CLOSED'), 0, 100);
+        $protectionReason = '';
+        $protectionPrice = 0.0;
+        if (!is_numeric($details['exit'] ?? null) || (float)$details['exit'] <= 0 || trim((string)($details['reason'] ?? '')) === '') {
+            $protectionLookup = $db->prepare(
+                'SELECT new_sl, reason
+                   FROM strategy_protection_changes
+                  WHERE strategy_key = ? AND position_ticket = ? AND result = TRUE AND new_sl > 0
+                  ORDER BY occurred_at DESC, id DESC
+                  LIMIT 1'
+            );
+            $protectionLookup->execute([$accountKey, $ticket]);
+            $protection = $protectionLookup->fetch();
+            if (is_array($protection)) {
+                $protectionPrice = $number($protection['new_sl'] ?? 0);
+                $protectionReason = trim((string)($protection['reason'] ?? ''));
+            }
+        }
+        $closePrice = $number($details['exit'] ?? ($protectionPrice > 0 ? $protectionPrice : ($currentPrice ?: ($previousPosition['bid'] ?? 0))));
+        $reason = trim((string)($details['reason'] ?? ''));
+        if ($reason === '' && $protectionReason !== '') {
+            if (preg_match('/TSL_STOP_([0-9]+(?:\.[0-9]+)?)%/i', $protectionReason, $match)) {
+                $reason = 'TSL_' . rtrim(rtrim($match[1], '0'), '.') . '%';
+            } elseif (stripos($protectionReason, 'HARD_SL') !== false) {
+                $reason = 'SL';
+            }
+        }
+        if ($reason === '' || strtoupper($reason) === 'POSITION_CLOSED') $reason = 'UNKNOWN';
+        $reason = substr($reason, 0, 100);
         $lookup = $db->prepare('SELECT balance_before, open_price FROM strategy_trades WHERE strategy_key = ? AND position_ticket = ? LIMIT 1');
         $lookup->execute([$accountKey, $ticket]);
         $existingTrade = $lookup->fetch();
         $balanceBefore = $existingTrade['balance_before'] ?? null;
         $openPrice = $number($existingTrade['open_price'] ?? $previousPosition['openPrice'] ?? 0);
+        $change = is_numeric($details['change'] ?? null)
+            ? (float)$details['change']
+            : ($openPrice > 0 && $closePrice > 0 ? $closePrice / $openPrice - 1.0 : 0.0);
         $profit = is_numeric($balanceBefore) ? $balance - (float)$balanceBefore : null;
         $closedTradeProfit = $profit;
         $closedTradeReason = $reason;

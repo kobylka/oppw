@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import hmac
 import json
@@ -543,6 +544,46 @@ return [
             }, token=access_token)
             if receipt.get("latencyMs") is None:
                 raise AssertionError("mobile receipt did not calculate delivery latency")
+
+            # Regression: a protective close event may arrive independently of
+            # the later flat snapshot. The snapshot quote must not replace the
+            # accepted broker-side stop as the strategy return reference.
+            close_time = datetime.now(timezone.utc)
+            installed_tsl = float(snapshot["position"]["openPrice"]) * 0.996
+            http_json("POST", base_url + "events-ingest.php", {
+                "accountKey": "DEMO", "coordination": ingest_payload["coordination"],
+                "events": [{
+                    "time": iso(close_time), "level": "INFO", "name": "EXECUTION_STAGE", "result": True,
+                    "message": "contract separated TSL protection",
+                    "details": {
+                        "execution_id": fixture["executionId"], "position_ticket": fixture["positionTicket"],
+                        "stage": "MODIFIED", "result": True, "old_sl": 27550.0, "new_sl": installed_tsl,
+                        "old_tp": 0.0, "new_tp": 0.0,
+                        "reason": "IMMUTABLE_HARD_SL_L10_RATIO_0.950000+TSL_STOP_0.4000%_RATIO_0.996000",
+                    },
+                }],
+            }, token=WRITE_TOKEN, expected=(201,))
+            flat_payload = copy.deepcopy(ingest_payload)
+            flat_payload["capturedAt"] = iso(close_time + timedelta(seconds=1))
+            flat_payload["snapshot"]["position"] = None
+            flat_payload["snapshot"]["market"]["currentPrice"] = float(snapshot["position"]["openPrice"]) * 0.988552
+            flat_payload["snapshot"]["market"]["bid"] = float(snapshot["position"]["openPrice"]) * 0.988552
+            flat_payload["events"] = []
+            flat_payload.pop("strategyDecision", None)
+            flat_payload.pop("strategySpecification", None)
+            http_json("POST", base_url + "ingest.php", flat_payload, token=WRITE_TOKEN, expected=(201,))
+            close_projection = docker_sql(
+                docker, container,
+                "SELECT CONCAT(close_price,'|',exit_reason,'|',preleverage_return_percent,'|',trade_class) "
+                "FROM strategy_trades WHERE strategy_key='DEMO' AND position_ticket=" + str(fixture["positionTicket"]),
+                docker_env,
+            ).split("|")
+            assert_close(close_projection[0], installed_tsl, "separated close stop price")
+            if close_projection[1] != "TSL_0.4%":
+                raise AssertionError(f"separated close reason: expected TSL_0.4%, got {close_projection[1]}")
+            assert_close(close_projection[2], -0.4, "separated close pre-leverage return")
+            if close_projection[3] != "C":
+                raise AssertionError(f"separated close class: expected C, got {close_projection[3]}")
 
             seed_analytics_fixture(
                 docker, container, fixture["accountKey"], fixture["analytics"],
