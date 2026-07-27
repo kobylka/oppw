@@ -330,7 +330,8 @@ object JsonParser {
             strategyDecision = (json.optJSONObject("strategyDecision") ?: json.optJSONObject("strategy_decision"))?.let(::parseStrategyDecision),
             lastClosedTrade = (json.optJSONObject("lastClosedTrade") ?: json.optJSONObject("last_closed_trade"))?.let(::parseLastClosedTrade),
             execution = json.optJSONObject("execution")?.let(::parseExecutionSnapshot),
-            closestCondition = closest, conditions = conditions, marketStats = parseMarketStats(json.optJSONObject("marketStats")),
+            closestCondition = closest, conditions = conditions,
+            marketStats = parseMarketStats(json.optJSONObject("marketStats"), json.optJSONObject("market"), json.optJSONObject("connection")),
             equityCurves = parseEquityCurves(json.optJSONObject("equityCurves")), equityHistory = parseEquity(json.optJSONArray("equityHistory") ?: JSONArray()),
         )
     }
@@ -440,7 +441,43 @@ object JsonParser {
     )
 
     private fun parseConditions(array: JSONArray): List<PriceCondition> = buildList { for (i in 0 until array.length()) add(parseCondition(array.getJSONObject(i))) }
-    private fun parseMarketStats(json: JSONObject?): MarketStats = MarketStats(json?.optJSONObject("currentWeek")?.let(::parseMarketWeek), json?.optJSONObject("previousWeek")?.let(::parseMarketWeek))
+    private fun parseMarketStats(json: JSONObject?, market: JSONObject?, connection: JSONObject?): MarketStats {
+        val backendCurrent = json?.optJSONObject("currentWeek")?.let(::parseMarketWeek)
+        val live = market?.optJSONObject("currentW1")
+        val open = live?.optNullableFiniteDouble("open")
+        val high = live?.optNullableFiniteDouble("high")
+        val low = live?.optNullableFiniteDouble("low")
+        val close = live?.optNullableFiniteDouble("close")
+        val liveCurrent = if (open != null && open > 0.0 && high != null && low != null && close != null) {
+            val relative = { value: Double -> (value / open - 1.0) * 100.0 }
+            MarketWeekStats(
+                week = backendCurrent?.week?.takeIf(String::isNotBlank) ?: connection?.optString("week").orEmpty(),
+                currentPrice = market.optNullableFiniteDouble("currentPrice") ?: close,
+                weekOpen = open,
+                weekOpenDate = live.optString("time").take(10),
+                weeklyHigh = high,
+                weeklyLow = low,
+                weeklyClose = close,
+                weeklyHighPercent = relative(high),
+                weeklyLowPercent = relative(low),
+                weeklyClosePercent = relative(close),
+                dailyDate = backendCurrent?.dailyDate.orEmpty(),
+                dailyOpen = backendCurrent?.dailyOpen,
+                dailyHigh = backendCurrent?.dailyHigh,
+                dailyLow = backendCurrent?.dailyLow,
+                dailyClose = backendCurrent?.dailyClose,
+                dailyHighPercent = backendCurrent?.dailyHighPercent,
+                dailyLowPercent = backendCurrent?.dailyLowPercent,
+                dailyClosePercent = backendCurrent?.dailyClosePercent,
+            )
+        } else null
+        val current = if (backendCurrent?.weekOpen != null && backendCurrent.weeklyHigh != null && backendCurrent.weeklyLow != null && backendCurrent.weeklyClose != null) {
+            backendCurrent
+        } else {
+            liveCurrent ?: backendCurrent
+        }
+        return MarketStats(current, json?.optJSONObject("previousWeek")?.let(::parseMarketWeek))
+    }
 
     private fun parseMarketWeek(json: JSONObject) = MarketWeekStats(
         week = json.optString("week"), currentPrice = json.optNullableDouble("currentPrice"),
