@@ -33,7 +33,7 @@ $accountStmt->execute([$session['device_id'], $accountKey]);
 $account = $accountStmt->fetch();
 if (!$account) json_response(['ok' => false, 'error' => 'Forbidden for selected account'], 403);
 
-$stmt = $db->prepare('SELECT payload, captured_at FROM strategy_snapshots WHERE strategy_key = ? ORDER BY id DESC LIMIT 1');
+$stmt = $db->prepare('SELECT payload, captured_at FROM strategy_snapshots WHERE strategy_key = ?');
 $stmt->execute([$accountKey]);
 $row = $stmt->fetch();
 if (!$row) json_response(['ok' => false, 'error' => 'No snapshot available for selected account'], 404);

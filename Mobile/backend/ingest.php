@@ -23,13 +23,7 @@ $snapshot = $data['snapshot'];
 $payload = json_encode($snapshot, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
 $events = isset($data['events']) && is_array($data['events']) ? $data['events'] : [];
 
-$previousStmt = $db->prepare('SELECT payload FROM strategy_snapshots WHERE strategy_key = ? ORDER BY id DESC LIMIT 1');
-$previousStmt->execute([$accountKey]);
-$previousRaw = $previousStmt->fetchColumn();
 $previousSnapshot = [];
-if (is_string($previousRaw) && $previousRaw !== '') {
-    try { $previousSnapshot = json_decode($previousRaw, true, 512, JSON_THROW_ON_ERROR); } catch (Throwable) { $previousSnapshot = []; }
-}
 
 $number = static fn(mixed $value, float $default = 0.0): float => is_numeric($value) ? (float)$value : $default;
 $positionOf = static function (array $value): ?array {
@@ -37,7 +31,7 @@ $positionOf = static function (array $value): ?array {
     return is_array($position) && (!array_key_exists('open', $position) || (bool)$position['open']) ? $position : null;
 };
 $currentPosition = $positionOf($snapshot);
-$previousPosition = $positionOf($previousSnapshot);
+$previousPosition = null;
 $account = is_array($snapshot['account'] ?? null) ? $snapshot['account'] : [];
 $market = is_array($snapshot['market'] ?? null) ? $snapshot['market'] : [];
 $metrics = is_array($snapshot['metrics'] ?? null) ? $snapshot['metrics'] : [];
@@ -90,6 +84,23 @@ $strategySpecificationHash = '';
 
 $db->beginTransaction();
 try {
+    // Lock and read the one current projection before replacing it. Transition
+    // detection below therefore compares against the immediately preceding
+    // accepted snapshot even during a publisher handoff.
+    $previousStmt = $db->prepare(
+        'SELECT payload FROM strategy_snapshots WHERE strategy_key = ? FOR UPDATE'
+    );
+    $previousStmt->execute([$accountKey]);
+    $previousRaw = $previousStmt->fetchColumn();
+    if (is_string($previousRaw) && $previousRaw !== '') {
+        try {
+            $previousSnapshot = json_decode($previousRaw, true, 512, JSON_THROW_ON_ERROR);
+        } catch (Throwable) {
+            $previousSnapshot = [];
+        }
+    }
+    $previousPosition = $positionOf($previousSnapshot);
+
     $coordination = is_array($data['coordination'] ?? null) ? $data['coordination'] : [];
     $specification = is_array($data['strategySpecification'] ?? null) ? $data['strategySpecification'] : null;
     if ($specification !== null) {
@@ -98,8 +109,12 @@ try {
         $strategySpecificationId = (string)$specResult['specId'];
         $strategySpecificationHash = (string)$specResult['specHash'];
     }
-    $snapshotStmt = $db->prepare('INSERT INTO strategy_snapshots(strategy_key, captured_at, payload) VALUES (?, ?, ?)');
-    $snapshotStmt->execute([$accountKey, $capturedAt, $payload]);
+    $snapshotStmt = $db->prepare(
+        'INSERT INTO strategy_snapshots(strategy_key, captured_at, payload)
+         VALUES (?, ?, ?)
+         ON DUPLICATE KEY UPDATE captured_at = ?, payload = ?'
+    );
+    $snapshotStmt->execute([$accountKey, $capturedAt, $payload, $capturedAt, $payload]);
   // OPPW_V47_4_STRATEGY_DECISION_PERSISTENCE_BEGIN
   // OPPW_V47_6_EXPLICIT_DECISION_PERSISTENCE_BEGIN
   // snapshot.strategyDecision remains available to status.php/Android. Only

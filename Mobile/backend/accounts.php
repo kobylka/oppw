@@ -15,11 +15,7 @@ $stmt = $db->prepare(
                 AND (COALESCE(mp.current_price, 0) > 0 OR COALESCE(mp.bid, 0) > 0 OR COALESCE(mp.ask, 0) > 0)) AS last_tick_at
        FROM monitor_device_accounts da
        JOIN monitor_accounts a ON a.account_key = da.account_key
-       LEFT JOIN strategy_snapshots s ON s.id = (
-            SELECT s2.id FROM strategy_snapshots s2
-             WHERE s2.strategy_key = a.account_key
-             ORDER BY s2.id DESC LIMIT 1
-       )
+       LEFT JOIN strategy_snapshots s ON s.strategy_key = a.account_key
       WHERE da.device_id = ? AND a.enabled = TRUE
       ORDER BY a.sort_order, a.display_name'
 );

@@ -473,6 +473,16 @@ return [
                 if stored.get("strategySpecificationHash") != identities["specHash"]:
                     raise AssertionError(f"specification acknowledgement mismatch on delivery {delivery + 1}")
 
+            snapshot_count = int(docker_sql(
+                docker, container,
+                "SELECT COUNT(*) FROM strategy_snapshots WHERE strategy_key='DEMO'",
+                docker_env,
+            ))
+            if snapshot_count != 1:
+                raise AssertionError(
+                    f"current snapshot projection retained {snapshot_count} rows instead of one"
+                )
+
             local_now = datetime.now(timezone.utc).astimezone(ZoneInfo("Europe/Warsaw"))
             current_monday = (local_now - timedelta(days=local_now.weekday())).replace(hour=15, minute=30, second=0, microsecond=0)
             market_rows = []
@@ -613,6 +623,15 @@ return [
             flat_payload.pop("strategyDecision", None)
             flat_payload.pop("strategySpecification", None)
             http_json("POST", base_url + "ingest.php", flat_payload, token=WRITE_TOKEN, expected=(201,))
+            snapshot_count_after_close = int(docker_sql(
+                docker, container,
+                "SELECT COUNT(*) FROM strategy_snapshots WHERE strategy_key='DEMO'",
+                docker_env,
+            ))
+            if snapshot_count_after_close != 1:
+                raise AssertionError(
+                    "flat snapshot append regressed the one-row current projection"
+                )
             close_projection = docker_sql(
                 docker, container,
                 "SELECT CONCAT(close_price,'|',exit_reason,'|',preleverage_return_percent,'|',trade_class) "

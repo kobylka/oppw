@@ -53,6 +53,7 @@ def main() -> int:
         "docs/decisions/0009-mt5-readiness-gated-startup.md": ("Status: Accepted", "Demo Executor", "readiness"),
         "docs/decisions/0010-cohesive-mt5-runtime-modules.md": ("Status: Accepted", "behavior-preserving", "oppw_core"),
         "docs/decisions/0011-single-source-mt5-configuration.md": ("Status: Accepted", "override-only", "exact equality"),
+        "docs/decisions/0012-bounded-current-snapshot-projection.md": ("Status: Accepted", "one row per", "upserts"),
         ".github/pull_request_template.md": ("Contract impact", "Architecture and safety", "Validation"),
     }
     for relative, markers in required_governance.items():
@@ -281,6 +282,34 @@ def main() -> int:
                 fail(errors, f"executable-contract marker missing from {relative}: {marker}")
     if 'testImplementation("org.json:json:' not in android_text:
         fail(errors, "Android JVM contract test requires a real org.json implementation")
+
+    bounded_snapshot_files = {
+        "Mobile/backend/sql/schema.sql": ("UNIQUE KEY uq_snapshot_strategy (strategy_key)",),
+        "Mobile/backend/sql/migrate_v54_1_current_snapshot.sql": (
+            "CREATE TABLE IF NOT EXISTS strategy_snapshots",
+            "uq_snapshot_strategy",
+        ),
+        "Mobile/backend/sql/migration-order.txt": ("migrate_v54_1_current_snapshot.sql",),
+        "Mobile/backend/ingest.php": (
+            "SELECT payload FROM strategy_snapshots WHERE strategy_key = ? FOR UPDATE",
+            "ON DUPLICATE KEY UPDATE captured_at = ?, payload = ?",
+        ),
+        "Mobile/backend/status.php": (
+            "SELECT payload, captured_at FROM strategy_snapshots WHERE strategy_key = ?",
+        ),
+        "Mobile/backend/accounts.php": (
+            "LEFT JOIN strategy_snapshots s ON s.strategy_key = a.account_key",
+        ),
+    }
+    for relative, markers in bounded_snapshot_files.items():
+        path = root / relative
+        if not path.is_file():
+            fail(errors, f"bounded current-snapshot file is missing: {relative}")
+            continue
+        content = path.read_text(encoding="utf-8")
+        for marker in markers:
+            if marker not in content:
+                fail(errors, f"bounded current-snapshot marker missing from {relative}: {marker}")
 
     release_script = root / "tools" / "release.ps1"
     release_text = release_script.read_text(encoding="utf-8") if release_script.is_file() else ""

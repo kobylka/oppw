@@ -5,3 +5,4 @@ migrate_v47_4_strategy_decisions.sql
 migrate_v51_strategy_authority.sql
 migrate_v52_service_supervision.sql
 migrate_v52_0_2_close_contract.sql
+migrate_v54_1_current_snapshot.sql

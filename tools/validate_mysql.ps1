@@ -83,12 +83,17 @@ try {
         mysql -N -uroot --database=oppw_monitor -e $tradeClassTriggerQuery).Trim()
     if ($LASTEXITCODE -ne 0 -or [int]$tradeClassTriggerCount -ne 2) { throw "Trade-class trigger validation failed: $tradeClassTriggerCount/2" }
 
+    $snapshotUniqueQuery = "SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA='oppw_monitor' AND TABLE_NAME='strategy_snapshots' AND INDEX_NAME='uq_snapshot_strategy' AND COLUMN_NAME='strategy_key' AND NON_UNIQUE=0;"
+    $snapshotUniqueCount = (& $docker.Source exec $container `
+        mysql -N -uroot --database=oppw_monitor -e $snapshotUniqueQuery).Trim()
+    if ($LASTEXITCODE -ne 0 -or [int]$snapshotUniqueCount -ne 1) { throw "Current-snapshot uniqueness validation failed: $snapshotUniqueCount/1" }
+
     $triggerQuery = "SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA='oppw_monitor' AND TRIGGER_NAME REGEXP '_no_(update|delete)$';"
     $triggerCount = (& $docker.Source exec $container `
         mysql -N -uroot --database=oppw_monitor -e $triggerQuery).Trim()
     if ($LASTEXITCODE -ne 0 -or [int]$triggerCount -ne 18) { throw "Immutability-trigger validation failed: $triggerCount/18" }
 
-    Write-Host "MYSQL VALIDATION PASSED authority_tables=$tableCount service_tables=$serviceTableCount trade_class_columns=$tradeClassColumnCount trade_class_triggers=$tradeClassTriggerCount immutable_triggers=$triggerCount image=$Image"
+    Write-Host "MYSQL VALIDATION PASSED authority_tables=$tableCount service_tables=$serviceTableCount trade_class_columns=$tradeClassColumnCount trade_class_triggers=$tradeClassTriggerCount snapshot_unique=$snapshotUniqueCount immutable_triggers=$triggerCount image=$Image"
 } finally {
     if ($containerStarted) {
         try {

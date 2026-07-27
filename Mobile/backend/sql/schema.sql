@@ -21,6 +21,7 @@ CREATE TABLE strategy_snapshots (
     captured_at DATETIME(3) NOT NULL,
     payload JSON NOT NULL,
     PRIMARY KEY (id),
+    UNIQUE KEY uq_snapshot_strategy (strategy_key),
     INDEX idx_snapshot_strategy_time (strategy_key, captured_at, id),
     CONSTRAINT fk_snapshot_account FOREIGN KEY (strategy_key) REFERENCES monitor_accounts(account_key)
 ) ENGINE=InnoDB;
