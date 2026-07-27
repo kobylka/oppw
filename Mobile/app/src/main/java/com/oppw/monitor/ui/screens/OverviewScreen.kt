@@ -36,12 +36,11 @@ import com.oppw.monitor.util.age
 import com.oppw.monitor.util.countdown
 import com.oppw.monitor.util.dailyMarketChanges
 import com.oppw.monitor.util.humanProtection
-import com.oppw.monitor.util.leverage
 import com.oppw.monitor.util.liveSourceAge
 import com.oppw.monitor.util.money
+import com.oppw.monitor.util.overviewPositionDisplay
 import com.oppw.monitor.util.optionalPercent
 import com.oppw.monitor.util.optionalPrice
-import com.oppw.monitor.util.percent
 import com.oppw.monitor.util.priceHealth
 import com.oppw.monitor.util.shortDateTime
 import java.time.DayOfWeek
@@ -64,10 +63,7 @@ fun OverviewScreen(state: UiState, onRetry: () -> Unit) {
             val lastTickAge = liveSourceAge(connection.us100AgeSeconds, response.generatedAt, state.nowEpochMs)
             val health = priceHealth(lastTickAge)
             val lastTick = connection.lastTick.ifBlank { position?.priceTime?.takeIf { it.isNotBlank() } ?: connection.lastSync }
-            val effectivePnlPercent = if (account.balance != 0.0) (position?.profit ?: 0.0) / account.balance * 100.0 else 0.0
-            val exposure = position?.exposure?.takeIf { it > 0.0 } ?: if (position != null) account.deposit * 20.0 else 0.0
-            val effectiveLeverage = position?.effectiveLeverage?.takeIf { it > 0.0 }
-                ?: if (account.balance > 0.0) exposure / account.balance else 0.0
+            val positionDisplay = overviewPositionDisplay(account, position)
             val phase = if (weekend) "Weekend" else connection.phase
             val regime = if (weekend) "None" else humanProtection(position?.protectionRegime?.ifBlank { null } ?: connection.regime.ifBlank { "None" })
             val nextAction = if (weekend) "None" else connection.nextAction
@@ -141,20 +137,20 @@ fun OverviewScreen(state: UiState, onRetry: () -> Unit) {
                             Metric("Equity", money(account.equity, account.currency), Modifier.weight(1f))
                         }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-                            Metric("Deposit", money(account.deposit, account.currency), Modifier.weight(1f))
-                            Metric("Current P/L", money(position?.profit ?: 0.0, account.currency), Modifier.weight(1f), pnlColor(position?.profit ?: 0.0))
+                            Metric("Deposit", positionDisplay.deposit, Modifier.weight(1f))
+                            Metric("Current P/L", positionDisplay.currentProfit, Modifier.weight(1f), position?.let { pnlColor(it.profit) } ?: TextSecondary)
                         }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-                            Metric("Current P/L %", percent(position?.profitPercent ?: 0.0), Modifier.weight(1f), pnlColor(position?.profitPercent ?: 0.0))
-                            Metric("P/L % effective", percent(effectivePnlPercent), Modifier.weight(1f), pnlColor(effectivePnlPercent))
+                            Metric("Current P/L %", positionDisplay.currentProfitPercent, Modifier.weight(1f), position?.let { pnlColor(it.profitPercent) } ?: TextSecondary)
+                            Metric("P/L % effective", positionDisplay.effectiveProfitPercent, Modifier.weight(1f), position?.let { pnlColor(it.profit) } ?: TextSecondary)
                         }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-                            Metric("Leverage", position?.strategyLeverage?.let { "${it.toInt()}x" } ?: "—", Modifier.weight(1f))
-                            Metric("P/L % leveraged", percent(position?.leveragedProfitPercent ?: 0.0), Modifier.weight(1f), pnlColor(position?.leveragedProfitPercent ?: 0.0))
+                            Metric("Leverage", positionDisplay.strategyLeverage, Modifier.weight(1f))
+                            Metric("P/L % leveraged", positionDisplay.leveragedProfitPercent, Modifier.weight(1f), position?.let { pnlColor(it.leveragedProfitPercent) } ?: TextSecondary)
                         }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-                            Metric("Effective leverage", leverage(effectiveLeverage), Modifier.weight(1f))
-                            Metric("Exposure", money(exposure, account.currency), Modifier.weight(1f))
+                            Metric("Effective leverage", positionDisplay.effectiveLeverage, Modifier.weight(1f))
+                            Metric("Exposure", positionDisplay.exposure, Modifier.weight(1f))
                         }
                     }
                 }
