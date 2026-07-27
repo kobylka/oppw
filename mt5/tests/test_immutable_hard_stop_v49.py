@@ -31,7 +31,7 @@ WARSAW = ZoneInfo("Europe/Warsaw")
 
 
 class ImmutableHardStopTests(unittest.TestCase):
-    def position(self, *, sl=0.0):
+    def position(self, *, sl=0.0, magic=240024):
         return SimpleNamespace(
             identifier=777,
             ticket=123,
@@ -42,6 +42,7 @@ class ImmutableHardStopTests(unittest.TestCase):
             sl=sl,
             tp=0.0,
             comment="OPPW L10",
+            magic=magic,
             type=0,
         )
 
@@ -61,8 +62,14 @@ class ImmutableHardStopTests(unittest.TestCase):
             base_leverage=8,
             loss_leverage=10,
             leverage_stop_points=50.0,
+            full_week_loss_trigger=-0.025,
+            previous_trade_loss_trigger=-0.002,
+            magic=240024,
         )
-        strategy.log = SimpleNamespace(info=lambda *_args, **_kwargs: None)
+        strategy.log = SimpleNamespace(
+            info=lambda *_args, **_kwargs: None,
+            warning=lambda *_args, **_kwargs: None,
+        )
         strategy.tz = WARSAW
         return strategy
 
@@ -101,25 +108,95 @@ class ImmutableHardStopTests(unittest.TestCase):
             MT5.account_info = lambda: self.fail("account_info must not be read for a locked baseline")
             self.assertEqual(strategy.hard_sl_price(self.position()), 27_550.0)
 
-    def test_manual_position_ignores_stale_leverage_and_publishes_pending_stop_target(self):
+    def test_manual_position_without_comment_uses_loss_leverage_decision_for_stop_target(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             strategy = self.strategy(Path(temp_dir) / "state.json")
             strategy.state.active_position_identifier = 999
             strategy.state.active_position_ticket = 999
             strategy.state.entry_price = 30_000.0
             strategy.state.entry_leverage = 10
-            position = self.position()
+            position = self.position(magic=0)
             position.comment = "manual"
+            strategy.resolved_leverage_inputs = lambda: (-0.03, 0.0, "test market history", "test trade history")
             MT5.symbol_info = lambda _symbol: SimpleNamespace(trade_tick_size=0.25, point=0.25)
 
-            self.assertEqual(strategy.hard_sl_price(position), 27_188.0)
+            leverage, source, reason = strategy.resolve_position_leverage(position)
+            self.assertEqual(leverage, 10)
+            self.assertEqual(source, "strategy_decision")
+            self.assertIn("-3.0000%", reason)
+            self.assertEqual(strategy.hard_sl_price(position), 27_550.0)
             target = strategy.protection_target_payload(
                 position, datetime(2026, 7, 20, 12, 0, tzinfo=WARSAW),
             )
-            self.assertEqual(target["price"], 27_188.0)
+            self.assertEqual(target["price"], 27_550.0)
             self.assertFalse(target["applied"])
             self.assertTrue(target["executorRequired"])
             self.assertEqual(target["source"], "PENDING_EXECUTOR_HARD_STOP")
+
+    def test_wrong_l8_recovery_lock_is_corrected_once_to_authoritative_l10(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            strategy = self.strategy(Path(temp_dir) / "state.json")
+            position = self.position(sl=27_188.0, magic=0)
+            position.comment = "manual"
+            strategy.state.entry_leverage = 8
+            strategy.state.immutable_hard_sl_position_identifier = 777
+            strategy.state.immutable_hard_sl_price = 27_188.0
+            strategy.state.immutable_hard_sl_entry_price = 29_000.0
+            strategy.state.immutable_hard_sl_volume = 0.02
+            strategy.state.immutable_hard_sl_balance = 8_000.0
+            strategy.state.immutable_hard_sl_leverage = 8
+            strategy.state.immutable_hard_sl_source = "POST_FILL"
+            strategy.state.first_protection_confirmed = True
+            MT5.symbol_info = lambda _symbol: SimpleNamespace(trade_tick_size=0.25, point=0.25)
+            MT5.account_info = lambda: SimpleNamespace(balance=9_000.0, currency="PLN")
+            MT5.order_calc_profit = lambda *_args: -4_000.0
+            captured_balances = []
+            strategy.capped_hard_stop = lambda _symbol, _volume, _entry, balance, leverage, _tick: (
+                captured_balances.append((balance, leverage)) or (27_550.0, -4_000.0, True)
+            )
+
+            self.assertTrue(strategy.repair_recovery_hard_stop_leverage(
+                position, datetime(2026, 7, 20, 16, 0, tzinfo=WARSAW), 10,
+            ))
+            self.assertEqual(captured_balances, [(8_000.0, 10)])
+            self.assertEqual(strategy.state.entry_leverage, 10)
+            self.assertEqual(strategy.state.immutable_hard_sl_leverage, 10)
+            self.assertEqual(strategy.state.immutable_hard_sl_price, 27_550.0)
+            self.assertEqual(strategy.state.immutable_hard_sl_source, "RECOVERY_LEVERAGE_CORRECTION")
+            self.assertFalse(strategy.state.first_protection_confirmed)
+            self.assertFalse(strategy.repair_recovery_hard_stop_leverage(
+                position, datetime(2026, 7, 20, 16, 1, tzinfo=WARSAW), 10,
+            ))
+
+    def test_manual_recovery_clears_stale_strategy_execution_link(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            strategy = self.strategy(Path(temp_dir) / "state.json")
+            strategy.state.active_execution_id = "stale-execution"
+            strategy.state.active_decision_id = "stale-decision"
+            strategy.state.active_strategy_spec_id = "stale-spec"
+            strategy.state.active_strategy_spec_hash = "stale-hash"
+            strategy.state.execution_scheduled_at = "2026-07-20T15:30:00+02:00"
+            strategy.state.execution_started_at = "2026-07-20T15:29:59+02:00"
+            strategy.state.execution_fill_confirmed = True
+            strategy.state.execution_position_visible = True
+
+            self.assertTrue(strategy.clear_stale_execution_link_for_manual_position(
+                self.position(magic=0)
+            ))
+            self.assertEqual(strategy.state.active_execution_id, "")
+            self.assertEqual(strategy.state.active_decision_id, "")
+            self.assertEqual(strategy.state.active_strategy_spec_id, "")
+            self.assertEqual(strategy.state.active_strategy_spec_hash, "")
+            self.assertEqual(strategy.state.execution_scheduled_at, "")
+            self.assertEqual(strategy.state.execution_started_at, "")
+            self.assertFalse(strategy.state.execution_fill_confirmed)
+            self.assertFalse(strategy.state.execution_position_visible)
+
+            strategy.state.active_execution_id = "strategy-execution"
+            self.assertFalse(strategy.clear_stale_execution_link_for_manual_position(
+                self.position(magic=240024)
+            ))
+            self.assertEqual(strategy.state.active_execution_id, "strategy-execution")
 
     def test_thursday_tsl_can_only_tighten_immutable_stop(self):
         with tempfile.TemporaryDirectory() as temp_dir:

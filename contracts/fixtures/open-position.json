@@ -181,14 +181,15 @@
         "open": 100.0,
         "high": 112.0,
         "low": 99.0,
-        "close": 111.0
+        "close": 111.0,
+        "source": "MT5_M1_WINDOW"
       },
       "session": {
         "weekCashOpen": "${WEEK_CASH_OPEN}",
         "weekOpenPrice": 100.0,
         "weekMarketOpen": "${WEEK_CASH_OPEN}",
         "weekMarketOpenPrice": 100.0,
-        "weekMarketOpenSource": "MT5_W1"
+        "weekMarketOpenSource": "MT5_M1_WINDOW"
       }
     },
     "metrics": {

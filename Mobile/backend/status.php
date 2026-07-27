@@ -483,10 +483,10 @@ function oppw_apply_authoritative_current_week_bar(
     }
     $weekStartLocal=$weekStart->setTimezone($localTimezone)->setTime(0,0);
     $barDay=$barAt->setTime(0,0);
-    // Some brokers timestamp W1 at Sunday rollover; accept only that rollover
-    // or a timestamp in the requested Monday-starting week.
-    if ($barDay<$weekStartLocal->modify('-1 day')||$barDay>$weekStartLocal->modify('+1 day')) return $stats;
     $weekEnd=$weekStartLocal->modify('+6 days');
+    // The canonical M1 window normally begins on the first session and may
+    // begin later when a current-week manual position is adopted.
+    if ($barDay<$weekStartLocal||$barDay>$weekEnd) return $stats;
     $base=$stats??[
         'week'=>$weekStartLocal->format('d M').' – '.$weekEnd->format('d M Y'),
         'currentPrice'=>$close,'weekOpen'=>null,'weekOpenDate'=>'','weeklyHigh'=>null,'weeklyLow'=>null,
@@ -498,7 +498,7 @@ function oppw_apply_authoritative_current_week_bar(
     return array_merge($base,[
         'currentPrice'=>$close,
         'weekOpen'=>$open,
-        'weekOpenDate'=>$weekStartLocal->format('Y-m-d'),
+        'weekOpenDate'=>$barAt->format('Y-m-d'),
         'weeklyHigh'=>$high,
         'weeklyLow'=>$low,
         'weeklyClose'=>$close,
@@ -506,7 +506,7 @@ function oppw_apply_authoritative_current_week_bar(
         'weeklyLowPercent'=>$relative($low),
         'weeklyClosePercent'=>$relative($close),
         'fridayOpen'=>$open,
-        'weeklySource'=>'MT5_W1',
+        'weeklySource'=>substr(trim((string)($barValue['source']??'MT5_M1_WINDOW')),0,40),
     ]);
 }
 

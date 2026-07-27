@@ -42,6 +42,7 @@ class SessionIndexedTppTests(unittest.TestCase):
             signal_symbol="US100",
             entry_action_lead_seconds=3.0,
             non_entry_action_lead_seconds=3.0,
+            magic=240024,
         )
         strategy.trading_sessions_for_week = lambda _day: sessions
         strategy.session_times = lambda day: SimpleNamespace(
@@ -212,8 +213,54 @@ class SessionIndexedTppTests(unittest.TestCase):
         self.assertIsNotNone(bar)
         self.assertEqual((bar.open, bar.high, bar.low, bar.close), (28_600.0, 28_750.0, 28_550.0, 28_700.0))
         self.assertEqual(session["weekMarketOpenPrice"], 28_600.0)
-        self.assertEqual(session["weekMarketOpenSource"], "MT5_W1")
+        self.assertEqual(session["weekMarketOpenSource"], "MT5_M1_WINDOW")
         self.assertIsNone(session["weekOpenPrice"])
+
+    def test_current_week_window_starts_at_cash_open_without_a_manual_position(self):
+        sessions = [date(2026, 7, day) for day in range(27, 32)]
+        strategy = self.strategy(sessions, sessions[0])
+        strategy.local_to_mt5_bar_query_time = lambda value: value
+        strategy.mt5_bar_timestamp_to_local = lambda value: datetime.fromtimestamp(value, UTC).astimezone(WARSAW)
+        before = datetime(2026, 7, 27, 15, 29, tzinfo=WARSAW)
+        opening = datetime(2026, 7, 27, 15, 30, tzinfo=WARSAW)
+        later = datetime(2026, 7, 27, 15, 31, tzinfo=WARSAW)
+        MODULE.mt5.TIMEFRAME_M1 = 1
+        MODULE.mt5.copy_rates_range = lambda *_args: [
+            {"time": int(before.timestamp()), "open": 90.0, "high": 95.0, "low": 80.0, "close": 91.0},
+            {"time": int(opening.timestamp()), "open": 100.0, "high": 106.0, "low": 99.0, "close": 104.0},
+            {"time": int(later.timestamp()), "open": 104.0, "high": 108.0, "low": 103.0, "close": 107.0},
+        ]
+
+        bar = strategy.current_week_market_bar(
+            "US100", datetime(2026, 7, 27, 15, 31, 30, tzinfo=WARSAW)
+        )
+
+        self.assertIsNotNone(bar)
+        self.assertEqual(bar.local_datetime, opening)
+        self.assertEqual((bar.open, bar.high, bar.low, bar.close), (100.0, 108.0, 99.0, 107.0))
+
+    def test_manual_preopen_position_defines_week_window_and_fill_is_included(self):
+        sessions = [date(2026, 7, day) for day in range(27, 32)]
+        strategy = self.strategy(sessions, sessions[0])
+        strategy.local_to_mt5_bar_query_time = lambda value: value
+        strategy.mt5_bar_timestamp_to_local = lambda value: datetime.fromtimestamp(value, UTC).astimezone(WARSAW)
+        strategy.mt5_timestamp_to_local = strategy.mt5_bar_timestamp_to_local
+        opened = datetime(2026, 7, 27, 14, 45, tzinfo=WARSAW)
+        later = datetime(2026, 7, 27, 14, 46, tzinfo=WARSAW)
+        position = SimpleNamespace(magic=0, time=int(opened.timestamp()), time_msc=0, price_open=97.0)
+        MODULE.mt5.TIMEFRAME_M1 = 1
+        MODULE.mt5.copy_rates_range = lambda *_args: [
+            {"time": int(opened.timestamp()), "open": 100.0, "high": 105.0, "low": 99.0, "close": 101.0},
+            {"time": int(later.timestamp()), "open": 101.0, "high": 103.0, "low": 98.0, "close": 102.0},
+        ]
+
+        bar = strategy.current_week_market_bar(
+            "US100", datetime(2026, 7, 27, 14, 46, 30, tzinfo=WARSAW), position
+        )
+
+        self.assertIsNotNone(bar)
+        self.assertEqual(bar.local_datetime, opened)
+        self.assertEqual((bar.open, bar.high, bar.low, bar.close), (97.0, 105.0, 97.0, 102.0))
 
     def test_stale_state_does_not_arm_manual_position_or_schedule_first_day_checks(self):
         sessions = [date(2026, 7, day) for day in range(27, 32)]

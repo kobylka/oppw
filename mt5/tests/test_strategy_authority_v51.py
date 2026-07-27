@@ -79,6 +79,9 @@ class StrategySpecificationTests(unittest.TestCase):
         self.assertEqual(specification["document"]["instruments"]["signal"], "US100")
         self.assertIn("second actual XNYS session", specification["document"]["thresholds"]["openHighSchedule"])
         self.assertIn("second actual XNYS session", specification["document"]["thresholds"]["breakEvenArmSchedule"])
+        self.assertIn("authoritative leverage decision", specification["document"]["leverageSelection"]["manualPositionRule"])
+        self.assertIn("detach", specification["document"]["leverageSelection"]["manualRecoveryLinkRule"])
+        self.assertIn("recovery leverage correction", specification["document"]["hardStopInvariant"]["allowedTightening"])
         self.assertEqual(specification["document"]["persistenceAuthority"]["events"], "diagnostic stream only")
 
     def test_decision_is_immutably_linked_to_specification(self):

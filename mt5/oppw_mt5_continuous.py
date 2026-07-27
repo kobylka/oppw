@@ -1812,7 +1812,7 @@ class OPPWContinuousStrategy:
             "weekOpenPrice": week_open_price if week_open_price > 0 else None,
             "weekMarketOpen": current_week_bar.local_datetime.isoformat() if current_week_bar is not None else "",
             "weekMarketOpenPrice": current_week_bar.open if current_week_bar is not None else None,
-            "weekMarketOpenSource": "MT5_W1" if current_week_bar is not None else "",
+            "weekMarketOpenSource": "MT5_M1_WINDOW" if current_week_bar is not None else "",
             "weekMonday": monday.isoformat(),
             "previousWeekMonday": (monday - timedelta(days=7)).isoformat(),
             "previousTradingDay": previous_day.isoformat() if previous_day is not None else "",
@@ -1998,6 +1998,62 @@ class OPPWContinuousStrategy:
             return None
         return M1Bar(raw_ts, local_dt, float(row["open"]), float(row["high"]), float(row["low"]), float(row["close"]))
 
+    def current_week_observation_start(self, position, now: datetime) -> tuple[datetime, float]:
+        """Choose the monitoring boundary without relying on a broker W1 rollover."""
+        local_now = now.astimezone(self.tz)
+        sessions = self.trading_sessions_for_week(local_now.date())
+        first_day = sessions[0] if sessions else local_now.date() - timedelta(days=local_now.date().weekday())
+        cash_open = self.session_times(first_day).cash_open
+        if position is None or not self.is_manual_position(position):
+            return cash_open, 0.0
+        raw_timestamp = (
+            float(getattr(position, "time_msc", 0) or 0) / 1000.0
+            if getattr(position, "time_msc", 0)
+            else float(getattr(position, "time", 0) or 0)
+        )
+        if raw_timestamp <= 0:
+            return cash_open, 0.0
+        opened = self.mt5_timestamp_to_local(raw_timestamp)
+        if iso_week_key(opened.date()) != iso_week_key(local_now.date()) or opened > local_now:
+            return cash_open, 0.0
+        return opened, float(getattr(position, "price_open", 0.0) or 0.0)
+
+    def current_week_market_bar(self, symbol: str, now: datetime, position=None) -> Optional[M1Bar]:
+        """Aggregate the current monitoring week from its explicit M1 boundary."""
+        local_now = now.astimezone(self.tz)
+        start, position_open_price = self.current_week_observation_start(position, local_now)
+        if start > local_now:
+            return None
+        try:
+            rates = mt5.copy_rates_range(
+                symbol,
+                mt5.TIMEFRAME_M1,
+                self.local_to_mt5_bar_query_time(start.replace(second=0, microsecond=0)),
+                self.local_to_mt5_bar_query_time(local_now.replace(second=59, microsecond=0)),
+            )
+        except Exception:
+            rates = None
+        rows = [] if rates is None else sorted(rates, key=lambda item: int(item["time"]))
+        eligible = []
+        for row in rows:
+            local_at = self.mt5_bar_timestamp_to_local(int(row["time"]))
+            if start.replace(second=0, microsecond=0) <= local_at <= local_now:
+                eligible.append((row, local_at))
+        if not eligible and position_open_price <= 0:
+            return None
+        first_row = eligible[0][0] if eligible else None
+        last_row = eligible[-1][0] if eligible else None
+        open_price = position_open_price if position_open_price > 0 else float(first_row["open"])
+        highs = [float(row["high"]) for row, _ in eligible]
+        lows = [float(row["low"]) for row, _ in eligible]
+        if position_open_price > 0:
+            highs.append(position_open_price)
+            lows.append(position_open_price)
+        high = max(highs) if highs else open_price
+        low = min(lows) if lows else open_price
+        close = float(last_row["close"]) if last_row is not None else open_price
+        return M1Bar(int(start.timestamp()), start, open_price, high, low, close)
+
     def previous_m1_bar(self, symbol: str, now: datetime) -> Optional[M1Bar]:
         previous_minute = now.astimezone(self.tz).replace(second=0, microsecond=0) - timedelta(minutes=1)
         previous_time = previous_minute.time().replace(tzinfo=None)
@@ -2101,9 +2157,42 @@ class OPPWContinuousStrategy:
         except (ValueError, IndexError):
             return 0
 
-    def infer_position_leverage(self, position) -> int:
+    def resolve_position_leverage(self, position) -> tuple[int, str, str]:
         from_comment = self.parse_leverage_from_comment(getattr(position, "comment", ""))
-        return from_comment if from_comment in {8, 10} else 8
+        if from_comment in {8, 10}:
+            return from_comment, "comment", f"{from_comment}x from MT5 position comment"
+        leverage, reason = self.leverage_decision()
+        return int(leverage), "strategy_decision", reason
+
+    def infer_position_leverage(self, position) -> int:
+        return self.resolve_position_leverage(position)[0]
+
+    def is_manual_position(self, position) -> bool:
+        return int(getattr(position, "magic", 0) or 0) != int(self.cfg.magic)
+
+    def clear_stale_execution_link_for_manual_position(self, position) -> bool:
+        if not self.is_manual_position(position):
+            return False
+        fields_to_clear = (
+            "active_execution_id", "active_decision_id", "active_strategy_spec_id",
+            "active_strategy_spec_hash", "execution_scheduled_at", "execution_started_at",
+        )
+        had_link = any(str(getattr(self.state, field_name, "") or "") for field_name in fields_to_clear)
+        had_link = had_link or bool(self.state.execution_fill_confirmed or self.state.execution_position_visible)
+        if not had_link:
+            return False
+        stale_execution_id = self.state.active_execution_id
+        stale_decision_id = self.state.active_decision_id
+        for field_name in fields_to_clear:
+            setattr(self.state, field_name, "")
+        self.state.execution_fill_confirmed = False
+        self.state.execution_position_visible = False
+        self.log.warning(
+            "EVENT MANUAL_POSITION_STALE_EXECUTION_LINK_CLEARED position_identifier=%s "
+            "stale_execution_id=%s stale_decision_id=%s",
+            self.position_identifier(position), stale_execution_id or "none", stale_decision_id or "none",
+        )
+        return True
 
     def clear_immutable_hard_stop(self) -> None:
         self.state.immutable_hard_sl_position_identifier = 0
@@ -2126,7 +2215,13 @@ class OPPWContinuousStrategy:
             and float(self.state.immutable_hard_sl_price or 0.0) > 0
         )
 
-    def lock_immutable_hard_stop(self, position, now: datetime, source: str) -> bool:
+    def lock_immutable_hard_stop(
+        self,
+        position,
+        now: datetime,
+        source: str,
+        balance_override: Optional[float] = None,
+    ) -> bool:
         """Calculate and persist the definitive hard stop exactly once.
 
         The calculation deliberately occurs only after MT5 exposes the filled
@@ -2145,7 +2240,7 @@ class OPPWContinuousStrategy:
         identifier = self.position_identifier(position)
         entry_price = float(position.price_open)
         volume = float(position.volume)
-        balance = float(getattr(account, "balance", 0.0) or 0.0)
+        balance = float(balance_override or getattr(account, "balance", 0.0) or 0.0)
         leverage = int(
             self.state.entry_leverage
             if self.position_state_matches(position) and self.state.entry_leverage
@@ -2192,6 +2287,37 @@ class OPPWContinuousStrategy:
             identifier, int(position.ticket), source, price, entry_price, volume, balance, leverage, profit,
             self.state.immutable_hard_sl_account_currency or "unknown", account_value_per_price_unit,
             tick_size, bool(cap_applied),
+        )
+        return True
+
+    def recovery_hard_stop_needs_leverage_repair(self, position, leverage: int) -> bool:
+        return (
+            self.immutable_hard_stop_matches(position)
+            and self.is_manual_position(position)
+            and int(self.state.immutable_hard_sl_leverage or 0) in {8, 10}
+            and int(self.state.immutable_hard_sl_leverage) != int(leverage)
+        )
+
+    def repair_recovery_hard_stop_leverage(self, position, now: datetime, leverage: int) -> bool:
+        if not self.recovery_hard_stop_needs_leverage_repair(position, leverage):
+            return False
+        old_leverage = int(self.state.immutable_hard_sl_leverage)
+        old_price = float(self.state.immutable_hard_sl_price)
+        balance_at_fill = float(self.state.immutable_hard_sl_balance or 0.0)
+        self.clear_immutable_hard_stop()
+        self.state.entry_leverage = int(leverage)
+        self.lock_immutable_hard_stop(
+            position,
+            now,
+            "RECOVERY_LEVERAGE_CORRECTION",
+            balance_override=balance_at_fill if balance_at_fill > 0 else None,
+        )
+        self.state.first_protection_confirmed = False
+        self.log.warning(
+            "EVENT RECOVERY_HARD_SL_CORRECTED position_identifier=%s old_leverage=%s new_leverage=%s "
+            "old_price=%.5f new_price=%.5f balance_at_fill=%.2f",
+            self.position_identifier(position), old_leverage, leverage, old_price,
+            float(self.state.immutable_hard_sl_price), balance_at_fill,
         )
         return True
 
@@ -2324,9 +2450,8 @@ class OPPWContinuousStrategy:
 
         position_timestamp = getattr(position, "time_msc", 0) / 1000.0 if getattr(position, "time_msc", 0) else position.time
         opened = self.mt5_timestamp_to_local(position_timestamp)
-        comment_leverage = self.parse_leverage_from_comment(getattr(position, "comment", ""))
-        leverage = self.infer_position_leverage(position)
-        leverage_source = "comment" if comment_leverage in {8, 10} else "default_L8"
+        leverage, leverage_source, leverage_reason = self.resolve_position_leverage(position)
+        self.clear_stale_execution_link_for_manual_position(position)
         signal_open = self.signal_cash_open(self.cfg.signal_symbol, opened.date())
         cash_open = self.session_times(opened.date()).cash_open
         if signal_open is not None and signal_open > 0:
@@ -2377,16 +2502,20 @@ class OPPWContinuousStrategy:
             self.lock_immutable_hard_stop(position, now, lock_source)
             self.infer_active_protection(position, now)
         else:
-            if not self.immutable_hard_stop_matches(position):
+            if self.repair_recovery_hard_stop_leverage(position, now, leverage):
+                self.infer_active_protection(position, now)
+            elif not self.immutable_hard_stop_matches(position):
                 self.lock_immutable_hard_stop(position, now, "RECOVERY_INITIALIZATION")
             if force and self.state.active_protection_position_identifier != identifier:
                 self.infer_active_protection(position, now)
 
         self.state.save(self.cfg.state_file)
         self.log.info(
-            "EVENT POSITION_RECOVERED ticket=%s identifier=%s magic=%s open_time=%s entry=%.5f volume=%s leverage=%s leverage_source=%s signal_open=%.5f signal_open_pending=%s break_even=%s",
+            "EVENT POSITION_RECOVERED ticket=%s identifier=%s magic=%s open_time=%s entry=%.5f volume=%s leverage=%s "
+            "leverage_source=%s leverage_reason=%s signal_open=%.5f signal_open_pending=%s break_even=%s",
             position.ticket, identifier, getattr(position, "magic", 0), opened.isoformat(), float(position.price_open),
-            position.volume, leverage, leverage_source, float(signal_open), signal_pending, recovered_break_even,
+            position.volume, leverage, leverage_source, shlex.quote(leverage_reason),
+            float(signal_open), signal_pending, recovered_break_even,
         )
         actual_price = float(getattr(position, "price_current", 0.0) or position.price_open)
         if self.state.active_execution_id and not self.state.execution_fill_confirmed:
@@ -3079,6 +3208,8 @@ class OPPWContinuousStrategy:
                 "previousFullWeekTrigger": float(self.cfg.full_week_loss_trigger),
                 "previousTradeTrigger": float(self.cfg.previous_trade_loss_trigger),
                 "rule": "loss leverage if either trigger is met; otherwise base leverage",
+                "manualPositionRule": "use valid L8/L10 MT5 comment; otherwise run the authoritative leverage decision",
+                "manualRecoveryLinkRule": "detach a manual position from stale strategy execution and decision identifiers before protection locking",
             },
             "sizing": {
                 "method": "MAX_VOLUME_BY_REQUIRED_BALANCE",
@@ -3126,7 +3257,7 @@ class OPPWContinuousStrategy:
                 "provisional": "attached to BUY using requested ask",
                 "definitive": "calculated once from actual fill, volume, balance, leverage and account conversion",
                 "persistence": "immutable per position",
-                "allowedTightening": ["post-fill correction", "Thursday TSL", "explicit break-even/exit protection", "restoration"],
+                "allowedTightening": ["post-fill correction", "recovery leverage correction", "Thursday TSL", "explicit break-even/exit protection", "restoration"],
                 "wholePointRounding": "round positive SL upward to nearest whole index point",
             },
             "exitHierarchy": [
@@ -3682,7 +3813,7 @@ class OPPWContinuousStrategy:
         else:
             signal_bid, signal_ask, signal_age, signal_time = self.monitor_tick_snapshot(self.cfg.signal_symbol, now)
         signal_price = signal_bid if signal_bid > 0 else signal_ask
-        current_week_bar = self.current_w1_bar(self.cfg.trade_symbol, now)
+        current_week_bar = self.current_week_market_bar(self.cfg.trade_symbol, now, position)
 
         stale = any(age is None or age > self.cfg.maximum_tick_age_seconds for age in (trade_age, signal_age))
         connected = self.connected and account is not None
@@ -3782,6 +3913,7 @@ class OPPWContinuousStrategy:
             "high": current_week_bar.high,
             "low": current_week_bar.low,
             "close": current_week_bar.close,
+            "source": "MT5_M1_WINDOW",
         }
 
         preview = potential_position or self.potential_position_preview(assume_current_position_closed=position is not None)
@@ -5023,10 +5155,11 @@ class OPPWContinuousStrategy:
             "time": current_bar.local_datetime.isoformat(), "open": current_bar.open, "high": current_bar.high,
             "low": current_bar.low, "close": current_bar.close,
         }
-        current_week_bar = self.current_w1_bar(self.cfg.trade_symbol, now)
+        current_week_bar = self.current_week_market_bar(self.cfg.trade_symbol, now, position)
         week_candle = None if current_week_bar is None else {
             "time": current_week_bar.local_datetime.isoformat(), "open": current_week_bar.open,
             "high": current_week_bar.high, "low": current_week_bar.low, "close": current_week_bar.close,
+            "source": "MT5_M1_WINDOW",
         }
         current_price = float(current_bar.close) if current_bar is not None else 0.0
         position_payload = None
