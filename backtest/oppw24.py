@@ -276,7 +276,7 @@ class Sim:
     def sell(self, time, open_price, close_price, open_date, close_date, trade_type, LEVERAGE, debug=False):
                 SL =  (100-50/LEVERAGE)/100
                 
-                granular = int((self.balance/(20/LEVERAGE)/2240))*2240
+                granular = int((self.balance/1.765/2240))*2240
                     
                 #change = round(close_price/open_price-1,4)
                 change = int((close_price/open_price-1)*10000)/10000
@@ -534,7 +534,7 @@ class Sim:
             # Calculate leverage, stop and sizing after the exit.
             # --------------------------------------------------------
 
-            if (self.prev_full_week_change < -0.025 or self.prev_change < -0.007) and self.leverage == 8:
+            if (self.prev_full_week_change < -0.02 or self.prev_change < -0.007) and self.leverage == 8:
                 LEVERAGE = 10
             else:
                 LEVERAGE = self.leverage

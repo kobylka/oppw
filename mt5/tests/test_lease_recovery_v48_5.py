@@ -109,6 +109,7 @@ class BreakEvenScheduleTests(unittest.TestCase):
             cfg=SimpleNamespace(break_even_ratio=0.996),
             final_trading_day=lambda _opened: date(2026, 7, 24),
             is_trading_session_day=lambda day: day.weekday() < 5,
+            break_even_check_eligible=lambda opened, day: day > opened and day.weekday() >= 1,
             session_times=lambda day: SimpleNamespace(
                 close_processing=datetime.combine(day, datetime_time(22, 1), warsaw),
                 weekly_close=datetime.combine(day, datetime_time(21, 59, 57), warsaw),
@@ -177,6 +178,7 @@ class BreakEvenAfterChTests(unittest.TestCase):
             final_trading_day=lambda day: day if final_day else date(2026, 7, 24),
             tpp_for_day=lambda _day: 0.02,
             live_signal_price=lambda: signal_price,
+            break_even_check_eligible=lambda opened, day: day > opened and day.weekday() >= 1,
             close_position_market=lambda _position, reason, _now: closed.append(reason) or True,
             emit_status=lambda reason, _position, _now: emitted.append(reason),
             log=SimpleNamespace(info=lambda *_args, **_kwargs: None),
@@ -192,6 +194,16 @@ class BreakEvenAfterChTests(unittest.TestCase):
         self.assertTrue(state.break_even)
         self.assertEqual(state.last_close_action_date, "2026-07-21")
         self.assertEqual(emitted, ["BREAK_EVEN_ARMED"])
+
+    def test_break_even_cannot_arm_on_first_trading_day_for_preweek_manual_position(self):
+        strategy, state, closed, emitted = self.strategy(99.5)
+        state.open_date = "2026-07-19"
+        now = datetime(2026, 7, 20, 21, 59, 57, tzinfo=ZoneInfo("Europe/Warsaw"))
+        result = MODULE.OPPWContinuousStrategy.maybe_execute_close_action(strategy, object(), now)
+        self.assertFalse(result)
+        self.assertEqual(closed, [])
+        self.assertFalse(state.break_even)
+        self.assertEqual(emitted, [])
 
     def test_ch_has_priority_over_break_even(self):
         strategy, state, closed, emitted = self.strategy(103.0)

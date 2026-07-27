@@ -23,8 +23,8 @@
   "valueAtRisk95Percent": -10.0,
   "expectedShortfall95Percent": -10.0,
   "riskSampleDays": 5,
-  "authorityStages": 9,
-  "authorityFills": 1,
+  "authorityStages": 10,
+  "authorityFills": 2,
   "strategyDecisions": 1,
   "strategySpecifications": 1
 }

@@ -118,6 +118,10 @@ def build_ingest(fixture: dict[str, Any], version: str) -> tuple[dict[str, Any],
     now = datetime.now(timezone.utc)
     base = now - timedelta(seconds=3)
     captured = base + timedelta(seconds=1)
+    local_now = now.astimezone(ZoneInfo("Europe/Warsaw"))
+    current_week_cash_open = (local_now - timedelta(days=local_now.weekday())).replace(
+        hour=15, minute=30, second=0, microsecond=0,
+    )
     decision_id = hashlib.sha256(b"oppw-contract-decision").hexdigest()[:32]
     document = fixture["strategyDocument"]
     document["strategy"]["version"] = version
@@ -130,6 +134,7 @@ def build_ingest(fixture: dict[str, Any], version: str) -> tuple[dict[str, Any],
         "SCHEDULED_AT": iso(base),
         "STARTED_AT": iso(base + timedelta(milliseconds=50)),
         "DECISION_ID": decision_id,
+        "WEEK_CASH_OPEN": current_week_cash_open.isoformat(),
     }
     snapshot = substitute(fixture["snapshot"], replacements)
     decision = fixture["decision"] | {
@@ -350,6 +355,9 @@ return [
 ];
 """, encoding="utf-8")
 
+            php_env = os.environ.copy()
+            php_env["OPPW_MONITOR_CONFIG"] = str(config_path)
+
             pairing_hash = hmac.new(PAIRING_SECRET.encode(), PAIRING_CODE.encode(), hashlib.sha256).hexdigest()
             docker_sql(docker, container, f"""
                 INSERT INTO monitor_pairing_codes(id,code_hash,label,expires_at)
@@ -357,9 +365,21 @@ return [
                 INSERT INTO monitor_pairing_code_accounts(pairing_code_id,account_key,can_control_service) VALUES (1,'DEMO',TRUE);
             """, docker_env)
 
+            run([
+                php, str(root / "Mobile/backend/admin/create_pairing_code.php"),
+                "--accounts=REAL,DEMO", "--minutes=10", "--label=contract-admin",
+                "--can-control-service=1",
+            ], env=php_env, capture_output=True)
+            cli_permission_count = int(docker_sql(
+                docker, container,
+                "SELECT COUNT(*) FROM monitor_pairing_code_accounts "
+                "WHERE pairing_code_id=(SELECT MAX(id) FROM monitor_pairing_codes) AND can_control_service=TRUE",
+                docker_env,
+            ))
+            if cli_permission_count != 2:
+                raise AssertionError("CLI pairing administration did not persist service-control permission")
+
             php_port = free_port()
-            php_env = os.environ.copy()
-            php_env["OPPW_MONITOR_CONFIG"] = str(config_path)
             creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             stdout_handle = php_stdout.open("w", encoding="utf-8")
             stderr_handle = php_stderr.open("w", encoding="utf-8")
@@ -383,6 +403,19 @@ return [
                 "pairingCode": PAIRING_CODE, "deviceName": "Contract validator",
             }, expected=(201,))
             access_token = pair["session"]["accessToken"]
+            paired_device_id = pair["session"]["device"]["id"]
+            run([
+                php, str(root / "Mobile/backend/admin/set_device_accounts.php"),
+                "--device=" + paired_device_id, "--accounts=DEMO", "--can-control-service=1",
+            ], env=php_env, capture_output=True)
+            device_permission = int(docker_sql(
+                docker, container,
+                "SELECT can_control_service FROM monitor_device_accounts WHERE device_id="
+                + sql_text(paired_device_id) + " AND account_key='DEMO'",
+                docker_env,
+            ))
+            if device_permission != 1:
+                raise AssertionError("CLI device-account administration reset service-control permission")
 
             processes = [
                 {"account": account, "role": role, "running": True, "pid": index + 10,
@@ -449,11 +482,12 @@ return [
             ):
                 monday = current_monday + timedelta(weeks=week_offset)
                 friday = (monday + timedelta(days=4)).replace(hour=23, minute=59)
+                phase = "PREMARKET" if week_offset == 0 else "REGULAR"
                 for captured, (open_price, high, low, close) in ((monday, first), (friday, latest)):
                     captured_utc = captured.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
                     market_rows.append(
-                        "('DEMO','{}',{},{},{},{},{},{},{},'REGULAR')".format(
-                            captured_utc, close, close, close + 0.1, open_price, high, low, close,
+                        "('DEMO','{}',{},{},{},{},{},{},{},'{}')".format(
+                            captured_utc, close, close, close + 0.1, open_price, high, low, close, phase,
                         )
                     )
             docker_sql(docker, container, "DELETE FROM strategy_market_points WHERE strategy_key='DEMO';", docker_env)
@@ -514,6 +548,7 @@ return [
             assert_close(snapshot["account"]["balance"], expected["balance"], "status balance")
             assert_close(snapshot["account"]["equity"], expected["equity"], "status equity")
             assert_close(snapshot["account"]["deposit"], expected["deposit"], "status deposit")
+            assert_close(snapshot["position"]["immutableHardStop"]["price"], 27550.0, "status immutable hard stop")
             if snapshot["strategyDecision"]["decisionId"] != identities["decisionId"]:
                 raise AssertionError("status lost the authoritative strategy decision")
             if snapshot["closestCondition"]["name"] != "BE CHECK":
@@ -526,6 +561,12 @@ return [
             ):
                 stats = snapshot["marketStats"][label]
                 daily_open, daily_high, daily_low, daily_close = values
+                expected_week_open = 100.0 if label == "currentWeek" else 200.0
+                assert_close(stats["weekOpen"], expected_week_open, f"{label} week open")
+                assert_close(stats["weeklyHigh"], daily_high, f"{label} weekly high")
+                expected_weekly_low = 99.0 if label == "currentWeek" else 199.0
+                assert_close(stats["weeklyLow"], expected_weekly_low, f"{label} weekly low")
+                assert_close(stats["weeklyClose"], daily_close, f"{label} weekly close")
                 assert_close(stats["dailyOpen"], daily_open, f"{label} daily open")
                 assert_close(stats["dailyHigh"], daily_high, f"{label} daily high")
                 assert_close(stats["dailyLow"], daily_low, f"{label} daily low")
@@ -584,6 +625,20 @@ return [
             assert_close(close_projection[2], -0.4, "separated close pre-leverage return")
             if close_projection[3] != "C":
                 raise AssertionError(f"separated close class: expected C, got {close_projection[3]}")
+
+            # Keep the protective-close projection scenario independent from
+            # the deterministic closed-trade fixture seeded below, while
+            # retaining the ticket used to link execution-quality stages.
+            docker_sql(
+                docker, container,
+                "UPDATE strategy_trades SET closed_at=NULL,close_price=NULL,"
+                "exit_reference_price=NULL,exit_slippage_points=NULL,"
+                "exit_slippage_percent=NULL,profit=NULL,profit_percent=NULL,"
+                "exit_reason='',balance_after=NULL WHERE strategy_key="
+                + sql_text(fixture["accountKey"])
+                + " AND position_ticket=" + str(int(fixture["positionTicket"])),
+                docker_env,
+            )
 
             seed_analytics_fixture(
                 docker, container, fixture["accountKey"], fixture["analytics"],

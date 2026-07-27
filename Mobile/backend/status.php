@@ -380,7 +380,13 @@ function is_regular_market_phase(mixed $phase): bool
 }
 
 
-function build_market_week_stats(array $rows, DateTimeImmutable $weekStart, DateTimeZone $localTimezone): ?array
+function build_market_week_stats(
+    array $rows,
+    DateTimeImmutable $weekStart,
+    DateTimeZone $localTimezone,
+    ?DateTimeImmutable $regularBoundary = null,
+    ?float $authoritativeWeekOpen = null,
+): ?array
 {
     $weekStartKey = $weekStart->format('Y-m-d');
     $currentWeekKey = strategy_week_start(new DateTimeImmutable('now', $localTimezone))->format('Y-m-d');
@@ -393,7 +399,10 @@ function build_market_week_stats(array $rows, DateTimeImmutable $weekStart, Date
         $price = positive_number($row, 'current_price') ?? positive_number($row, 'bid') ?? positive_number($row, 'ask');
         if ($price !== null) $currentPrice = $price;
     }
-    if (!$weekRows) return null;
+    $boundaryLocal = $regularBoundary?->setTimezone($localTimezone);
+    $boundaryMatchesWeek = $boundaryLocal !== null
+        && strategy_week_start($boundaryLocal)->format('Y-m-d') === $weekStartKey;
+    if (!$weekRows && (!$boundaryMatchesWeek || $authoritativeWeekOpen === null || $authoritativeWeekOpen <= 0)) return null;
     usort($weekRows, static fn(array $a,array $b):int=>$a[1]->getTimestamp()<=>$b[1]->getTimestamp());
 
     // The weekly observation window begins at the first regular-session row
@@ -401,11 +410,13 @@ function build_market_week_stats(array $rows, DateTimeImmutable $weekStart, Date
     // weekday candle, including overnight and premarket candles on Tuesday
     // through Friday. This excludes only the first trading day's premarket
     // data instead of incorrectly excluding premarket data every day.
-    $firstRegularTimestamp = null;
-    foreach ($weekRows as [$row, $local]) {
-        if (is_regular_market_phase($row['phase'] ?? '')) {
-            $firstRegularTimestamp = $local->getTimestamp();
-            break;
+    $firstRegularTimestamp = $boundaryMatchesWeek ? $boundaryLocal->getTimestamp() : null;
+    if ($firstRegularTimestamp === null) {
+        foreach ($weekRows as [$row, $local]) {
+            if (is_regular_market_phase($row['phase'] ?? '')) {
+                $firstRegularTimestamp = $local->getTimestamp();
+                break;
+            }
         }
     }
     $eligibleRows = [];
@@ -424,8 +435,17 @@ function build_market_week_stats(array $rows, DateTimeImmutable $weekStart, Date
     }
     $weekEnd = $weekStart->modify('+6 days');
     $result = ['week'=>$weekStart->format('d M').' – '.$weekEnd->format('d M Y'),'currentPrice'=>$currentPrice,'weekOpen'=>null,'weekOpenDate'=>'','weeklyHigh'=>null,'weeklyLow'=>null,'weeklyClose'=>null,'weeklyHighPercent'=>null,'weeklyLowPercent'=>null,'weeklyClosePercent'=>null,'dailyDate'=>'','dailyOpen'=>null,'dailyHigh'=>null,'dailyLow'=>null,'dailyClose'=>null,'dailyHighPercent'=>null,'dailyLowPercent'=>null,'dailyClosePercent'=>null,'fridayOpen'=>null,'dailyLowDate'=>''];
-    if (!$eligibleRows) return $result;
+    if (!$eligibleRows && (!$boundaryMatchesWeek || $authoritativeWeekOpen === null || $authoritativeWeekOpen <= 0)) return $result;
     $days=[];
+    if ($boundaryMatchesWeek && $authoritativeWeekOpen !== null && $authoritativeWeekOpen > 0) {
+        $boundaryDay = $boundaryLocal->format('Y-m-d');
+        $days[$boundaryDay] = [
+            'open'=>$authoritativeWeekOpen,
+            'high'=>$authoritativeWeekOpen,
+            'low'=>$authoritativeWeekOpen,
+            'close'=>$authoritativeWeekOpen,
+        ];
+    }
     foreach ($eligibleRows as [$row,$local]) {
         $day=$local->format('Y-m-d'); $price=positive_number($row,'current_price')??positive_number($row,'bid')??positive_number($row,'ask');
         $open=market_point_price($row,'m1_open',$price); $high=market_point_price($row,'m1_high',$price); $low=market_point_price($row,'m1_low',$price); $close=market_point_price($row,'m1_close',$price);
@@ -443,6 +463,51 @@ function build_market_week_stats(array $rows, DateTimeImmutable $weekStart, Date
     $dailyOpen=is_numeric($last['open']??null)?(float)$last['open']:null;
     $dailyRelative=static fn(?float $v):?float=>$v!==null&&$dailyOpen!==null&&$dailyOpen>0?($v/$dailyOpen-1.0)*100.0:null;
     return array_merge($result,['weekOpen'=>(float)$weekOpen,'weekOpenDate'=>$firstKey,'weeklyHigh'=>$weeklyHigh,'weeklyLow'=>$weeklyLow,'weeklyClose'=>$weeklyClose,'weeklyHighPercent'=>$weeklyRelative($weeklyHigh),'weeklyLowPercent'=>$weeklyRelative($weeklyLow),'weeklyClosePercent'=>$weeklyRelative($weeklyClose),'dailyDate'=>$lastKey,'dailyOpen'=>$dailyOpen,'dailyHigh'=>$last['high'],'dailyLow'=>$last['low'],'dailyClose'=>$last['close'],'dailyHighPercent'=>$dailyRelative($last['high']),'dailyLowPercent'=>$dailyRelative($last['low']),'dailyClosePercent'=>$dailyRelative($last['close']),'fridayOpen'=>(float)$weekOpen,'dailyLowDate'=>$lastKey]);
+}
+
+function oppw_apply_authoritative_current_week_bar(
+    ?array $stats,
+    mixed $barValue,
+    DateTimeImmutable $weekStart,
+    DateTimeZone $localTimezone,
+): ?array {
+    if (!is_array($barValue)) return $stats;
+    $open=positive_number($barValue,'open'); $high=positive_number($barValue,'high');
+    $low=positive_number($barValue,'low'); $close=positive_number($barValue,'close');
+    $time=trim((string)($barValue['time']??''));
+    if ($open===null||$high===null||$low===null||$close===null||$time==='') return $stats;
+    try {
+        $barAt=(new DateTimeImmutable($time))->setTimezone($localTimezone);
+    } catch (Throwable) {
+        return $stats;
+    }
+    $weekStartLocal=$weekStart->setTimezone($localTimezone)->setTime(0,0);
+    $barDay=$barAt->setTime(0,0);
+    // Some brokers timestamp W1 at Sunday rollover; accept only that rollover
+    // or a timestamp in the requested Monday-starting week.
+    if ($barDay<$weekStartLocal->modify('-1 day')||$barDay>$weekStartLocal->modify('+1 day')) return $stats;
+    $weekEnd=$weekStartLocal->modify('+6 days');
+    $base=$stats??[
+        'week'=>$weekStartLocal->format('d M').' – '.$weekEnd->format('d M Y'),
+        'currentPrice'=>$close,'weekOpen'=>null,'weekOpenDate'=>'','weeklyHigh'=>null,'weeklyLow'=>null,
+        'weeklyClose'=>null,'weeklyHighPercent'=>null,'weeklyLowPercent'=>null,'weeklyClosePercent'=>null,
+        'dailyDate'=>'','dailyOpen'=>null,'dailyHigh'=>null,'dailyLow'=>null,'dailyClose'=>null,
+        'dailyHighPercent'=>null,'dailyLowPercent'=>null,'dailyClosePercent'=>null,'fridayOpen'=>null,'dailyLowDate'=>'',
+    ];
+    $relative=static fn(float $value):float=>($value/$open-1.0)*100.0;
+    return array_merge($base,[
+        'currentPrice'=>$close,
+        'weekOpen'=>$open,
+        'weekOpenDate'=>$weekStartLocal->format('Y-m-d'),
+        'weeklyHigh'=>$high,
+        'weeklyLow'=>$low,
+        'weeklyClose'=>$close,
+        'weeklyHighPercent'=>$relative($high),
+        'weeklyLowPercent'=>$relative($low),
+        'weeklyClosePercent'=>$relative($close),
+        'fridayOpen'=>$open,
+        'weeklySource'=>'MT5_W1',
+    ]);
 }
 
 function oppw_restore_market_history_cards(array $marketStats): array
@@ -467,8 +532,28 @@ $marketStmt->execute([$accountKey]);
 $marketRows = $marketStmt->fetchAll();
 $currentWeekStart = strategy_week_start($localNow);
 $previousWeekStart = $currentWeekStart->modify('-7 days');
+$marketSession = is_array($snapshot['market']['session'] ?? null) ? $snapshot['market']['session'] : [];
+$currentWeekBoundary = null;
+try {
+    $weekCashOpen = trim((string)($marketSession['weekCashOpen'] ?? ''));
+    if ($weekCashOpen !== '') $currentWeekBoundary = new DateTimeImmutable($weekCashOpen);
+} catch (Throwable) {
+    $currentWeekBoundary = null;
+}
+$currentWeekOpen = is_numeric($marketSession['weekOpenPrice'] ?? null)
+    ? (float)$marketSession['weekOpenPrice']
+    : null;
+$currentWeekStats = build_market_week_stats(
+    $marketRows, $currentWeekStart, $warsaw, $currentWeekBoundary, $currentWeekOpen,
+);
+$currentWeekStats = oppw_apply_authoritative_current_week_bar(
+    $currentWeekStats,
+    $snapshot['market']['currentW1'] ?? null,
+    $currentWeekStart,
+    $warsaw,
+);
 $snapshot['marketStats'] = oppw_restore_market_history_cards([
-    'currentWeek' => build_market_week_stats($marketRows, $currentWeekStart, $warsaw),
+    'currentWeek' => $currentWeekStats,
     'previousWeek' => build_market_week_stats($marketRows, $previousWeekStart, $warsaw),
 ]);
 $oppwEquityPeriods = oppw_selected_equity_periods($db, $accountKey, $snapshot, $localNow, $warsaw);

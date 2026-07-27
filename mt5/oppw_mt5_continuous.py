@@ -4,7 +4,8 @@ Continuous MetaTrader 5 implementation of the OPPW strategy.
 Key execution rules
 -------------------
 * BUY is sent at its separately configurable entry-action lead time for a valid new-week entry.
-* OH is always evaluated exactly once at cash open minus three seconds, independent of any BUY test offset.
+* OH is evaluated exactly once at cash open minus three seconds from the second actual trading session onward;
+  it is never evaluated on the first trading session of the week.
 * TPP levels follow actual XNYS trading-session order within the week. If Tuesday is the first session, it receives
   Monday's TPP, Wednesday receives Tuesday's TPP, and the remaining sessions advance accordingly.
 * On the second trading session after entry, PRE H ramps linearly from the first-session TPP at midnight
@@ -1492,6 +1493,7 @@ class OPPWContinuousStrategy:
         self.last_signal_open_pending_log_monotonic = 0.0
         self.tsl_install_deferred = False
         self._session_times_cache: dict[date, SessionTimes] = {}
+        self._week_open_price_cache: dict[str, float] = {}
         self.last_monitor_publish_monotonic = 0.0
         self.last_monitor_minute_key = ""
         self.last_strategy_decision_signature: Optional[tuple[Any, ...]] = None
@@ -1736,7 +1738,7 @@ class OPPWContinuousStrategy:
         """Return the PRE H ramp on the second trading session after entry."""
         current_day = at.astimezone(self.tz).date()
         sessions = self.trading_sessions_for_week(current_day)
-        opened = parse_date(self.state.open_date)
+        opened = self.position_open_date(position)
         if len(sessions) < 2 or opened != sessions[0] or current_day != sessions[1]:
             return None
 
@@ -1756,17 +1758,61 @@ class OPPWContinuousStrategy:
     def is_trading_session_day(self, day: date) -> bool:
         return len(self.calendar.sessions_in_range(day.isoformat(), day.isoformat())) > 0
 
-    def market_session_payload(self, now: datetime) -> dict[str, Any]:
+    def trading_session_ordinal(self, day: date) -> Optional[int]:
+        sessions = self.trading_sessions_for_week(day)
+        try:
+            return sessions.index(day)
+        except ValueError:
+            return None
+
+    def oh_check_eligible(self, day: date) -> bool:
+        ordinal = self.trading_session_ordinal(day)
+        return ordinal is not None and ordinal >= 1
+
+    def break_even_check_eligible(self, opened: date, day: date) -> bool:
+        ordinal = self.trading_session_ordinal(day)
+        return day > opened and ordinal is not None and ordinal >= 1
+
+    def week_open_reference(self, day: date, now: datetime) -> tuple[str, float]:
+        sessions = self.trading_sessions_for_week(day)
+        if not sessions:
+            return "", 0.0
+        first_day = sessions[0]
+        cash_open = self.session_times(first_day).cash_open
+        if now < cash_open:
+            return cash_open.isoformat(), 0.0
+
+        week_key = iso_week_key(first_day)
+        cache = getattr(self, "_week_open_price_cache", {})
+        cached = float(cache.get(week_key, 0.0) or 0.0)
+        if cached > 0:
+            return cash_open.isoformat(), cached
+
+        cash_open_time = cash_open.time().replace(second=0, microsecond=0)
+        bar = self.m1_bar_at(self.cfg.trade_symbol, first_day, cash_open_time)
+        price = float(bar.open) if bar is not None and bar.open > 0 else 0.0
+        if price > 0:
+            cache[week_key] = price
+            self._week_open_price_cache = cache
+        return cash_open.isoformat(), price
+
+    def market_session_payload(self, now: datetime, current_week_bar: Optional[M1Bar] = None) -> dict[str, Any]:
         local_day = now.date()
         monday = local_day - timedelta(days=local_day.weekday())
         is_trading_day = self.is_trading_session_day(local_day)
         previous_day = self.previous_trading_date(local_day)
         session = self.session_times(local_day) if is_trading_day else None
+        week_cash_open, week_open_price = self.week_open_reference(local_day, now)
         return {
             "isTradingDay": is_trading_day,
             "regularSessionStarted": bool(session is not None and now >= session.cash_open),
             "cashOpen": session.cash_open.isoformat() if session is not None else "",
             "cashClose": session.close_bar_open.isoformat() if session is not None else "",
+            "weekCashOpen": week_cash_open,
+            "weekOpenPrice": week_open_price if week_open_price > 0 else None,
+            "weekMarketOpen": current_week_bar.local_datetime.isoformat() if current_week_bar is not None else "",
+            "weekMarketOpenPrice": current_week_bar.open if current_week_bar is not None else None,
+            "weekMarketOpenSource": "MT5_W1" if current_week_bar is not None else "",
             "weekMonday": monday.isoformat(),
             "previousWeekMonday": (monday - timedelta(days=7)).isoformat(),
             "previousTradingDay": previous_day.isoformat() if previous_day is not None else "",
@@ -1775,10 +1821,25 @@ class OPPWContinuousStrategy:
         }
 
     def break_even_check_payload(self, position, now: datetime) -> dict[str, Any]:
-        entry = float(getattr(position, "price_open", 0.0) or self.state.entry_price or 0.0)
-        signal_reference = float(self.state.entry_signal_daily_open or 0.0)
+        state_matches = OPPWContinuousStrategy.position_state_matches(self, position)
+        entry = float(
+            getattr(position, "price_open", 0.0)
+            or (self.state.entry_price if state_matches else 0.0)
+            or 0.0
+        )
+        opened = OPPWContinuousStrategy.position_open_date(self, position)
+        signal_reference = float(self.state.entry_signal_daily_open or 0.0) if state_matches else 0.0
+        signal_pending = bool(self.state.entry_signal_open_pending) if state_matches else True
+        if (
+            not state_matches
+            and opened is not None
+            and now >= self.session_times(opened).cash_open
+            and callable(getattr(self, "signal_cash_open", None))
+        ):
+            signal_reference = float(self.signal_cash_open(self.cfg.signal_symbol, opened) or 0.0)
+            signal_pending = signal_reference <= 0
         threshold = signal_reference * float(self.cfg.break_even_ratio) if signal_reference > 0 else 0.0
-        if self.state.break_even:
+        if state_matches and self.state.break_even:
             return {
                 "status": "ARMED",
                 "nextCheckAt": "",
@@ -1787,11 +1848,6 @@ class OPPWContinuousStrategy:
                 "condition": "Break-even protection is armed; live exit checks are active.",
             }
 
-        opened = parse_date(self.state.open_date)
-        if opened is None:
-            opened_timestamp = float(getattr(position, "time", 0.0) or 0.0)
-            if opened_timestamp > 0:
-                opened = self.mt5_timestamp_to_local(opened_timestamp).date()
         if opened is None:
             return {
                 "status": "UNAVAILABLE",
@@ -1801,49 +1857,49 @@ class OPPWContinuousStrategy:
                 "condition": "Position opening date is unavailable.",
             }
 
-        if self.state.entry_signal_open_pending or signal_reference <= 0:
-            capture_at = self.session_times(opened).cash_open
-            return {
-                "status": "WAITING_FOR_SIGNAL_OPEN" if now < capture_at else "CAPTURE_RETRY",
-                "nextCheckAt": capture_at.isoformat(),
-                "signalReference": 0.0,
-                "threshold": 0.0,
-                "condition": (
-                    "Waiting for the actual cash-session signal open; the early BUY fill price is never used as a substitute."
-                    if now < capture_at
-                    else "Cash session has opened; retrying capture of the exact cash-open signal bar."
-                ),
-            }
-
         final_day = self.final_trading_day(opened)
+        next_check_at: Optional[datetime] = None
         for offset in range(15):
             candidate = now.date() + timedelta(days=offset)
-            if candidate <= opened:
-                continue
             if final_day is not None and candidate >= final_day:
                 break
-            if not self.is_trading_session_day(candidate):
+            if not self.break_even_check_eligible(opened, candidate):
                 continue
-            if (
+            if state_matches and (
                 self.state.last_close_action_date == candidate.isoformat()
                 or self.state.last_close_processed_date == candidate.isoformat()
             ):
                 continue
-            check_at = self.session_times(candidate).weekly_close
+            next_check_at = self.session_times(candidate).weekly_close
+            break
+
+        if next_check_at is None:
             return {
-                "status": "DUE" if check_at <= now else "SCHEDULED",
-                "nextCheckAt": check_at.isoformat(),
+                "status": "NO_FURTHER_CHECK",
+                "nextCheckAt": "",
                 "signalReference": signal_reference,
                 "threshold": threshold,
-                "condition": "Runs immediately after CH and arms when the live signal price is below the threshold.",
+                "condition": "No further break-even arming check is scheduled before weekly TO.",
+            }
+
+        if signal_pending or signal_reference <= 0:
+            return {
+                "status": "DUE_SIGNAL_PENDING" if next_check_at <= now else "SCHEDULED_SIGNAL_PENDING",
+                "nextCheckAt": next_check_at.isoformat(),
+                "signalReference": 0.0,
+                "threshold": 0.0,
+                "condition": (
+                    "The exact entry-session cash-open signal reference is still pending; "
+                    "the first arming evaluation remains at the second trading-session day close."
+                ),
             }
 
         return {
-            "status": "NO_FURTHER_CHECK",
-            "nextCheckAt": "",
+            "status": "DUE" if next_check_at <= now else "SCHEDULED",
+            "nextCheckAt": next_check_at.isoformat(),
             "signalReference": signal_reference,
             "threshold": threshold,
-            "condition": "No further break-even arming check is scheduled before weekly TO.",
+            "condition": "Runs immediately after CH and arms when the live signal price is below the threshold.",
         }
 
     def final_trading_day(self, day: date) -> Optional[date]:
@@ -1857,9 +1913,10 @@ class OPPWContinuousStrategy:
             return
         sessions = self.trading_sessions_for_week(plan_day)
         first_day = sessions[0] if sessions else None
+        first_oh_day = sessions[1] if len(sessions) > 1 else None
         final_day = sessions[-1] if sessions else None
         buy_action = self.session_times(first_day).buy_action.strftime("%Y-%m-%d %H:%M:%S %Z") if first_day else "none"
-        open_action = self.session_times(first_day).open_action.strftime("%Y-%m-%d %H:%M:%S %Z") if first_day else "none"
+        open_action = self.session_times(first_oh_day).open_action.strftime("%Y-%m-%d %H:%M:%S %Z") if first_oh_day else "none"
         weekly_to = self.session_times(final_day).weekly_close.strftime("%Y-%m-%d %H:%M:%S %Z") if final_day else "none"
         self.last_week_plan_key = key
         self.log.info(
@@ -1922,6 +1979,25 @@ class OPPWContinuousStrategy:
         local_dt = self.mt5_bar_timestamp_to_local(raw_ts)
         return M1Bar(raw_ts, local_dt, float(row["open"]), float(row["high"]), float(row["low"]), float(row["close"]))
 
+    def current_w1_bar(self, symbol: str, now: datetime) -> Optional[M1Bar]:
+        """Return MT5's live broker-week candle for the current ISO week."""
+        timeframe = getattr(mt5, "TIMEFRAME_W1", None)
+        if timeframe is None:
+            return None
+        try:
+            rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, 3)
+        except Exception:
+            return None
+        if rates is None or len(rates) == 0:
+            return None
+        row = max(rates, key=lambda item: int(item["time"]))
+        raw_ts = int(row["time"])
+        local_dt = self.mt5_bar_timestamp_to_local(raw_ts)
+        monday = now.astimezone(self.tz).date() - timedelta(days=now.astimezone(self.tz).date().weekday())
+        if not (monday - timedelta(days=1) <= local_dt.date() <= monday + timedelta(days=1)):
+            return None
+        return M1Bar(raw_ts, local_dt, float(row["open"]), float(row["high"]), float(row["low"]), float(row["close"]))
+
     def previous_m1_bar(self, symbol: str, now: datetime) -> Optional[M1Bar]:
         previous_minute = now.astimezone(self.tz).replace(second=0, microsecond=0) - timedelta(minutes=1)
         previous_time = previous_minute.time().replace(tzinfo=None)
@@ -1954,7 +2030,43 @@ class OPPWContinuousStrategy:
 
     @staticmethod
     def position_identifier(position) -> int:
-        return int(getattr(position, "identifier", 0) or position.ticket)
+        return int(getattr(position, "identifier", 0) or getattr(position, "ticket", 0) or 0)
+
+    def position_state_matches(self, position) -> bool:
+        """Whether persisted position-scoped state belongs to this MT5 position."""
+        state_identifier = getattr(self.state, "active_position_identifier", None)
+        if state_identifier is None:
+            # Compatibility for isolated calculations/tests with partial state.
+            return True
+        identifier = OPPWContinuousStrategy.position_identifier(position)
+        if identifier <= 0:
+            return bool(
+                float(getattr(self.state, "entry_price", 0.0) or 0.0) > 0
+                or parse_date(getattr(self.state, "open_date", "")) is not None
+            )
+        return (
+            identifier > 0
+            and int(state_identifier or 0) == identifier
+            and float(getattr(self.state, "entry_price", 0.0) or 0.0) > 0
+        )
+
+    def position_open_date(self, position) -> Optional[date]:
+        if position is None:
+            return parse_date(getattr(self.state, "open_date", ""))
+        if OPPWContinuousStrategy.position_identifier(position) <= 0:
+            persisted = parse_date(getattr(self.state, "open_date", ""))
+            if persisted is not None:
+                return persisted
+        if OPPWContinuousStrategy.position_state_matches(self, position):
+            persisted = parse_date(getattr(self.state, "open_date", ""))
+            if persisted is not None:
+                return persisted
+        timestamp = (
+            float(getattr(position, "time_msc", 0) or 0) / 1000.0
+            if getattr(position, "time_msc", 0)
+            else float(getattr(position, "time", 0.0) or 0.0)
+        )
+        return self.mt5_timestamp_to_local(timestamp).date() if timestamp > 0 else None
 
     def managed_position(self):
         positions = mt5.positions_get(symbol=self.cfg.trade_symbol)
@@ -2034,7 +2146,11 @@ class OPPWContinuousStrategy:
         entry_price = float(position.price_open)
         volume = float(position.volume)
         balance = float(getattr(account, "balance", 0.0) or 0.0)
-        leverage = int(self.state.entry_leverage or self.infer_position_leverage(position))
+        leverage = int(
+            self.state.entry_leverage
+            if self.position_state_matches(position) and self.state.entry_leverage
+            else self.infer_position_leverage(position)
+        )
         tick_size = float(getattr(info, "trade_tick_size", 0.0) or getattr(info, "point", 0.0) or 0.01)
         if identifier <= 0 or entry_price <= 0 or volume <= 0 or balance <= 0:
             raise RuntimeError(
@@ -2104,8 +2220,14 @@ class OPPWContinuousStrategy:
             return max(hard_sl, entry * self.cfg.tsl_ratio), "TSL"
 
         # Never weaken a surviving prior-week TSL before the position is closed.
-        opened = parse_date(self.state.open_date)
-        if opened is not None and iso_week_key(opened) != iso_week_key(now.date()) and self.state.active_sl_reason == "TSL":
+        state_matches = self.position_state_matches(position)
+        opened = self.position_open_date(position)
+        if (
+            state_matches
+            and opened is not None
+            and iso_week_key(opened) != iso_week_key(now.date())
+            and self.state.active_sl_reason == "TSL"
+        ):
             return max(hard_sl, entry * self.cfg.tsl_ratio), "TSL"
 
         return hard_sl, "SL"
@@ -2186,6 +2308,8 @@ class OPPWContinuousStrategy:
         sessions = self.calendar.sessions_in_range((opened + timedelta(days=1)).isoformat(), final_day.isoformat())
         for session in sessions:
             session_day = session.date()
+            if not self.break_even_check_eligible(opened, session_day):
+                continue
             close_time = self.session_times(session_day).close_bar_open.time().replace(second=0, microsecond=0)
             bar = self.m1_bar_at(self.cfg.signal_symbol, session_day, close_time)
             if bar is not None and bar.close < signal_reference * self.cfg.break_even_ratio:
@@ -2403,16 +2527,24 @@ class OPPWContinuousStrategy:
             return "REGULAR"
         return "AFTER_CLOSE"
 
-    def protection_regime(self, now: datetime) -> str:
-        if self.state.exit_latched_reason:
+    def protection_regime(self, now: datetime, position=None) -> str:
+        state_matches = position is None or self.position_state_matches(position)
+        if state_matches and self.state.exit_latched_reason:
             return f"Closing position: {self.state.exit_latched_reason}"
-        if now.weekday() in (3, 4, 5, 6) or self.state.active_sl_reason == "TSL":
-            return "Tight stop loss (0.4%)" + (" + break-even exit" if self.state.break_even else "")
-        return "Hard stop loss + break-even exit" if self.state.break_even else "Hard stop loss"
+        break_even = bool(self.state.break_even) if state_matches else False
+        active_sl_reason = self.state.active_sl_reason if state_matches else ""
+        if now.weekday() in (3, 4, 5, 6) or active_sl_reason == "TSL":
+            return "Tight stop loss (0.4%)" + (" + break-even exit" if break_even else "")
+        return "Hard stop loss + break-even exit" if break_even else "Hard stop loss"
 
-    def oh_check_pending(self, now: datetime) -> bool:
+    def oh_check_pending(self, now: datetime, position=None) -> bool:
         session = self.session_times(now.date())
-        return self.state.last_open_action_date != now.date().isoformat() and now < session.cash_open
+        state_matches = position is None or self.position_state_matches(position)
+        return (
+            self.oh_check_eligible(now.date())
+            and (not state_matches or self.state.last_open_action_date != now.date().isoformat())
+            and now < session.cash_open
+        )
 
     def weekly_exit_status(self, position, now: datetime) -> tuple[bool, str, Optional[date]]:
         final_day = self.final_trading_day(now.date())
@@ -2443,18 +2575,18 @@ class OPPWContinuousStrategy:
                 return
             candidates.append((name, price))
 
-        leverage = self.state.entry_leverage or self.choose_leverage()
         add("SL", self.hard_sl_price(position))
         weekday_price, weekday_reason = self.weekday_sl_target(position, now)
         if weekday_reason != "SL":
             add(weekday_reason, ceil_step(ceil_whole_sl(weekday_price), tick_size))
+        state_matches = self.position_state_matches(position)
         if float(position.sl) > 0:
-            add(self.state.active_sl_reason or "BROKER_SL", float(position.sl))
-        if self.state.break_even:
+            add((self.state.active_sl_reason if state_matches else "") or "BROKER_SL", float(position.sl))
+        if state_matches and self.state.break_even:
             add(self.state.active_tp_reason or "BH", ceil_step(entry * self.cfg.break_even_ratio, tick_size))
         if float(position.tp) > 0:
-            add(self.state.active_tp_reason or "BROKER_TP", float(position.tp))
-        if self.oh_check_pending(now):
+            add((self.state.active_tp_reason if state_matches else "") or "BROKER_TP", float(position.tp))
+        if self.oh_check_pending(now, position):
             add("OH", ceil_step(entry * (1.0 + self.tpp_for_day(now.date())), tick_size))
         premarket_tpp = self.premarket_high_tpp(position, now)
         if premarket_tpp is not None and now < self.session_times(now.date()).cash_open:
@@ -2967,10 +3099,12 @@ class OPPWContinuousStrategy:
                 "holidayShiftRule": "TPP index follows actual XNYS session ordinal, not weekday name",
                 "preHighRamp": "on second actual session after entry, linear first-to-second TPP from premarket start to cash open",
                 "preHighFormula": "execution M1 open > position fill price * (1 + active ramp TPP) causes market SELL",
-                "openHighFormula": "live execution bid at open check > position fill price * (1 + session-indexed TPP) causes market SELL",
+                "openHighSchedule": "cash-open-minus-lead checks begin on the second actual XNYS session; the first session is never checked",
+                "openHighFormula": "from the second session onward, live execution bid at open check > position fill price * (1 + session-indexed TPP) causes market SELL",
                 "closeHighFormula": "live signal price at close check > entry-session signal cash open * (1 + session-indexed TPP) causes market SELL",
                 "breakEvenRatio": float(self.cfg.break_even_ratio),
-                "breakEvenArmFormula": "after false CH, live signal price < entry-session signal cash open * breakEvenRatio",
+                "breakEvenArmSchedule": "no earlier than the second actual XNYS session day close and never on the position opening day",
+                "breakEvenArmFormula": "after false CH on an eligible session, live signal price < entry-session signal cash open * breakEvenRatio",
                 "breakEvenExitFormula": "BEPRE/BEO/BH compare execution price with position fill price * breakEvenRatio and use market SELL",
                 "thursdayTslDistance": float(self.cfg.tsl_stop),
                 "thursdayTslFormula": "position fill price * (1 - thursdayTslDistance), active from Thursday date change",
@@ -3134,7 +3268,7 @@ class OPPWContinuousStrategy:
         currency = str(getattr(account, "currency", "")).strip() if account is not None else ""
         currency_suffix = f" {currency}" if currency else ""
         phase = self.phase(now)
-        regime = self.protection_regime(now) if position is not None else "None"
+        regime = self.protection_regime(now, position) if position is not None else "None"
 
         if position is None:
             preview = self.potential_position_preview()
@@ -3189,7 +3323,11 @@ class OPPWContinuousStrategy:
 
         entry = float(position.price_open)
         raw_pnl_pct = bid / entry - 1.0 if bid > 0 and entry > 0 else 0.0
-        leverage = self.state.entry_leverage or self.choose_leverage()
+        leverage = (
+            self.state.entry_leverage
+            if self.position_state_matches(position) and self.state.entry_leverage
+            else self.infer_position_leverage(position)
+        )
         leveraged_pnl_pct = raw_pnl_pct * leverage
         current_pnl = float(getattr(position, "profit", 0.0)) + float(getattr(position, "swap", 0.0))
         position_timestamp = getattr(position, "time_msc", 0) / 1000.0 if getattr(position, "time_msc", 0) else position.time
@@ -3306,7 +3444,7 @@ class OPPWContinuousStrategy:
         return (
             int(position.ticket), round(float(position.volume), 8), round(float(position.sl), 5), round(float(position.tp), 5),
             self.state.break_even, self.state.exit_latched_reason, self.state.active_sl_reason, self.state.active_tp_reason,
-            self.protection_regime(now), self.account_funding_signature(mt5.account_info()),
+            self.protection_regime(now, position), self.account_funding_signature(mt5.account_info()),
         )
 
     # ----- Mobile monitoring --------------------------------------------------
@@ -3331,9 +3469,14 @@ class OPPWContinuousStrategy:
         session = self.session_times(now.date())
         day_key = now.date().isoformat()
         if position is not None:
-            if now < session.open_action and self.state.last_open_action_date != day_key:
+            state_matches = self.position_state_matches(position)
+            if (
+                self.oh_check_eligible(now.date())
+                and now < session.open_action
+                and (not state_matches or self.state.last_open_action_date != day_key)
+            ):
                 return "OH", session.open_action.isoformat()
-            if now < session.weekly_close and self.state.last_close_action_date != day_key:
+            if now < session.weekly_close and (not state_matches or self.state.last_close_action_date != day_key):
                 name = "CH / TO" if self.final_trading_day(now.date()) == now.date() else "CH"
                 return name, session.weekly_close.isoformat()
             if now < session.close_processing:
@@ -3344,7 +3487,8 @@ class OPPWContinuousStrategy:
             sessions = self.calendar.sessions_in_range(now.date().isoformat(), end.isoformat())
             for calendar_session in sessions:
                 session_day = calendar_session.date()
-                candidate = self.session_times(session_day).buy_action
+                candidate_session = self.session_times(session_day)
+                candidate = candidate_session.buy_action if position is None else candidate_session.open_action
                 if candidate <= now:
                     continue
                 if position is None and session_day.weekday() not in (0, 1):
@@ -3353,6 +3497,8 @@ class OPPWContinuousStrategy:
                     continue
                 if position is None:
                     return f"{session_day.strftime('%A').upper()} BUY WINDOW", candidate.isoformat()
+                if not self.oh_check_eligible(session_day):
+                    continue
                 return "OH", candidate.isoformat()
         except Exception:
             pass
@@ -3405,11 +3551,12 @@ class OPPWContinuousStrategy:
 
         desired_sl, sl_reason = self.weekday_sl_target(position, now)
         add(sl_reason, ceil_step(ceil_whole_sl(desired_sl), tick_size), trade_bid, self.cfg.trade_symbol)
+        state_matches = self.position_state_matches(position)
         if float(position.sl) > 0:
-            add(self.state.active_sl_reason or "BROKER_SL", float(position.sl), trade_bid, self.cfg.trade_symbol)
+            add((self.state.active_sl_reason if state_matches else "") or "BROKER_SL", float(position.sl), trade_bid, self.cfg.trade_symbol)
 
         tpp = self.tpp_for_day(now.date())
-        if self.oh_check_pending(now):
+        if self.oh_check_pending(now, position):
             add("OH", ceil_step(entry * (1.0 + tpp), tick_size), trade_bid, self.cfg.trade_symbol)
         premarket_tpp = self.premarket_high_tpp(position, now)
         if premarket_tpp is not None and now < self.session_times(now.date()).cash_open:
@@ -3427,13 +3574,14 @@ class OPPWContinuousStrategy:
         if signal_price > 0:
             add("CH", ceil_step(entry * (1.0 + tpp), tick_size), signal_price, self.cfg.signal_symbol)
 
-        if not self.state.break_even and break_even_check is not None:
+        break_even_armed = bool(self.state.break_even) if state_matches else False
+        if not break_even_armed and break_even_check is not None:
             check_status = str(break_even_check.get("status", "")).upper()
             check_threshold = float(break_even_check.get("threshold", 0.0) or 0.0)
             if check_status in {"SCHEDULED", "DUE"}:
                 add("BE CHECK", check_threshold, signal_price, self.cfg.signal_symbol)
 
-        if self.state.break_even:
+        if break_even_armed:
             add("BE", ceil_step(entry * self.cfg.break_even_ratio, tick_size), trade_bid, self.cfg.trade_symbol)
 
         return sorted(conditions, key=lambda item: float(item["distancePoints"]))
@@ -3480,6 +3628,47 @@ class OPPWContinuousStrategy:
             return self.record_strategy_decision_if_changed(preview=preview)
         return None
 
+    def immutable_hard_stop_payload(self, position) -> dict[str, Any]:
+        if not self.immutable_hard_stop_matches(position):
+            return {
+                "positionIdentifier": 0, "price": 0.0, "entryPrice": 0.0, "volume": 0.0,
+                "balanceAtFill": 0.0, "leverage": 0, "profitAtStop": 0.0,
+                "accountCurrency": "", "accountValuePerPriceUnit": 0.0, "tickSize": 0.0,
+                "accountLossCapApplied": False, "lockedAt": "", "source": "",
+            }
+        return {
+            "positionIdentifier": int(self.state.immutable_hard_sl_position_identifier or 0),
+            "price": float(self.state.immutable_hard_sl_price or 0.0),
+            "entryPrice": float(self.state.immutable_hard_sl_entry_price or 0.0),
+            "volume": float(self.state.immutable_hard_sl_volume or 0.0),
+            "balanceAtFill": float(self.state.immutable_hard_sl_balance or 0.0),
+            "leverage": int(self.state.immutable_hard_sl_leverage or 0),
+            "profitAtStop": float(self.state.immutable_hard_sl_profit or 0.0),
+            "accountCurrency": self.state.immutable_hard_sl_account_currency,
+            "accountValuePerPriceUnit": float(self.state.immutable_hard_sl_value_per_price_unit or 0.0),
+            "tickSize": float(self.state.immutable_hard_sl_tick_size or 0.0),
+            "accountLossCapApplied": bool(self.state.immutable_hard_sl_account_loss_cap_applied),
+            "lockedAt": self.state.immutable_hard_sl_locked_at,
+            "source": self.state.immutable_hard_sl_source,
+        }
+
+    def protection_target_payload(self, position, now: datetime) -> dict[str, Any]:
+        broker_sl = float(getattr(position, "sl", 0.0) or 0.0)
+        if broker_sl > 0:
+            reason = self.state.active_sl_reason if self.position_state_matches(position) else ""
+            return {
+                "price": broker_sl, "applied": True, "reason": reason or "BROKER_SL",
+                "source": "BROKER_SL", "executorRequired": False,
+            }
+        target, reason = self.weekday_sl_target(position, now)
+        return {
+            "price": float(target or 0.0),
+            "applied": False,
+            "reason": reason,
+            "source": "IMMUTABLE_HARD_STOP" if self.immutable_hard_stop_matches(position) else "PENDING_EXECUTOR_HARD_STOP",
+            "executorRequired": True,
+        }
+
     def build_mobile_snapshot(self, position, now: datetime, current_bar: Optional[M1Bar], potential_position: Optional[dict[str, Any]] = None) -> dict[str, Any]:
         account = mt5.account_info()
         balance = float(getattr(account, "balance", 0.0)) if account is not None else 0.0
@@ -3493,19 +3682,21 @@ class OPPWContinuousStrategy:
         else:
             signal_bid, signal_ask, signal_age, signal_time = self.monitor_tick_snapshot(self.cfg.signal_symbol, now)
         signal_price = signal_bid if signal_bid > 0 else signal_ask
+        current_week_bar = self.current_w1_bar(self.cfg.trade_symbol, now)
 
         stale = any(age is None or age > self.cfg.maximum_tick_age_seconds for age in (trade_age, signal_age))
         connected = self.connected and account is not None
         health = "CRITICAL" if not connected else "WARNING" if stale else "OK"
         next_action, next_action_at = self.monitor_next_action(position, now)
         phase = f"{now:%A} {self.phase(now).replace('_', ' ').title()}"
-        regime = self.protection_regime(now) if position is not None else "None"
+        regime = self.protection_regime(now, position) if position is not None else "None"
 
         position_payload: Optional[dict[str, Any]] = None
         conditions: list[dict[str, Any]] = []
         closest = None
         deposit = 0.0
         if position is not None:
+            state_matches = self.position_state_matches(position)
             bid = trade_bid if trade_bid > 0 else float(getattr(position, "price_current", 0.0) or 0.0)
             ask = trade_ask
             entry = float(position.price_open)
@@ -3516,7 +3707,7 @@ class OPPWContinuousStrategy:
             deposit = max(0.0, float(getattr(account, "margin", 0.0) or 0.0)) if account is not None else 0.0
             broker_leverage = self.broker_margin_leverage(account)
             raw_change = bid / entry - 1.0 if bid > 0 and entry > 0 else 0.0
-            leverage = self.state.entry_leverage or self.choose_leverage()
+            leverage = self.state.entry_leverage if state_matches and self.state.entry_leverage else self.infer_position_leverage(position)
             profit = float(getattr(position, "profit", 0.0)) + float(getattr(position, "swap", 0.0))
             timestamp = getattr(position, "time_msc", 0) / 1000.0 if getattr(position, "time_msc", 0) else float(position.time)
             opened = self.mt5_timestamp_to_local(timestamp)
@@ -3526,6 +3717,8 @@ class OPPWContinuousStrategy:
             tick_size = float(getattr(info, "trade_tick_size", 0.0) or getattr(info, "point", 0.0) or 0.01) if info is not None else 0.01
             potential_take_profit = ceil_step(entry * (1.0 + self.tpp_for_day(now.date())), tick_size)
             break_even_check = self.break_even_check_payload(position, now)
+            signal_reference = float(break_even_check.get("signalReference", 0.0) or 0.0)
+            signal_pending = signal_reference <= 0
             position_payload = {
                 "open": True,
                 "symbol": str(position.symbol),
@@ -3553,33 +3746,20 @@ class OPPWContinuousStrategy:
                 "stopLoss": float(position.sl),
                 "takeProfit": float(position.tp),
                 "potentialTakeProfit": potential_take_profit,
-                "entrySignalOpen": float(self.state.entry_signal_daily_open or 0.0),
-                "entrySignalOpenPending": bool(self.state.entry_signal_open_pending),
+                "entrySignalOpen": signal_reference,
+                "entrySignalOpenPending": signal_pending,
                 "entrySignalCaptureAt": signal_capture_at.isoformat(),
                 "entrySignalReferenceSource": (
-                    "CASH_OPEN_M1" if self.state.entry_signal_daily_open > 0 and not self.state.entry_signal_open_pending
+                    "CASH_OPEN_M1" if signal_reference > 0 and not signal_pending
                     else "PENDING_CASH_OPEN_M1"
                 ),
-                "breakEvenArmed": bool(self.state.break_even),
+                "breakEvenArmed": bool(self.state.break_even) if state_matches else False,
                 "breakEvenCheck": break_even_check,
                 "protectionRegime": regime,
-                "activeSlReason": self.state.active_sl_reason,
-                "activeTpReason": self.state.active_tp_reason,
-                "immutableHardStop": {
-                    "positionIdentifier": int(self.state.immutable_hard_sl_position_identifier or 0),
-                    "price": float(self.state.immutable_hard_sl_price or 0.0),
-                    "entryPrice": float(self.state.immutable_hard_sl_entry_price or 0.0),
-                    "volume": float(self.state.immutable_hard_sl_volume or 0.0),
-                    "balanceAtFill": float(self.state.immutable_hard_sl_balance or 0.0),
-                    "leverage": int(self.state.immutable_hard_sl_leverage or 0),
-                    "profitAtStop": float(self.state.immutable_hard_sl_profit or 0.0),
-                    "accountCurrency": self.state.immutable_hard_sl_account_currency,
-                    "accountValuePerPriceUnit": float(self.state.immutable_hard_sl_value_per_price_unit or 0.0),
-                    "tickSize": float(self.state.immutable_hard_sl_tick_size or 0.0),
-                    "accountLossCapApplied": bool(self.state.immutable_hard_sl_account_loss_cap_applied),
-                    "lockedAt": self.state.immutable_hard_sl_locked_at,
-                    "source": self.state.immutable_hard_sl_source,
-                },
+                "activeSlReason": self.state.active_sl_reason if state_matches else "",
+                "activeTpReason": self.state.active_tp_reason if state_matches else "",
+                "immutableHardStop": self.immutable_hard_stop_payload(position),
+                "protectionTarget": self.protection_target_payload(position, now),
             }
             conditions = self.monitor_all_conditions(position, now, bid, signal_price, break_even_check)
             closest = self.monitor_closest_condition(conditions)
@@ -3595,6 +3775,13 @@ class OPPWContinuousStrategy:
             "high": current_bar.high,
             "low": current_bar.low,
             "close": current_bar.close,
+        }
+        current_week_bar_payload = None if current_week_bar is None else {
+            "time": current_week_bar.local_datetime.isoformat(),
+            "open": current_week_bar.open,
+            "high": current_week_bar.high,
+            "low": current_week_bar.low,
+            "close": current_week_bar.close,
         }
 
         preview = potential_position or self.potential_position_preview(assume_current_position_closed=position is not None)
@@ -3633,7 +3820,8 @@ class OPPWContinuousStrategy:
                 "signalPrice": signal_price,
                 "signalPriceTime": signal_time,
                 "currentM1": current_bar_payload,
-                "session": self.market_session_payload(now),
+                "currentW1": current_week_bar_payload,
+                "session": self.market_session_payload(now, current_week_bar),
             },
             "metrics": {
                 "currentPrice": current_price,
@@ -3773,7 +3961,11 @@ class OPPWContinuousStrategy:
         # reconciliation or apply_standard_protection(). Keep this fallback
         # deterministic and independent of current balance/conversion so a
         # read-only status calculation can never create a moving baseline.
-        leverage = self.state.entry_leverage or self.choose_leverage()
+        leverage = (
+            self.state.entry_leverage
+            if self.position_state_matches(position) and self.state.entry_leverage
+            else self.infer_position_leverage(position)
+        )
         entry = float(position.price_open)
         info = mt5.symbol_info(position.symbol)
         tick_size = float(getattr(info, "trade_tick_size", 0.0) or getattr(info, "point", 0.0) or 0.01) if info is not None else 0.01
@@ -4613,6 +4805,14 @@ class OPPWContinuousStrategy:
             return False
         if now < session.open_action:
             return False
+        if not self.oh_check_eligible(current_day):
+            self.state.last_open_action_date = day_key
+            self.state.save(self.cfg.state_file)
+            self.log.info(
+                "EVENT SCHEDULED_CHECK name=OH skipped=true reason=first_trading_session day=%s scheduled=%s",
+                current_day, session.open_action.isoformat(),
+            )
+            return False
 
         tick = self.require_fresh_tick(position.symbol)
         bid = float(tick.bid)
@@ -4685,7 +4885,7 @@ class OPPWContinuousStrategy:
         break_even = (
             not self.state.break_even
             and opened is not None
-            and current_day != opened
+            and self.break_even_check_eligible(opened, current_day)
             and signal_price < be_threshold
         )
         self.log.info(
@@ -4745,7 +4945,7 @@ class OPPWContinuousStrategy:
         self.log_check(now, "EXIT_LATCH_CLEAR", not bool(self.state.exit_latched_reason), exit_latch=self.state.exit_latched_reason or "none")
 
         check_count = 3
-        if self.oh_check_pending(now):
+        if self.oh_check_pending(now, position):
             try:
                 tick = self.require_fresh_tick(position.symbol)
                 bid = float(tick.bid)
@@ -4823,10 +5023,17 @@ class OPPWContinuousStrategy:
             "time": current_bar.local_datetime.isoformat(), "open": current_bar.open, "high": current_bar.high,
             "low": current_bar.low, "close": current_bar.close,
         }
+        current_week_bar = self.current_w1_bar(self.cfg.trade_symbol, now)
+        week_candle = None if current_week_bar is None else {
+            "time": current_week_bar.local_datetime.isoformat(), "open": current_week_bar.open,
+            "high": current_week_bar.high, "low": current_week_bar.low, "close": current_week_bar.close,
+        }
         current_price = float(current_bar.close) if current_bar is not None else 0.0
         position_payload = None
         deposit = float(getattr(account, "margin", 0.0) or 0.0) if account is not None else 0.0
         if position is not None:
+            state_matches = self.position_state_matches(position)
+            position_leverage = self.state.entry_leverage if state_matches and self.state.entry_leverage else self.infer_position_leverage(position)
             opened_timestamp = float(getattr(position, "time", 0.0) or 0.0)
             opened_at = self.mt5_timestamp_to_local(opened_timestamp).isoformat() if opened_timestamp > 0 else ""
             position_payload = {
@@ -4836,14 +5043,17 @@ class OPPWContinuousStrategy:
                 "bid": current_price, "ask": 0.0, "priceTime": current_bar.local_datetime.isoformat() if current_bar else "",
                 "bidAt": current_bar.local_datetime.isoformat() if current_bar else "", "askAt": "", "tickAgeSeconds": None,
                 "profit": float(getattr(position, "profit", 0.0) or 0.0) + float(getattr(position, "swap", 0.0) or 0.0),
-                "profitPercent": 0.0, "strategyLeverage": float(self.state.entry_leverage or self.cfg.base_leverage),
+                "profitPercent": 0.0, "strategyLeverage": float(position_leverage),
                 "leveragedProfitPercent": 0.0, "exposure": 0.0, "requiredDeposit": deposit,
                 "effectiveLeverage": 0.0, "stopLoss": float(getattr(position, "sl", 0.0) or 0.0),
                 "takeProfit": float(getattr(position, "tp", 0.0) or 0.0), "potentialTakeProfit": 0.0,
-                "breakEvenArmed": bool(self.state.break_even),
+                "breakEvenArmed": bool(self.state.break_even) if state_matches else False,
                 "breakEvenCheck": self.break_even_check_payload(position, now),
                 "protectionRegime": "Weekend idle",
-                "activeSlReason": self.state.active_sl_reason, "activeTpReason": self.state.active_tp_reason,
+                "activeSlReason": self.state.active_sl_reason if state_matches else "",
+                "activeTpReason": self.state.active_tp_reason if state_matches else "",
+                "immutableHardStop": self.immutable_hard_stop_payload(position),
+                "protectionTarget": self.protection_target_payload(position, now),
             }
         plan_day = self.week_plan_day(now.date())
         return {
@@ -4858,12 +5068,12 @@ class OPPWContinuousStrategy:
                 "symbol": self.cfg.trade_symbol, "currentPrice": current_price, "bid": 0.0, "ask": 0.0,
                 "priceTime": current_bar.local_datetime.isoformat() if current_bar else "", "tickAgeSeconds": None,
                 "signalSymbol": self.cfg.signal_symbol, "signalPrice": 0.0, "signalPriceTime": "", "currentM1": candle,
-                "session": self.market_session_payload(now),
+                "currentW1": week_candle, "session": self.market_session_payload(now, current_week_bar),
             },
             "metrics": {
                 "currentPrice": current_price, "currentProfit": float(position_payload["profit"]) if position_payload else 0.0,
                 "currentProfitPercent": 0.0, "currentLeveragedProfitPercent": 0.0, "equity": equity, "balance": balance,
-                "deposit": deposit, "strategyLeverage": float(self.state.entry_leverage or self.cfg.base_leverage), "currency": currency,
+                "deposit": deposit, "strategyLeverage": float(position_payload["strategyLeverage"]) if position_payload else float(self.cfg.base_leverage), "currency": currency,
             },
             "position": position_payload,
             "potentialPosition": potential_position,
@@ -4973,6 +5183,11 @@ class OPPWContinuousStrategy:
         if position is None and self.state.active_position_identifier:
             self.finalize_closed_position()
         elif position is not None and self.recover_position_state(position, now):
+            # A manually adopted position may have no broker protection. Attach
+            # the immutable hard stop before any bar or scheduled-exit logic can
+            # interrupt the cycle, then refresh the broker position for status.
+            self.apply_standard_protection(position, now)
+            position = self.managed_position()
             self.emit_status("POSITION_RECOVERED", position, now)
 
         current_bar = self.current_m1_bar(self.cfg.trade_symbol)

@@ -5,7 +5,7 @@ import sys
 import tempfile
 import types
 import unittest
-from datetime import date, datetime
+from datetime import date, datetime, time
 from pathlib import Path
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -47,9 +47,11 @@ class DeferredSignalOpenTests(unittest.TestCase):
             state_file=Path(tempfile.gettempdir()) / "oppw-v50-1-signal-test-state.json",
         )
         strategy.session_times = lambda _day: SimpleNamespace(
-            cash_open=CASH_OPEN,
-            weekly_close=datetime(2026, 7, 20, 21, 59, 57, tzinfo=WARSAW),
+            cash_open=datetime.combine(_day, time(15, 30), WARSAW),
+            weekly_close=datetime.combine(_day, time(21, 59, 57), WARSAW),
         )
+        strategy.final_trading_day = lambda _opened: date(2026, 7, 24)
+        strategy.break_even_check_eligible = lambda opened, day: day > opened and day.weekday() >= 1
         strategy.last_signal_open_pending_log_monotonic = 0.0
         strategy.log = SimpleNamespace(
             info=lambda *_args, **_kwargs: None,
@@ -58,17 +60,17 @@ class DeferredSignalOpenTests(unittest.TestCase):
         strategy.emit_status = lambda *_args, **_kwargs: None
         return strategy
 
-    def test_break_even_never_uses_early_fill_as_signal_open(self):
+    def test_pending_signal_capture_does_not_become_a_monday_break_even_check(self):
         strategy = self.strategy()
         position = SimpleNamespace(price_open=29123.0, time=0)
         payload = strategy.break_even_check_payload(
             position,
             datetime(2026, 7, 20, 9, 46, tzinfo=WARSAW),
         )
-        self.assertEqual(payload["status"], "WAITING_FOR_SIGNAL_OPEN")
+        self.assertEqual(payload["status"], "SCHEDULED_SIGNAL_PENDING")
         self.assertEqual(payload["signalReference"], 0.0)
         self.assertEqual(payload["threshold"], 0.0)
-        self.assertEqual(payload["nextCheckAt"], CASH_OPEN.isoformat())
+        self.assertEqual(payload["nextCheckAt"], "2026-07-21T21:59:57+02:00")
 
     def test_cash_open_capture_is_deferred_then_committed(self):
         strategy = self.strategy()

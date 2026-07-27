@@ -13,6 +13,13 @@ The specification version is read from the repository root `VERSION` file. The l
 
 Changing a trading-relevant resolved value creates a different hash and a new immutable specification row. Credentials, account numbers, local paths, and tokens are excluded.
 
+## Session-order invariants
+
+- OH is never evaluated on the first actual XNYS trading session of the week. Its cash-open-minus-lead checks begin on the second actual session, including holiday-shifted weeks and manually adopted positions.
+- Break-even can arm only after a false CH at day close, no earlier than the second actual XNYS session and never on the position opening day. Capturing a pending entry-session cash-open signal reference is not a break-even check.
+- A manually adopted position receives the same immutable hard-stop lock and broker-side protection restoration as a strategy-opened position before other cycle logic runs.
+- The current-week monitoring summary uses the broker's live MT5 W1 open, high, low, and close. The exact first-session cash-open M1 price remains a separate strategy reference and is not substituted by the W1 open.
+
 ## Authoritative contents
 
 The document records instruments and sources, exchange session clocks, entry rules, leverage selection, sizing, session-indexed targets, PRE H ramps, OH/CH/break-even/TSL/hard-stop rules, order semantics, the immutable hard-stop invariant, exit hierarchy, and authoritative MySQL tables.

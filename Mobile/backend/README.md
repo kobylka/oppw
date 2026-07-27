@@ -28,11 +28,20 @@
 
 ## Database
 
-Fresh database: import `sql/schema.sql`.
+For a fresh database, apply every non-comment entry in `sql/migration-order.txt` from top to bottom. `schema.sql` is the base schema; the remaining files are required forward-only migrations.
 
-Existing v6 database: import `sql/migrate_v7.sql` once. v8 adds no columns or tables.
+For an existing database, apply only the listed migrations that have not already been applied, preserving their order. Never replay `schema.sql` or an already-applied migration. In particular, `migrate_v12_trade_classes.sql` must precede the v46 and later migrations because current analytics and trade projections require its persistent return/classification columns and triggers.
 
 ## Manual browser administration
+
+CLI pairing grants must state service-control authority explicitly:
+
+```powershell
+php admin/create_pairing_code.php --accounts=REAL,DEMO --can-control-service=1
+php admin/set_device_accounts.php --device=DEVICE_ID --accounts=REAL,DEMO --can-control-service=1
+```
+
+`set_device_accounts.php` preserves the device's existing service-control grant when the option is omitted. Use `--can-control-service=0` to revoke it deliberately. `list_devices.php` displays the effective grant.
 
 Private config:
 
@@ -64,6 +73,6 @@ event_name=POSITION_CLOSED
 
 `status.php` derives the strategy heartbeat from the latest `strategy_snapshots.captured_at` value. A successful HTTP request does not make a stale publisher appear healthy. Flat Saturday/Sunday accounts return `WEEKEND IDLE`.
 
-US100 current/previous-week and latest-day O/H/L/C are calculated only from `strategy_market_points`. The strategy week starts Friday at 15:30 Warsaw; the Friday open must exist between 15:30 and 15:35. Monday–Thursday opens use the earliest stored point of the day.
+US100 previous-week and latest-day O/H/L/C are calculated from `strategy_market_points`. Current-week open, high, low, and close come from the live broker `TIMEFRAME_W1` candle in the canonical MT5 snapshot, so the weekly card is populated before the first XNYS cash open and does not depend on publisher history. The exact first-session cash-open M1 boundary remains a separate strategy reference; stored minute points continue to supply daily cards.
 
 `events.php?hide_routine=1` hides `POSITION_OPEN`/`POSITION_IS_OPEN`, `ENTRY_SIGNAL_OPEN_AVAILABLE`, `EXIT_LATCH_CLEAR`, `OH`, `CH`, and any event whose name starts with `TSL`.

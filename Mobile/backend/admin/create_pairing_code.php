@@ -3,12 +3,14 @@ declare(strict_types=1);
 require dirname(__DIR__) . '/lib.php';
 if (PHP_SAPI !== 'cli') exit("CLI only\n");
 
-$options = getopt('', ['accounts:', 'minutes::', 'label::']);
+$options = getopt('', ['accounts:', 'minutes::', 'label::', 'can-control-service::']);
 $accountList = array_values(array_filter(array_map('trim', explode(',', (string)($options['accounts'] ?? '')))));
 $minutes = max(1, min(1440, (int)($options['minutes'] ?? config()['pairing_code_ttl_minutes'] ?? 10)));
 $label = substr(trim((string)($options['label'] ?? '')), 0, 100);
+$canControlServiceValue = strtolower(trim((string)($options['can-control-service'] ?? '0')));
+$canControlService = in_array($canControlServiceValue, ['1', 'true', 'yes', 'on'], true);
 if (!$accountList) {
-    fwrite(STDERR, "Usage: php admin/create_pairing_code.php --accounts=REAL,DEMO [--minutes=10] [--label=Samsung-A53]\n");
+    fwrite(STDERR, "Usage: php admin/create_pairing_code.php --accounts=REAL,DEMO [--minutes=10] [--label=Samsung-A53] [--can-control-service=1]\n");
     exit(2);
 }
 
@@ -36,11 +38,12 @@ for ($attempt = 0; $attempt < 10; $attempt++) {
         $insert = $db->prepare('INSERT INTO monitor_pairing_codes(code_hash, label, expires_at) VALUES (?, ?, ?)');
         $insert->execute([pairing_code_hash($plain), $label, mysql_datetime($expires)]);
         $id = (int)$db->lastInsertId();
-        $permission = $db->prepare('INSERT INTO monitor_pairing_code_accounts(pairing_code_id, account_key) VALUES (?, ?)');
-        foreach ($accountList as $accountKey) $permission->execute([$id, $accountKey]);
+        $permission = $db->prepare('INSERT INTO monitor_pairing_code_accounts(pairing_code_id, account_key, can_control_service) VALUES (?, ?, ?)');
+        foreach ($accountList as $accountKey) $permission->execute([$id, $accountKey, $canControlService ? 1 : 0]);
         $db->commit();
         echo "Pairing code: $display\n";
         echo 'Accounts: ' . implode(', ', $accountList) . "\n";
+        echo 'Service control: ' . ($canControlService ? 'allowed' : 'read-only') . "\n";
         echo 'Expires: ' . atom_datetime($expires) . "\n";
         exit(0);
     } catch (PDOException $e) {

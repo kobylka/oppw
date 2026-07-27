@@ -1,10 +1,18 @@
 import importlib.util
 from pathlib import Path
 import sys
+import types
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
+
+sys.modules.setdefault("exchange_calendars", types.ModuleType("exchange_calendars"))
+mt5 = sys.modules.setdefault("MetaTrader5", types.ModuleType("MetaTrader5"))
+mt5.ORDER_TYPE_BUY = 0
+mt5.ORDER_TYPE_SELL = 1
+mt5.POSITION_TYPE_BUY = 0
+mt5.POSITION_TYPE_SELL = 1
 
 SOURCE = Path(__file__).resolve().parents[1] / "oppw_mt5_continuous.py"
 SPEC = importlib.util.spec_from_file_location("oppw_closed_position_contract", SOURCE)

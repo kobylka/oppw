@@ -191,6 +191,20 @@ data class BreakEvenCheck(
     val condition: String = "",
 )
 
+data class ImmutableHardStop(
+    val price: Double = 0.0,
+    val lockedAt: String = "",
+    val source: String = "",
+)
+
+data class ProtectionTarget(
+    val price: Double = 0.0,
+    val applied: Boolean = false,
+    val reason: String = "",
+    val source: String = "",
+    val executorRequired: Boolean = false,
+)
+
 data class PositionStatus(
     val symbol: String,
     val side: String,
@@ -218,6 +232,8 @@ data class PositionStatus(
     val activeSlReason: String,
     val activeTpReason: String,
     val breakEvenCheck: BreakEvenCheck = BreakEvenCheck(),
+    val immutableHardStop: ImmutableHardStop = ImmutableHardStop(),
+    val protectionTarget: ProtectionTarget = ProtectionTarget(),
 )
 
 data class PriceCondition(

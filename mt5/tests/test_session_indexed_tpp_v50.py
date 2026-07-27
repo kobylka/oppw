@@ -4,7 +4,7 @@ import importlib.util
 import sys
 import types
 import unittest
-from datetime import date, datetime, time
+from datetime import UTC, date, datetime, time
 from pathlib import Path
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -40,10 +40,17 @@ class SessionIndexedTppTests(unittest.TestCase):
             break_even_ratio=0.996,
             trade_symbol="US100",
             signal_symbol="US100",
+            entry_action_lead_seconds=3.0,
+            non_entry_action_lead_seconds=3.0,
         )
         strategy.trading_sessions_for_week = lambda _day: sessions
         strategy.session_times = lambda day: SimpleNamespace(
-            cash_open=datetime(day.year, day.month, day.day, 15, 30, tzinfo=WARSAW)
+            buy_action=datetime(day.year, day.month, day.day, 9, 45, tzinfo=WARSAW),
+            open_action=datetime(day.year, day.month, day.day, 15, 29, 57, tzinfo=WARSAW),
+            cash_open=datetime(day.year, day.month, day.day, 15, 30, tzinfo=WARSAW),
+            weekly_close=datetime(day.year, day.month, day.day, 21, 59, 57, tzinfo=WARSAW),
+            close_bar_open=datetime(day.year, day.month, day.day, 22, 0, tzinfo=WARSAW),
+            close_processing=datetime(day.year, day.month, day.day, 22, 1, tzinfo=WARSAW),
         )
         strategy.log = SimpleNamespace(info=lambda *_args, **_kwargs: None)
         return strategy
@@ -132,6 +139,104 @@ class SessionIndexedTppTests(unittest.TestCase):
         self.assertAlmostEqual(break_even["targetPrice"], 98.0)
         self.assertAlmostEqual(break_even["currentPrice"], 99.0)
         self.assertEqual(strategy.monitor_closest_condition(conditions)["name"], "BE CHECK")
+
+    def test_oh_is_never_eligible_on_first_actual_session(self):
+        sessions = [date(2026, 7, day) for day in range(20, 25)]
+        strategy = self.strategy(sessions, sessions[0])
+        self.assertFalse(strategy.oh_check_eligible(sessions[0]))
+        self.assertTrue(strategy.oh_check_eligible(sessions[1]))
+        self.assertFalse(strategy.break_even_check_eligible(date(2026, 7, 19), sessions[0]))
+        self.assertTrue(strategy.break_even_check_eligible(sessions[0], sessions[1]))
+
+    def test_first_session_mobile_status_has_no_oh_condition_or_next_action(self):
+        sessions = [date(2026, 7, day) for day in range(20, 25)]
+        strategy = self.strategy(sessions, sessions[0])
+        strategy.weekday_sl_target = lambda _position, _now: (95.0, "SL")
+        strategy.final_trading_day = lambda _day: sessions[-1]
+        MODULE.mt5.symbol_info = lambda _symbol: SimpleNamespace(trade_tick_size=0.25, point=0.25)
+        now = datetime.combine(sessions[0], time(12, 0), WARSAW)
+        position = SimpleNamespace(symbol="US100", price_open=100.0, sl=0.0, tp=0.0)
+
+        conditions = strategy.monitor_all_conditions(position, now, 100.0, 100.0)
+        next_action, _ = strategy.monitor_next_action(position, now)
+
+        self.assertNotIn("OH", {condition["name"] for condition in conditions})
+        self.assertEqual(next_action, "CH")
+
+    def test_first_session_open_action_is_skipped_without_reading_a_tick(self):
+        sessions = [date(2026, 7, day) for day in range(20, 25)]
+        strategy = self.strategy(sessions, sessions[0])
+        strategy.state.exit_latched_reason = ""
+        strategy.state.last_open_action_date = ""
+        strategy.state.save = lambda _path: None
+        strategy.cfg.state_file = Path("unused.json")
+        strategy.require_fresh_tick = lambda _symbol: self.fail("first-session OH must not read a tick")
+        position = SimpleNamespace(symbol="US100", price_open=100.0)
+        now = datetime.combine(sessions[0], time(15, 29, 57), WARSAW)
+
+        self.assertFalse(strategy.maybe_execute_open_action(position, now))
+        self.assertEqual(strategy.state.last_open_action_date, sessions[0].isoformat())
+
+    def test_week_open_reference_uses_exact_first_session_cash_open(self):
+        sessions = [date(2026, 7, day) for day in range(20, 25)]
+        strategy = self.strategy(sessions, sessions[0])
+        calls = []
+        strategy.m1_bar_at = lambda symbol, day, at: calls.append((symbol, day, at)) or SimpleNamespace(open=29_463.15)
+        before = datetime.combine(sessions[0], time(15, 0), WARSAW)
+        after = datetime.combine(sessions[0], time(16, 0), WARSAW)
+
+        _, pending_price = strategy.week_open_reference(sessions[0], before)
+        cash_open_at, open_price = strategy.week_open_reference(sessions[0], after)
+        _, cached_price = strategy.week_open_reference(sessions[1], datetime.combine(sessions[1], time(16, 0), WARSAW))
+
+        self.assertEqual(pending_price, 0.0)
+        self.assertEqual(cash_open_at, "2026-07-20T15:30:00+02:00")
+        self.assertAlmostEqual(open_price, 29_463.15)
+        self.assertAlmostEqual(cached_price, 29_463.15)
+        self.assertEqual(len(calls), 1)
+
+    def test_current_w1_bar_supplies_week_ohlc_before_cash_open(self):
+        sessions = [date(2026, 7, day) for day in range(27, 32)]
+        strategy = self.strategy(sessions, sessions[0])
+        strategy.is_trading_session_day = lambda day: day in sessions
+        strategy.previous_trading_date = lambda _day: date(2026, 7, 24)
+        timestamp = int(datetime(2026, 7, 27, 0, 0, tzinfo=UTC).timestamp())
+        MODULE.mt5.TIMEFRAME_W1 = 10_080
+        MODULE.mt5.copy_rates_from_pos = lambda symbol, timeframe, start, count: [
+            {"time": timestamp, "open": 28_600.0, "high": 28_750.0, "low": 28_550.0, "close": 28_700.0},
+        ]
+
+        bar = strategy.current_w1_bar("US100", datetime(2026, 7, 27, 12, 0, tzinfo=WARSAW))
+        session = strategy.market_session_payload(datetime(2026, 7, 27, 12, 0, tzinfo=WARSAW), bar)
+
+        self.assertIsNotNone(bar)
+        self.assertEqual((bar.open, bar.high, bar.low, bar.close), (28_600.0, 28_750.0, 28_550.0, 28_700.0))
+        self.assertEqual(session["weekMarketOpenPrice"], 28_600.0)
+        self.assertEqual(session["weekMarketOpenSource"], "MT5_W1")
+        self.assertIsNone(session["weekOpenPrice"])
+
+    def test_stale_state_does_not_arm_manual_position_or_schedule_first_day_checks(self):
+        sessions = [date(2026, 7, day) for day in range(27, 32)]
+        strategy = self.strategy(sessions, date(2026, 7, 20))
+        strategy.state.active_position_identifier = 999
+        strategy.state.entry_price = 30_000.0
+        strategy.state.break_even = True
+        strategy.state.last_open_action_date = sessions[0].isoformat()
+        strategy.state.last_close_action_date = sessions[1].isoformat()
+        opened_timestamp = int(datetime(2026, 7, 27, 0, 0, tzinfo=UTC).timestamp())
+        position = SimpleNamespace(
+            identifier=777, ticket=123, symbol="US100", price_open=28_600.0,
+            time=opened_timestamp, sl=0.0, tp=0.0,
+        )
+        now = datetime(2026, 7, 27, 12, 0, tzinfo=WARSAW)
+        strategy.final_trading_day = lambda _day: sessions[-1]
+
+        break_even = strategy.break_even_check_payload(position, now)
+        next_action, _ = strategy.monitor_next_action(position, now)
+
+        self.assertEqual(break_even["status"], "SCHEDULED_SIGNAL_PENDING")
+        self.assertEqual(break_even["nextCheckAt"], "2026-07-28T21:59:57+02:00")
+        self.assertEqual(next_action, "CH")
 
 
 if __name__ == "__main__":

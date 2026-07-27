@@ -1,4 +1,5 @@
 schema.sql
+migrate_v12_trade_classes.sql
 migrate_v46_strategy_decisions.sql
 migrate_v47_4_strategy_decisions.sql
 migrate_v51_strategy_authority.sql

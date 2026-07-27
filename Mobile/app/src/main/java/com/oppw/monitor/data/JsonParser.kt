@@ -406,6 +406,8 @@ object JsonParser {
         stopLoss = json.optDouble("stopLoss"), takeProfit = json.optDouble("takeProfit"), potentialTakeProfit = json.optDouble("potentialTakeProfit"), breakEvenArmed = json.optBoolean("breakEvenArmed"),
         protectionRegime = json.optString("protectionRegime"), activeSlReason = json.optString("activeSlReason"), activeTpReason = json.optString("activeTpReason"),
         breakEvenCheck = json.optJSONObject("breakEvenCheck")?.let(::parseBreakEvenCheck) ?: BreakEvenCheck(),
+        immutableHardStop = json.optJSONObject("immutableHardStop")?.let(::parseImmutableHardStop) ?: ImmutableHardStop(),
+        protectionTarget = json.optJSONObject("protectionTarget")?.let(::parseProtectionTarget) ?: ProtectionTarget(),
     )
 
     private fun parseBreakEvenCheck(json: JSONObject) = BreakEvenCheck(
@@ -414,6 +416,20 @@ object JsonParser {
         signalReference = json.optDouble("signalReference"),
         threshold = json.optDouble("threshold"),
         condition = json.optString("condition"),
+    )
+
+    private fun parseImmutableHardStop(json: JSONObject) = ImmutableHardStop(
+        price = json.optDouble("price"),
+        lockedAt = json.optString("lockedAt"),
+        source = json.optString("source"),
+    )
+
+    private fun parseProtectionTarget(json: JSONObject) = ProtectionTarget(
+        price = json.optDouble("price"),
+        applied = json.optBoolean("applied"),
+        reason = json.optString("reason"),
+        source = json.optString("source"),
+        executorRequired = json.optBoolean("executorRequired"),
     )
 
     private fun parseCondition(json: JSONObject) = PriceCondition(

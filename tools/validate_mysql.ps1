@@ -73,12 +73,22 @@ try {
         mysql -N -uroot --database=oppw_monitor -e $serviceTableQuery).Trim()
     if ($LASTEXITCODE -ne 0 -or [int]$serviceTableCount -ne 3) { throw "Service-supervision table validation failed: $serviceTableCount/3" }
 
+    $tradeClassColumnQuery = "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='oppw_monitor' AND TABLE_NAME='strategy_trades' AND COLUMN_NAME IN ('preleverage_return_percent','trade_class');"
+    $tradeClassColumnCount = (& $docker.Source exec $container `
+        mysql -N -uroot --database=oppw_monitor -e $tradeClassColumnQuery).Trim()
+    if ($LASTEXITCODE -ne 0 -or [int]$tradeClassColumnCount -ne 2) { throw "Trade-class column validation failed: $tradeClassColumnCount/2" }
+
+    $tradeClassTriggerQuery = "SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA='oppw_monitor' AND TRIGGER_NAME IN ('strategy_trades_class_before_insert','strategy_trades_class_before_update');"
+    $tradeClassTriggerCount = (& $docker.Source exec $container `
+        mysql -N -uroot --database=oppw_monitor -e $tradeClassTriggerQuery).Trim()
+    if ($LASTEXITCODE -ne 0 -or [int]$tradeClassTriggerCount -ne 2) { throw "Trade-class trigger validation failed: $tradeClassTriggerCount/2" }
+
     $triggerQuery = "SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA='oppw_monitor' AND TRIGGER_NAME REGEXP '_no_(update|delete)$';"
     $triggerCount = (& $docker.Source exec $container `
         mysql -N -uroot --database=oppw_monitor -e $triggerQuery).Trim()
     if ($LASTEXITCODE -ne 0 -or [int]$triggerCount -ne 18) { throw "Immutability-trigger validation failed: $triggerCount/18" }
 
-    Write-Host "MYSQL VALIDATION PASSED authority_tables=$tableCount service_tables=$serviceTableCount triggers=$triggerCount image=$Image"
+    Write-Host "MYSQL VALIDATION PASSED authority_tables=$tableCount service_tables=$serviceTableCount trade_class_columns=$tradeClassColumnCount trade_class_triggers=$tradeClassTriggerCount immutable_triggers=$triggerCount image=$Image"
 } finally {
     if ($containerStarted) {
         try {

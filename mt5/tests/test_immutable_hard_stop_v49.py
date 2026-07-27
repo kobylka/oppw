@@ -101,6 +101,26 @@ class ImmutableHardStopTests(unittest.TestCase):
             MT5.account_info = lambda: self.fail("account_info must not be read for a locked baseline")
             self.assertEqual(strategy.hard_sl_price(self.position()), 27_550.0)
 
+    def test_manual_position_ignores_stale_leverage_and_publishes_pending_stop_target(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            strategy = self.strategy(Path(temp_dir) / "state.json")
+            strategy.state.active_position_identifier = 999
+            strategy.state.active_position_ticket = 999
+            strategy.state.entry_price = 30_000.0
+            strategy.state.entry_leverage = 10
+            position = self.position()
+            position.comment = "manual"
+            MT5.symbol_info = lambda _symbol: SimpleNamespace(trade_tick_size=0.25, point=0.25)
+
+            self.assertEqual(strategy.hard_sl_price(position), 27_188.0)
+            target = strategy.protection_target_payload(
+                position, datetime(2026, 7, 20, 12, 0, tzinfo=WARSAW),
+            )
+            self.assertEqual(target["price"], 27_188.0)
+            self.assertFalse(target["applied"])
+            self.assertTrue(target["executorRequired"])
+            self.assertEqual(target["source"], "PENDING_EXECUTOR_HARD_STOP")
+
     def test_thursday_tsl_can_only_tighten_immutable_stop(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             strategy = self.strategy(Path(temp_dir) / "state.json")
@@ -184,6 +204,46 @@ class ImmutableHardStopTests(unittest.TestCase):
                 self.position(sl=28_000.0), datetime(2026, 7, 21, 12, 0, tzinfo=WARSAW)
             )
             self.assertEqual(captured, [28_000.0])
+
+    def test_manual_recovery_applies_protection_before_other_cycle_logic(self):
+        strategy = object.__new__(MODULE.OPPWContinuousStrategy)
+        position = self.position(sl=0.0)
+        actions = []
+        strategy.is_executor = True
+        strategy.tz = WARSAW
+        strategy.cfg = SimpleNamespace(trade_symbol="US100")
+        strategy.state = SimpleNamespace(active_position_identifier=0)
+        strategy.coordinator = SimpleNamespace(require_role_lease=lambda: None)
+        strategy.is_weekend = lambda _now: False
+        strategy.ensure_autotrading_enabled = lambda _context: True
+        strategy.log_week_plan = lambda _day: None
+        strategy.managed_position = lambda: position
+
+        def recover(_position, _now):
+            strategy.state.active_position_identifier = 777
+            actions.append("recover")
+            return True
+
+        strategy.recover_position_state = recover
+        strategy.apply_standard_protection = lambda _position, _now: actions.append("protect") or True
+        strategy.emit_status = lambda *_args: actions.append("emit")
+        strategy.current_m1_bar = lambda _symbol: actions.append("current_bar") or None
+        strategy.capture_entry_signal_open = lambda *_args: False
+        strategy.maybe_execute_open_action = lambda *_args: False
+        strategy.maybe_execute_close_action = lambda *_args: False
+        strategy.session_times = lambda _day: SimpleNamespace(
+            cash_open=datetime(2099, 1, 1, tzinfo=WARSAW),
+            close_processing=datetime(2099, 1, 1, tzinfo=WARSAW),
+        )
+        strategy.publish_account_change_if_needed = lambda *_args: False
+        strategy.log_status_if_needed = lambda *_args: None
+        strategy.publish_mobile_minute_status = lambda *_args: False
+        strategy.publish_mobile_if_due = lambda *_args: None
+
+        strategy.cycle()
+
+        self.assertEqual(actions[:3], ["recover", "protect", "emit"])
+        self.assertLess(actions.index("protect"), actions.index("current_bar"))
 
 
 class BreakEvenMarketExitTests(unittest.TestCase):

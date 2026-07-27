@@ -77,6 +77,8 @@ class StrategySpecificationTests(unittest.TestCase):
         self.assertEqual(specification["specId"], expected[:32])
         self.assertEqual(specification["document"]["instruments"]["execution"], "US100")
         self.assertEqual(specification["document"]["instruments"]["signal"], "US100")
+        self.assertIn("second actual XNYS session", specification["document"]["thresholds"]["openHighSchedule"])
+        self.assertIn("second actual XNYS session", specification["document"]["thresholds"]["breakEvenArmSchedule"])
         self.assertEqual(specification["document"]["persistenceAuthority"]["events"], "diagnostic stream only")
 
     def test_decision_is_immutably_linked_to_specification(self):
