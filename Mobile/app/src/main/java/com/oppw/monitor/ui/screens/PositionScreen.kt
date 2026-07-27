@@ -34,6 +34,7 @@ import com.oppw.monitor.util.leverage
 import com.oppw.monitor.util.liveSourceAge
 import com.oppw.monitor.util.money
 import com.oppw.monitor.util.percent
+import com.oppw.monitor.util.positionConditionDisplay
 import com.oppw.monitor.util.unsignedPercent
 import com.oppw.monitor.util.price
 import com.oppw.monitor.util.shortDateTime
@@ -154,10 +155,16 @@ fun PositionScreen(state: UiState, onRetry: () -> Unit) {
 
             val account = snapshot.account
             val ohPending = snapshot.connection.nextAction.equals("OH", true)
-            val visibleConditions = snapshot.conditions.filterNot { it.name.equals("OH", true) && !ohPending }.sortedBy { it.distancePoints }
-            val rawClosest = snapshot.closestCondition?.takeUnless { it.name.equals("OH", true) && !ohPending } ?: visibleConditions.firstOrNull()
-            val conditions = visibleConditions.filterNot { sameCondition(it, rawClosest) }
-            val closest = rawClosest
+            val conditionDisplay = positionConditionDisplay(
+                conditions = snapshot.conditions,
+                reportedClosest = snapshot.closestCondition,
+                ohPending = ohPending,
+                snapshotAt = snapshot.connection.lastSync.ifBlank { state.response.generatedAt },
+                weekOpenDate = snapshot.marketStats.currentWeek?.weekOpenDate.orEmpty(),
+            )
+            val visibleConditions = conditionDisplay.visible
+            val conditions = conditionDisplay.others
+            val closest = conditionDisplay.closest
             val minimumBalance = account.deposit * 1.765
             val exposure = position.exposure.takeIf { it > 0.0 } ?: account.deposit * 20.0
             val effectiveLeverage = position.effectiveLeverage.takeIf { it > 0.0 } ?: if (account.balance > 0.0) exposure / account.balance else 0.0
@@ -235,11 +242,6 @@ private fun MetricRow(firstLabel: String, firstValue: String, secondLabel: Strin
         Metric(firstLabel, firstValue, Modifier.weight(1f), valueColor)
         Metric(secondLabel, secondValue, Modifier.weight(1f), valueColor)
     }
-}
-
-private fun sameCondition(first: PriceCondition, second: PriceCondition?): Boolean {
-    if (second == null) return false
-    return first.name.equals(second.name, true) && first.source.equals(second.source, true) && abs(first.targetPrice - second.targetPrice) <= 1e-6
 }
 
 @Composable
