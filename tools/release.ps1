@@ -43,7 +43,11 @@ try {
     & $PythonPath (Join-Path $root 'tools\validate_source.py') --root $root
     if ($LASTEXITCODE -ne 0) { throw 'Canonical-source validation failed.' }
 
-    & $PythonPath -m py_compile (Join-Path $root 'mt5\oppw_mt5_continuous.py')
+    $mt5Python = @(
+        (Join-Path $root 'mt5\oppw_mt5_continuous.py')
+        (Join-Path $root 'mt5\oppw_mt5_config.example.py')
+    ) + @(Get-ChildItem -LiteralPath (Join-Path $root 'mt5\oppw_core') -Filter '*.py' -File | ForEach-Object FullName)
+    & $PythonPath -m py_compile @mt5Python
     if ($LASTEXITCODE -ne 0) { throw 'MT5 Python compilation failed.' }
     & $PythonPath -m unittest discover -s (Join-Path $root 'mt5\tests') -p 'test_*.py' -q
     if ($LASTEXITCODE -ne 0) { throw 'MT5 regression tests failed.' }
@@ -103,6 +107,7 @@ try {
                 'mt5/oppw_mt5_continuous.py','mt5/oppw_mt5_config.example.py',
                 'mt5/README.md'
             ) -or
+            $_ -like 'mt5/oppw_core/*' -or
             $_ -like 'mt5/tests/*' -or
             $_ -like 'Mobile/app/src/*' -or
             $_ -like 'Mobile/backend/*' -or

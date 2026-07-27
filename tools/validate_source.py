@@ -51,6 +51,7 @@ def main() -> int:
         "docs/decisions/0007-independent-android-version.md": ("Status: Accepted", "Mobile/VERSION", "1,000,000"),
         "docs/decisions/0008-interactive-mt5-service-session.md": ("Status: Accepted", "CreateProcessAsUser", "winsta0\\default"),
         "docs/decisions/0009-mt5-readiness-gated-startup.md": ("Status: Accepted", "Demo Executor", "readiness"),
+        "docs/decisions/0010-cohesive-mt5-runtime-modules.md": ("Status: Accepted", "behavior-preserving", "oppw_core"),
         ".github/pull_request_template.md": ("Contract impact", "Architecture and safety", "Validation"),
     }
     for relative, markers in required_governance.items():
@@ -99,6 +100,57 @@ def main() -> int:
             if required not in canonical_text:
                 fail(errors, f"canonical MT5 source does not derive identity from VERSION: {required}")
 
+    expected_core_modules = {
+        "__init__.py",
+        "account_config.py",
+        "broker_execution.py",
+        "coordination.py",
+        "logging_support.py",
+        "models.py",
+        "monitoring.py",
+        "position_lifecycle.py",
+        "publishing.py",
+        "runtime.py",
+        "session_calendar.py",
+        "strategy_decision.py",
+        "utilities.py",
+        "versioning.py",
+    }
+    core_dir = root / "mt5" / "oppw_core"
+    actual_core_modules = {
+        path.name for path in core_dir.glob("*.py")
+    } if core_dir.is_dir() else set()
+    if actual_core_modules != expected_core_modules:
+        missing = sorted(expected_core_modules - actual_core_modules)
+        unexpected = sorted(actual_core_modules - expected_core_modules)
+        fail(
+            errors,
+            "canonical MT5 module set is incorrect; "
+            f"missing={missing} unexpected={unexpected}",
+        )
+    if canonical_text:
+        canonical_lines = len(canonical_text.splitlines())
+        if canonical_lines >= 600:
+            fail(errors, f"canonical MT5 entrypoint must remain a thin composition root; lines={canonical_lines}")
+        for marker in (
+            "SessionCalendarMixin",
+            "PositionLifecycleMixin",
+            "StrategyDecisionMixin",
+            "MonitoringMixin",
+            "BrokerExecutionMixin",
+            "RuntimeMixin",
+        ):
+            if marker not in canonical_text:
+                fail(errors, f"canonical MT5 composition is missing: {marker}")
+        for forbidden in (
+            "class BackendLeaseCoordinator",
+            "class MobileMonitorPublisher",
+            "def send_buy(",
+            "def build_mobile_snapshot(",
+        ):
+            if forbidden in canonical_text:
+                fail(errors, f"cohesive MT5 implementation leaked back into the entrypoint: {forbidden}")
+
     versioned_sources = [
         path.relative_to(root).as_posix()
         for path in (root / "mt5").rglob("*.py")
@@ -114,14 +166,19 @@ def main() -> int:
     if loop_entrypoints != ["mt5/oppw_mt5_continuous.py"]:
         fail(errors, "exactly one MT5 entrypoint is allowed; found: " + ", ".join(loop_entrypoints))
 
+    config_authority_text = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (core_dir / "versioning.py", core_dir / "account_config.py")
+        if path.is_file()
+    )
     required_config_names = (
         'ACCOUNT_CONFIG_FILES = {ACCOUNT_DEMO: "demo_mt5_config.py", ACCOUNT_REAL: "real_mt5_config.py"}',
         'account_dir / ACCOUNT_CONFIG_FILES[account]',
     )
     for marker in required_config_names:
-        if marker not in canonical_text:
+        if marker not in config_authority_text:
             fail(errors, f"canonical MT5 account-config mapping is missing: {marker}")
-    if "ACCOUNT_CONFIG_FALLBACKS" in canonical_text:
+    if "ACCOUNT_CONFIG_FALLBACKS" in canonical_text or "ACCOUNT_CONFIG_FALLBACKS" in config_authority_text:
         fail(errors, "legacy MT5 account-config aliases are not allowed")
 
     service_files = {

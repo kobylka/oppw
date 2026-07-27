@@ -6,7 +6,8 @@ OPPW has one canonical source tree with independently versioned product and Andr
 
 - `VERSION` is the product/MT5/backend/service release version and archive identity.
 - `Mobile/VERSION` is the Android application release version.
-- `mt5/oppw_mt5_continuous.py` is the only MT5 loop implementation.
+- `mt5/oppw_mt5_continuous.py` is the only MT5 executable entrypoint and strategy composition root.
+- `mt5/oppw_core/` contains its canonical cohesive runtime modules; it is not an alternate entrypoint.
 - `mt5/oppw_mt5_config.example.py` is the only committed MT5 configuration template.
 - `Mobile/` contains the Android application and PHP/MySQL backend.
 - `service/` contains the canonical two-node Windows service supervisor and installer.

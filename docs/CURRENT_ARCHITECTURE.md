@@ -8,7 +8,8 @@ This document describes the present repository. It is deliberately not a changel
 |---|---|
 | Product/MT5/backend/service version | `VERSION` |
 | Android application version | `Mobile/VERSION` |
-| MT5 strategy/execution loop | `mt5/oppw_mt5_continuous.py` |
+| MT5 strategy composition and sole entrypoint | `mt5/oppw_mt5_continuous.py` |
+| MT5 cohesive runtime modules | `mt5/oppw_core/` |
 | MT5 configuration template | `mt5/oppw_mt5_config.example.py` |
 | Demo/Real selection | canonical entrypoint with `--account demo|real` |
 | MT5 regression tests | `mt5/tests/` |
@@ -37,6 +38,8 @@ MySQL
        ↕ authenticated read APIs
 Android monitor (no trading capability)
 ```
+
+The canonical entrypoint owns CLI parsing, account selection, MT5 connection bootstrap, and the composed `OPPWContinuousStrategy` type. Its `oppw_core` modules separately own configuration, persistent models, logging/utilities, coordination, publishing, exchange sessions and market data, position lifecycle, strategy decisions, monitoring, broker execution/protection, and runtime orchestration. This is one implementation assembled through the entrypoint, not a collection of independently executable strategy variants.
 
 EXECUTOR and PUBLISHER ownership is coordinated globally through MySQL-backed leases exposed by `coordination.php`. Fencing tokens protect actions after takeover. Weekly entries use database idempotency so separate machines cannot legitimately claim the same account/week twice. Local filesystem locks are not authoritative.
 

@@ -368,9 +368,12 @@ class BreakEvenMarketExitTests(unittest.TestCase):
         self.assertEqual(calls, ["BH"])
 
     def test_removed_crossed_tp_reason_is_absent_from_v49_source(self):
-        source = (Path(__file__).resolve().parents[1] / "oppw_mt5_continuous.py").read_text(encoding="utf-8")
+        mt5_root = Path(__file__).resolve().parents[1]
+        sources = [mt5_root / "oppw_mt5_continuous.py", *(mt5_root / "oppw_core").glob("*.py")]
         removed_reason = "PROTECTION_TP_" + "ALREADY_CROSSED"
-        self.assertNotIn(removed_reason, source)
+        for source_path in sources:
+            with self.subTest(source=source_path.name):
+                self.assertNotIn(removed_reason, source_path.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
