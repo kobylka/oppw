@@ -32,7 +32,7 @@ Key execution rules
 * No authoritative filesystem lock, heartbeat file, or cross-process event-spool lock is used.
 * Status publishes an institutional-style next-trade What-if ticket; while a position is open it assumes the current position closes first and never resizes that live position.
 * Entry volume uses the configured balance-multiplier profile. The default growth profile uses 1.765; --conservative-multiplier selects 2.0 at L10 and 2.5 at L8.
-* All runtime, strategy, timing, risk, publisher, and backend settings are loaded from the selected account config file.
+* Runtime, strategy, timing, risk, publisher, and backend settings use one canonical schema/default set plus validated private account overrides.
 * Strategy decisions remain visible in every mobile snapshot, but each decision ID is sent to the MySQL persistence path only until its first successful backend acknowledgement.
 * Every completed trade is assigned a Guy Fleury A/B/C/D class and the publisher includes the label.
 * Weekends remain market-idle after startup. A lightweight MT5 account-balance watcher runs regardless of position state and may publish a fresh next-trade What-if snapshot after a top-up or withdrawal; no recurring market checks or minute publishing follow.
@@ -77,6 +77,7 @@ from oppw_core.account_config import (
     account_scoped_dir,
     account_scoped_file,
     apply_runtime_flags,
+    effective_config_summary,
     load_account_config,
     migrate_legacy_demo_runtime_files,
     scope_config_to_account,
@@ -223,6 +224,11 @@ class OPPWContinuousStrategy(
             "EVENT CONFIG_PROFILE config=%s balance_multiplier_profile=%s default_multiplier=%.3f conservative_L10=%.3f conservative_L8=%.3f",
             getattr(self.cfg, "config_name", self.account), self.balance_multiplier_profile(), float(self.cfg.required_balance_multiplier),
             float(self.cfg.legacy_required_balance_multiplier_l10), float(self.cfg.legacy_required_balance_multiplier_l8),
+        )
+        self.log.info(
+            "EVENT CONFIG_EFFECTIVE account=%s settings=%s",
+            self.account,
+            json.dumps(effective_config_summary(self.cfg), sort_keys=True, separators=(",", ":")),
         )
         if self.is_executor:
             if not self.cfg.live_enabled:

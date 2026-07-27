@@ -276,7 +276,9 @@ class Sim:
     def sell(self, time, open_price, close_price, open_date, close_date, trade_type, LEVERAGE, debug=False):
                 SL =  (100-50/LEVERAGE)/100
                 
-                granular = int((self.balance/1.765/2240))*2240
+                granular = int((self.balance/(20/LEVERAGE)/2240))*2240
+                if(LEVERAGE == 10):
+                    granular = int((self.balance/1.765/2240))*2240
                     
                 #change = round(close_price/open_price-1,4)
                 change = int((close_price/open_price-1)*10000)/10000
@@ -870,7 +872,7 @@ if __name__ == "__main__":
     
     tpps = [0.007,0.02,0.05,0.05,0.05]
     print(tpps)
-    result = sim.process(sim_i.quotes, "QQQ","20220103", "20260720", LEVERAGE, tpps, SL, BE, 0.004,0.004, 30000, False,False,True,True)
+    result = sim.process(sim_i.quotes, "QQQ","20220103", "20260724", LEVERAGE, tpps, SL, BE, 0.004,0.004, 30000, False,True,True,True)
     print(result)
     
     #1,79216 125

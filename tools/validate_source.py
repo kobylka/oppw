@@ -52,6 +52,7 @@ def main() -> int:
         "docs/decisions/0008-interactive-mt5-service-session.md": ("Status: Accepted", "CreateProcessAsUser", "winsta0\\default"),
         "docs/decisions/0009-mt5-readiness-gated-startup.md": ("Status: Accepted", "Demo Executor", "readiness"),
         "docs/decisions/0010-cohesive-mt5-runtime-modules.md": ("Status: Accepted", "behavior-preserving", "oppw_core"),
+        "docs/decisions/0011-single-source-mt5-configuration.md": ("Status: Accepted", "override-only", "exact equality"),
         ".github/pull_request_template.md": ("Contract impact", "Architecture and safety", "Validation"),
     }
     for relative, markers in required_governance.items():
@@ -112,6 +113,7 @@ def main() -> int:
         "publishing.py",
         "runtime.py",
         "session_calendar.py",
+        "settings.py",
         "strategy_decision.py",
         "utilities.py",
         "versioning.py",
@@ -178,6 +180,12 @@ def main() -> int:
     for marker in required_config_names:
         if marker not in config_authority_text:
             fail(errors, f"canonical MT5 account-config mapping is missing: {marker}")
+    settings_path = core_dir / "settings.py"
+    settings_text = settings_path.read_text(encoding="utf-8") if settings_path.is_file() else ""
+    if "class Config:" not in settings_text:
+        fail(errors, "canonical MT5 Config must be defined in oppw_core/settings.py")
+    if "from .settings import Config" not in config_authority_text:
+        fail(errors, "account configuration must import the canonical settings.Config")
     if "ACCOUNT_CONFIG_FALLBACKS" in canonical_text or "ACCOUNT_CONFIG_FALLBACKS" in config_authority_text:
         fail(errors, "legacy MT5 account-config aliases are not allowed")
 
@@ -202,6 +210,35 @@ def main() -> int:
     if config_examples != [expected_config]:
         names = ", ".join(path.relative_to(root).as_posix() for path in config_examples)
         fail(errors, "exactly one canonical MT5 config example is allowed; found: " + names)
+    example_text = expected_config.read_text(encoding="utf-8") if expected_config.is_file() else ""
+    for forbidden in ("class Config", "@dataclass", "def env_"):
+        if forbidden in example_text:
+            fail(errors, f"MT5 config example duplicates canonical configuration: {forbidden}")
+    for required in (
+        "MT5_TERMINAL_PATH =",
+        "MT5_LOGIN =",
+        "MT5_PASSWORD =",
+        "MT5_SERVER =",
+        "MONITOR_WRITE_TOKEN =",
+        "OVERRIDES = {",
+    ):
+        if required not in example_text:
+            fail(errors, f"MT5 override-only config example is missing: {required}")
+    migration_tool = root / "tools" / "migrate_mt5_config.py"
+    migration_text = migration_tool.read_text(encoding="utf-8") if migration_tool.is_file() else ""
+    for required in ("without_oppw_environment", "values_verified", "os.replace"):
+        if required not in migration_text:
+            fail(errors, f"MT5 private-config migration safety marker missing: {required}")
+
+    tracked_config_classes = []
+    for path in tracked:
+        relative = path.relative_to(root).as_posix()
+        if not relative.startswith("mt5/") or path.suffix != ".py" or relative.startswith("mt5/tests/"):
+            continue
+        if "class Config:" in path.read_text(encoding="utf-8") and relative != "mt5/oppw_core/settings.py":
+            tracked_config_classes.append(relative)
+    if tracked_config_classes:
+        fail(errors, "copied MT5 Config classes found: " + ", ".join(tracked_config_classes))
 
     for test in (root / "mt5" / "tests").glob("test_*.py"):
         text = test.read_text(encoding="utf-8")

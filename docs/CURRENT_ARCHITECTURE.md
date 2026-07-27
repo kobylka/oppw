@@ -10,6 +10,7 @@ This document describes the present repository. It is deliberately not a changel
 | Android application version | `Mobile/VERSION` |
 | MT5 strategy composition and sole entrypoint | `mt5/oppw_mt5_continuous.py` |
 | MT5 cohesive runtime modules | `mt5/oppw_core/` |
+| MT5 configuration schema/defaults | `mt5/oppw_core/settings.py` |
 | MT5 configuration template | `mt5/oppw_mt5_config.example.py` |
 | Demo/Real selection | canonical entrypoint with `--account demo|real` |
 | MT5 regression tests | `mt5/tests/` |
@@ -40,6 +41,8 @@ Android monitor (no trading capability)
 ```
 
 The canonical entrypoint owns CLI parsing, account selection, MT5 connection bootstrap, and the composed `OPPWContinuousStrategy` type. Its `oppw_core` modules separately own configuration, persistent models, logging/utilities, coordination, publishing, exchange sessions and market data, position lifecycle, strategy decisions, monitoring, broker execution/protection, and runtime orchestration. This is one implementation assembled through the entrypoint, not a collection of independently executable strategy variants.
+
+`oppw_core/settings.py` defines the only MT5 `Config` dataclass and every canonical default. Each ignored private account file contains only required connection/publishing credentials plus an optional `OVERRIDES` mapping. Effective configuration is constructed in a fixed order: canonical defaults, private overrides, `OPPW_*` environment overrides, and explicit CLI runtime flags. Startup logs the effective non-secret settings. `tools/migrate_mt5_config.py` converts legacy copied private `Config` classes only after exact reconstruction validation and atomically replaces the private source.
 
 EXECUTOR and PUBLISHER ownership is coordinated globally through MySQL-backed leases exposed by `coordination.php`. Fencing tokens protect actions after takeover. Weekly entries use database idempotency so separate machines cannot legitimately claim the same account/week twice. Local filesystem locks are not authoritative.
 
@@ -103,4 +106,4 @@ The release gate requires a clean Git commit, canonical-source validation, Pytho
 
 Populated account configs, backend `config.php`, Android `local.properties`, secrets, logs, state, equity caches, event spools, and build outputs remain local and ignored. Example files contain placeholders only.
 
-The canonical loop loads exactly one private account configuration: `mt5/demo/demo_mt5_config.py` or `mt5/real/real_mt5_config.py`. Configuration aliases and account-specific loop launchers are not supported.
+The canonical loop loads exactly one private account configuration: `mt5/demo/demo_mt5_config.py` or `mt5/real/real_mt5_config.py`. Those files are override-only and ignored; configuration aliases, copied `Config` classes, and account-specific loop launchers are not supported.

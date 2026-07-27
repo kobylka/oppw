@@ -24,6 +24,8 @@ Repeat this protocol after context compaction, after inheriting work from anothe
 - The Android app release version exists only in `Mobile/VERSION`, uses `MAJOR.MINOR.PATCH`, and is independent of root `VERSION`.
 - The sole MT5 entrypoint and strategy composition root is `mt5/oppw_mt5_continuous.py`; its canonical cohesive implementation modules are the fixed `mt5/oppw_core/` package.
 - The sole committed MT5 config template is `mt5/oppw_mt5_config.example.py`.
+- The sole MT5 configuration schema and default authority is `mt5/oppw_core/settings.py`.
+- Private Demo/Real configuration files contain only the five required credential constants and an `OVERRIDES` mapping; they never define `Config` or copy defaults.
 - `mt5/oppw_mt5_continuous.py` is the sole MT5 entrypoint; account selection always uses `--account demo|real`.
 - Files under `mt5/demo/` and `mt5/real/` are ignored private runtime/configuration files only. Do not add account launchers or copied strategy sources.
 - Never create version-suffixed implementation copies, copied backend endpoints, patcher-generated backups, parallel installers, or source trees inside release folders.
@@ -35,6 +37,7 @@ Repeat this protocol after context compaction, after inheriting work from anothe
 - Keep each change set bounded and coherent. Do not assign a new product or Android release version until the complete validation gate passes.
 - Inspect the working tree first and preserve unrelated user changes.
 - Fix the canonical source in place. Do not solve merge uncertainty by making another copy.
+- Configuration precedence is canonical defaults, then private account overrides, then `OPPW_*` environment overrides, then explicit CLI runtime flags. Preserve that order.
 - A defect fix requires a regression test that fails for the defect and exercises the current canonical source.
 - An architectural change must update `docs/CURRENT_ARCHITECTURE.md` and add or supersede an Architecture Decision Record.
 - A changed external or cross-component payload must follow `docs/CONTRACT_POLICY.md` and update producer, persistence, API, Android model/parser, fixtures, and tests together.

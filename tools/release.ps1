@@ -46,6 +46,7 @@ try {
     $mt5Python = @(
         (Join-Path $root 'mt5\oppw_mt5_continuous.py')
         (Join-Path $root 'mt5\oppw_mt5_config.example.py')
+        (Join-Path $root 'tools\migrate_mt5_config.py')
     ) + @(Get-ChildItem -LiteralPath (Join-Path $root 'mt5\oppw_core') -Filter '*.py' -File | ForEach-Object FullName)
     & $PythonPath -m py_compile @mt5Python
     if ($LASTEXITCODE -ne 0) { throw 'MT5 Python compilation failed.' }
@@ -118,7 +119,7 @@ try {
             ) -or
             $_ -in @(
                 'tools/release.ps1','tools/validate_source.py','tools/validate_mysql.ps1',
-                'tools/validate_contracts.py'
+                'tools/validate_contracts.py','tools/migrate_mt5_config.py'
             )
         }
         $selected = $selected | Where-Object {
