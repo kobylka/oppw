@@ -323,16 +323,24 @@ object JsonParser {
     private fun parseSnapshot(json: JSONObject): MonitorSnapshot {
         val closest = json.optJSONObject("closestCondition")?.let(::parseCondition)
         val conditions = parseConditions(json.optJSONArray("conditions") ?: JSONArray()).ifEmpty { listOfNotNull(closest) }
+        val position = json.optJSONObject("position")?.takeUnless { it.has("open") && !it.optBoolean("open") }?.let(::parsePosition)
+        val market = json.optJSONObject("market")
+        val parsedCurves = parseEquityCurves(json.optJSONObject("equityCurves"))
+        val weekly = weeklyEquityFromMarketOpen(
+            points = parsedCurves.weekly,
+            publishedWeekCashOpen = market?.optJSONObject("session")?.optString("weekCashOpen").orEmpty(),
+            position = position,
+        )
         return MonitorSnapshot(
             connection = parseConnection(json.getJSONObject("connection")), account = parseAccount(json.getJSONObject("account")),
-            position = json.optJSONObject("position")?.takeUnless { it.has("open") && !it.optBoolean("open") }?.let(::parsePosition),
+            position = position,
             potentialPosition = (json.optJSONObject("potentialPosition") ?: json.optJSONObject("potential_position"))?.let(::parsePotentialPosition),
             strategyDecision = (json.optJSONObject("strategyDecision") ?: json.optJSONObject("strategy_decision"))?.let(::parseStrategyDecision),
             lastClosedTrade = (json.optJSONObject("lastClosedTrade") ?: json.optJSONObject("last_closed_trade"))?.let(::parseLastClosedTrade),
             execution = json.optJSONObject("execution")?.let(::parseExecutionSnapshot),
             closestCondition = closest, conditions = conditions,
-            marketStats = parseMarketStats(json.optJSONObject("marketStats"), json.optJSONObject("market"), json.optJSONObject("connection")),
-            equityCurves = parseEquityCurves(json.optJSONObject("equityCurves")), equityHistory = parseEquity(json.optJSONArray("equityHistory") ?: JSONArray()),
+            marketStats = parseMarketStats(json.optJSONObject("marketStats"), market, json.optJSONObject("connection")),
+            equityCurves = parsedCurves.copy(weekly = weekly), equityHistory = parseEquity(json.optJSONArray("equityHistory") ?: JSONArray()),
         )
     }
 

@@ -353,6 +353,10 @@ def main() -> int:
             "weekCashOpen", "manual", "openedAt", "setTime(15, 30, 0)",
             "dailyStart", "weeklyStart",
         ),
+        "Mobile/app/src/main/java/com/oppw/monitor/data/EquityBoundaries.kt": (
+            "weeklyEquityFromMarketOpen", "publishedWeekCashOpen", "publishedOpen ?: return points",
+            "sameIsoWeek", "position?.takeIf { it.manual }",
+        ),
         "Mobile/backend/tests/equity-periods-test.php": (
             "first-session daily", "holiday-first-session daily", "manual-preopen daily",
             "manual-after-open weekly", "following-day daily", "completed-week weekly",

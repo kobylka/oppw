@@ -28,10 +28,15 @@ class MobileEquityBoundaryWiringTests(unittest.TestCase):
     def test_android_and_contract_parse_the_additive_manual_flag(self):
         models = (ROOT / "Mobile/app/src/main/java/com/oppw/monitor/data/Models.kt").read_text(encoding="utf-8")
         parser = (ROOT / "Mobile/app/src/main/java/com/oppw/monitor/data/JsonParser.kt").read_text(encoding="utf-8")
+        boundaries = (ROOT / "Mobile/app/src/main/java/com/oppw/monitor/data/EquityBoundaries.kt").read_text(encoding="utf-8")
         fixture = (ROOT / "contracts/fixtures/open-position.json").read_text(encoding="utf-8")
         release = (ROOT / "tools/release.ps1").read_text(encoding="utf-8")
         self.assertIn("val manual: Boolean = false", models)
         self.assertIn('manual = json.optBoolean("manual", false)', parser)
+        self.assertIn("weeklyEquityFromMarketOpen", parser)
+        self.assertIn("publishedWeekCashOpen", boundaries)
+        self.assertIn("publishedOpen ?: return points", boundaries)
+        self.assertIn("sameIsoWeek", boundaries)
         self.assertIn('"manual": false', fixture)
         self.assertIn("equity-periods-test.php", release)
 

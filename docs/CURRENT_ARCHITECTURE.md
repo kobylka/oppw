@@ -77,6 +77,7 @@ Two Windows machines run the canonical `OPPWContinuousSupervisor` service as Loc
 Authentication endpoints live under `Mobile/backend/auth/`; push endpoints live under `Mobile/backend/push/`; administrative endpoints are not mobile read APIs.
 
 Daily and weekly mobile equity curves use Europe/Warsaw period boundaries derived from the exchange-calendar `weekCashOpen`. On the first actual trading session of a week, both begin at the cash open (normally 15:30); when an explicitly identified manual position opened earlier that same day, its exact opening timestamp becomes the boundary. On subsequent trading days the daily curve begins at midnight while the weekly curve retains the first-session boundary. The MT5 publisher supplies the additive `position.manual` authority, and Android parses it without changing trading behavior.
+Android also enforces the published weekly boundary while parsing status responses. This compatibility guard removes pre-open points from an older backend response and leaves an intentionally completed prior-week curve unchanged. It does not infer a boundary from a calendar-week timestamp, because only exchange-calendar `weekCashOpen` can identify a holiday-delayed first trading session.
 
 ## Data authority
 
