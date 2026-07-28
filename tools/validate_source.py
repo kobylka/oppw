@@ -349,6 +349,14 @@ def main() -> int:
             "name <> 'EXECUTION_STAGE'", "GET_LOCK", "oppw-retention-ndjson-v1",
         ),
         "Mobile/backend/status.php": ("strategy_equity_daily", "close_equity AS equity"),
+        "Mobile/backend/equity-periods.php": (
+            "weekCashOpen", "manual", "openedAt", "setTime(15, 30, 0)",
+            "dailyStart", "weeklyStart",
+        ),
+        "Mobile/backend/tests/equity-periods-test.php": (
+            "first-session daily", "holiday-first-session daily", "manual-preopen daily",
+            "manual-after-open weekly", "following-day daily", "completed-week weekly",
+        ),
         "Mobile/backend/analytics.php": ("strategy_equity_daily", "minuteEquitySql"),
         "tools/validate_backup_restore.ps1": (
             "--single-transaction", "--routines", "--triggers", "sourceContainer",
@@ -417,6 +425,7 @@ def main() -> int:
         "backup_mysql.ps1",
         "install_mysql_backup_task.ps1",
         "write_mysql_client_config.php",
+        "equity-periods-test.php",
         "validate_contracts.py",
         "testDebugUnitTest assembleDebug",
         "git diff --cached --quiet",

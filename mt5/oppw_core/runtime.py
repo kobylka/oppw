@@ -166,7 +166,8 @@ class RuntimeMixin:
             position_payload = {
                 "open": True, "symbol": str(getattr(position, "symbol", self.cfg.trade_symbol)), "side": "BUY",
                 "volume": float(getattr(position, "volume", 0.0) or 0.0), "ticket": int(getattr(position, "ticket", 0) or 0),
-                "openedAt": opened_at, "openPrice": float(getattr(position, "price_open", 0.0) or 0.0),
+                "openedAt": opened_at, "manual": self.is_manual_position(position),
+                "openPrice": float(getattr(position, "price_open", 0.0) or 0.0),
                 "bid": current_price, "ask": 0.0, "priceTime": current_bar.local_datetime.isoformat() if current_bar else "",
                 "bidAt": current_bar.local_datetime.isoformat() if current_bar else "", "askAt": "", "tickAgeSeconds": None,
                 "profit": float(getattr(position, "profit", 0.0) or 0.0) + float(getattr(position, "swap", 0.0) or 0.0),

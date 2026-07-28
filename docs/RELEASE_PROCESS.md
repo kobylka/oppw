@@ -28,7 +28,7 @@ The release stops on any failure:
 1. repository is dirty or contains unignored files;
 2. source layout violates canonical-source rules;
 3. Python compilation, MT5/supervisor regression tests, or Windows service-host compilation fail;
-4. a PHP file fails linting;
+4. a PHP file fails linting or a backend PHP behavioral test fails;
 5. the ordered SQL chain fails against temporary MySQL or immutable tables/triggers are missing;
 6. the transactionally consistent backup cannot be restored into a second disposable MySQL instance with matching authority/operational digests and restored immutability guarantees;
 7. the executable publisher/PHP/MySQL/read-API/Android contract fails, including retained-equity behavior and the protected market-minute history;

@@ -501,6 +501,7 @@ class MonitoringMixin:
                 "volume": float(position.volume),
                 "ticket": int(position.ticket),
                 "openedAt": opened.isoformat(),
+                "manual": self.is_manual_position(position),
                 "openPrice": entry,
                 "bid": bid,
                 "ask": ask,

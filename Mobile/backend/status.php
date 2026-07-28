@@ -2,6 +2,7 @@
 declare(strict_types=1);
 require __DIR__ . '/lib.php';
 require_once __DIR__ . '/oppw_latest_trade.php';
+require_once __DIR__ . '/equity-periods.php';
 
 require_method('GET');
 $db = pdo();
@@ -148,22 +149,6 @@ function equity_points(PDO $db, string $accountKey, string $whereSql, int $maxim
     return downsample_points($rows, $maximum);
 }
 
-// OPPW_V47_3_V13_2_BEGIN
-function oppw_valid_iso_day(mixed $value): ?string
-{
-    $text = trim((string)$value);
-    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $text)) return null;
-    $parsed = DateTimeImmutable::createFromFormat('!Y-m-d', $text, new DateTimeZone('Europe/Warsaw'));
-    return $parsed && $parsed->format('Y-m-d') === $text ? $text : null;
-}
-
-function oppw_previous_weekday(DateTimeImmutable $localDay): DateTimeImmutable
-{
-    $candidate = $localDay->modify('-1 day');
-    while ((int)$candidate->format('N') > 5) $candidate = $candidate->modify('-1 day');
-    return $candidate;
-}
-
 function oppw_equity_period_points(
     PDO $db,
     string $accountKey,
@@ -217,6 +202,32 @@ function oppw_equity_period_points(
     return downsample_points($rows, $maximum);
 }
 
+function oppw_first_regular_market_start(
+    PDO $db,
+    string $accountKey,
+    DateTimeImmutable $weekStartLocal,
+    DateTimeZone $localTimezone
+): ?DateTimeImmutable {
+    $utc = new DateTimeZone('UTC');
+    $startUtc = $weekStartLocal->setTimezone($utc);
+    $endUtc = $weekStartLocal->modify('+7 days')->setTimezone($utc);
+    $statement = $db->prepare(
+        'SELECT captured_minute, phase FROM strategy_market_points '
+        . 'WHERE strategy_key = ? AND captured_minute >= ? AND captured_minute < ? '
+        . "AND phase <> '' ORDER BY captured_minute"
+    );
+    $statement->execute([
+        $accountKey,
+        $startUtc->format('Y-m-d H:i:s'),
+        $endUtc->format('Y-m-d H:i:s'),
+    ]);
+    while ($row = $statement->fetch()) {
+        if (!is_regular_market_phase($row['phase'] ?? '')) continue;
+        return (new DateTimeImmutable((string)$row['captured_minute'], $utc))->setTimezone($localTimezone);
+    }
+    return null;
+}
+
 function oppw_selected_equity_periods(
     PDO $db,
     string $accountKey,
@@ -228,32 +239,28 @@ function oppw_selected_equity_periods(
     $isTradingDay = array_key_exists('isTradingDay', $session)
         ? (bool)$session['isTradingDay']
         : ((int)$localNow->format('N') <= 5 && strtoupper((string)($snapshot['connection']['phase'] ?? '')) !== 'WEEKEND');
-
     $today = $localNow->setTimezone($localTimezone)->setTime(0, 0, 0);
-    $previousTradingDayKey = oppw_valid_iso_day($session['previousTradingDay'] ?? null);
-    $previousTradingDay = $previousTradingDayKey !== null
-        ? new DateTimeImmutable($previousTradingDayKey . ' 00:00:00', $localTimezone)
-        : oppw_previous_weekday($today);
-
-    if ($isTradingDay) {
-        $dailyStart = $today;
-        $dailyEnd = $localNow;
-        $weeklyStart = strategy_week_start($today);
-        $weeklyEnd = $localNow;
-    } else {
-        $dailyStart = $previousTradingDay;
-        $dailyEnd = $dailyStart->modify('+1 day');
-        $thisMonday = strategy_week_start($today);
-        $weeklyStart = $thisMonday->modify('-7 days');
-        $weeklyEnd = $thisMonday;
+    $currentWeek = oppw_equity_week_start($today);
+    $currentWeekMarketOpen = oppw_equity_parse_local_datetime($session['weekCashOpen'] ?? '', $localTimezone);
+    if ($currentWeekMarketOpen === null || oppw_equity_week_start($currentWeekMarketOpen) != $currentWeek) {
+        $currentWeekMarketOpen = oppw_first_regular_market_start($db, $accountKey, $currentWeek, $localTimezone);
     }
+    $previousWeekMarketOpen = $isTradingDay
+        ? null
+        : oppw_first_regular_market_start($db, $accountKey, $currentWeek->modify('-7 days'), $localTimezone);
+    $boundaries = oppw_equity_period_boundaries(
+        $snapshot,
+        $localNow,
+        $localTimezone,
+        $currentWeekMarketOpen,
+        $previousWeekMarketOpen,
+    );
 
     return [
-        'daily' => oppw_equity_period_points($db, $accountKey, $dailyStart, $dailyEnd, 144),
-        'weekly' => oppw_equity_period_points($db, $accountKey, $weeklyStart, $weeklyEnd, 168),
+        'daily' => oppw_equity_period_points($db, $accountKey, $boundaries['dailyStart'], $boundaries['dailyEnd'], 144),
+        'weekly' => oppw_equity_period_points($db, $accountKey, $boundaries['weeklyStart'], $boundaries['weeklyEnd'], 168),
     ];
 }
-// OPPW_V47_3_V13_2_END
 
 function all_time_equity_points(PDO $db, string $accountKey): array
 {

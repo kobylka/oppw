@@ -62,6 +62,7 @@ Two Windows machines run the canonical `OPPWContinuousSupervisor` service as Loc
 | Snapshot and explicit authority ingestion | `ingest.php` |
 | Event/lifecycle ingestion | `events-ingest.php` |
 | Current mobile status | `status.php` |
+| Mobile equity-curve period boundaries | `equity-periods.php` |
 | Analytics | `analytics.php` |
 | Event history | `events.php` |
 | Accounts | `accounts.php` |
@@ -74,6 +75,8 @@ Two Windows machines run the canonical `OPPWContinuousSupervisor` service as Loc
 | Windows supervisor assignment and mobile desired state | `service-control.php` |
 
 Authentication endpoints live under `Mobile/backend/auth/`; push endpoints live under `Mobile/backend/push/`; administrative endpoints are not mobile read APIs.
+
+Daily and weekly mobile equity curves use Europe/Warsaw period boundaries derived from the exchange-calendar `weekCashOpen`. On the first actual trading session of a week, both begin at the cash open (normally 15:30); when an explicitly identified manual position opened earlier that same day, its exact opening timestamp becomes the boundary. On subsequent trading days the daily curve begins at midnight while the weekly curve retains the first-session boundary. The MT5 publisher supplies the additive `position.manual` authority, and Android parses it without changing trading behavior.
 
 ## Data authority
 

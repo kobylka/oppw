@@ -73,6 +73,7 @@
       "volume": 0.02,
       "ticket": 990001,
       "openedAt": "${OPENED_AT}",
+      "manual": false,
       "openPrice": 29000.0,
       "bid": 29050.0,
       "ask": 29051.0,

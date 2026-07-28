@@ -234,6 +234,7 @@ data class PositionStatus(
     val breakEvenCheck: BreakEvenCheck = BreakEvenCheck(),
     val immutableHardStop: ImmutableHardStop = ImmutableHardStop(),
     val protectionTarget: ProtectionTarget = ProtectionTarget(),
+    val manual: Boolean = false,
 )
 
 data class PriceCondition(

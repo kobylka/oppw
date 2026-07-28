@@ -591,6 +591,8 @@ return [
             snapshot = status["snapshot"]
             if snapshot["position"]["ticket"] != expected["positionTicket"]:
                 raise AssertionError("status position ticket does not match ingested contract")
+            if snapshot["position"].get("manual") is not False:
+                raise AssertionError("strategy-managed contract position was not identified as non-manual")
             assert_close(snapshot["position"]["volume"], expected["positionVolume"], "status position volume")
             assert_close(snapshot["account"]["balance"], expected["balance"], "status balance")
             assert_close(snapshot["account"]["equity"], expected["equity"], "status equity")

@@ -409,6 +409,7 @@ object JsonParser {
         breakEvenCheck = json.optJSONObject("breakEvenCheck")?.let(::parseBreakEvenCheck) ?: BreakEvenCheck(),
         immutableHardStop = json.optJSONObject("immutableHardStop")?.let(::parseImmutableHardStop) ?: ImmutableHardStop(),
         protectionTarget = json.optJSONObject("protectionTarget")?.let(::parseProtectionTarget) ?: ProtectionTarget(),
+        manual = json.optBoolean("manual", false),
     )
 
     private fun parseBreakEvenCheck(json: JSONObject) = BreakEvenCheck(

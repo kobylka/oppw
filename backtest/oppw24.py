@@ -637,6 +637,10 @@ class Sim:
                 open_date = date
                 qqq_open_price = qqq_open
                 self.trade_no += 1
+                
+                if(self.deposited < 100000):
+                    self.deposited += 1000
+                    self.balance += 1000
 
             # --------------------------------------------------------
             # Cash-open exits.

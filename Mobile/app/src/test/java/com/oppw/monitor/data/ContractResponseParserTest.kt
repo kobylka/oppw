@@ -2,6 +2,7 @@ package com.oppw.monitor.data
 
 import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
@@ -34,6 +35,7 @@ class ContractResponseParserTest {
         val position = assertNotNull(status.snapshot.position).let { status.snapshot.position!! }
         assertEquals(990001L, position.ticket)
         assertEquals(0.02, position.volume, 0.000001)
+        assertFalse(position.manual)
         assertEquals(8000.0, status.snapshot.account.balance, 0.01)
         assertEquals(8125.5, status.snapshot.account.equity, 0.01)
         assertEquals(4393.0, status.snapshot.account.deposit, 0.01)

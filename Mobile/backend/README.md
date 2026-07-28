@@ -81,4 +81,6 @@ event_name=POSITION_CLOSED
 
 US100 previous-week and latest-day O/H/L/C are calculated from `strategy_market_points`. Current-week open, high, low, and close come from the canonical MT5 snapshot's M1 observation window, beginning at the first XNYS cash open or at a current-week manual position's opening timestamp. A manual fill is included in weekly open/high/low. The exact first-session cash-open M1 boundary remains a separate strategy reference; stored minute points continue to supply daily cards.
 
+Mobile daily and weekly equity curves use `equity-periods.php`. On the week's first actual trading session, both curves begin at the published XNYS cash open (normally 15:30 Europe/Warsaw). If a manual position was opened earlier on that same first session, both begin at its exact opening timestamp. On later trading days the daily curve begins at local midnight while the weekly curve retains its first-session boundary. Strategy-managed and post-open manual positions do not move that boundary.
+
 `events.php?hide_routine=1` hides `POSITION_OPEN`/`POSITION_IS_OPEN`, `ENTRY_SIGNAL_OPEN_AVAILABLE`, `EXIT_LATCH_CLEAR`, `OH`, `CH`, and any event whose name starts with `TSL`.

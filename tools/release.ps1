@@ -72,6 +72,16 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "PHP lint failed: $relative" }
     }
     Write-Host "PHP VALIDATION PASSED files=$($trackedPhp.Count)"
+    $requiredEquityPeriodTest = Join-Path $root 'Mobile\backend\tests\equity-periods-test.php'
+    if (-not (Test-Path -LiteralPath $requiredEquityPeriodTest -PathType Leaf)) {
+        throw 'Required backend test is missing: equity-periods-test.php'
+    }
+    $backendPhpTests = @(Get-ChildItem -LiteralPath (Join-Path $root 'Mobile\backend\tests') -Filter '*-test.php' -File)
+    foreach ($test in $backendPhpTests) {
+        & $php.Source $test.FullName
+        if ($LASTEXITCODE -ne 0) { throw "Backend PHP test failed: $($test.Name)" }
+    }
+    Write-Host "BACKEND PHP TESTS PASSED files=$($backendPhpTests.Count)"
 
     & (Join-Path $root 'tools\validate_mysql.ps1') -RepoRoot $root
     if ($LASTEXITCODE -ne 0) { throw 'Temporary-MySQL migration validation failed.' }
