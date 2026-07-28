@@ -92,6 +92,22 @@ def main() -> int:
         if mobile_minor > 99 or mobile_patch > 99:
             fail(errors, "Mobile/VERSION minor and patch components must each be between 0 and 99")
 
+    mt5_requirements_file = root / "requirements_mt5"
+    mt5_requirements = (
+        {
+            re.split(r"[\s<>=!~;\[]", line.strip(), maxsplit=1)[0]
+            .lower()
+            .replace("_", "-")
+            for line in mt5_requirements_file.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        }
+        if mt5_requirements_file.is_file()
+        else set()
+    )
+    for dependency in ("MetaTrader5", "tzdata", "exchange-calendars"):
+        if dependency.lower() not in mt5_requirements:
+            fail(errors, f"requirements_mt5 is missing direct runtime dependency: {dependency}")
+
     canonical = root / "mt5" / "oppw_mt5_continuous.py"
     if not canonical.is_file():
         fail(errors, "canonical MT5 source is missing: mt5/oppw_mt5_continuous.py")
