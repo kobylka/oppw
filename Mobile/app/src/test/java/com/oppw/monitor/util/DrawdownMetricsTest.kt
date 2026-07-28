@@ -1,5 +1,7 @@
 package com.oppw.monitor.util
 
+import com.oppw.monitor.data.DrawdownAnalytics
+import com.oppw.monitor.data.DrawdownEpisodeAnalytics
 import com.oppw.monitor.data.DrawdownPoint
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -59,6 +61,42 @@ class DrawdownMetricsTest {
 
         assertEquals(5 * 86_400L, result.episodes.single().elapsedSeconds)
         assertEquals(4 * 86_400L, result.episodes.single().recoverySeconds)
+    }
+
+    @Test
+    fun usesExactBackendMinuteStatisticsWhenChartSeriesWasDownsampled() {
+        val result = drawdownStatistics(DrawdownAnalytics(
+            maxDrawdownPercent = 12.5,
+            averageDepthPercent = 7.25,
+            averageLengthSeconds = 5400.0,
+            longestLengthSeconds = 7200L,
+            averageTroughRecoverySeconds = 1800.0,
+            timeUnderwaterPercent = 62.5,
+            statisticsExact = true,
+            sampleCount = 10_000,
+            seriesDownsampled = true,
+            series = listOf(
+                point(1, "2026-07-01T10:00:00Z", 0.0),
+                point(10_000, "2026-07-02T10:00:00Z", -1.0),
+            ),
+            episodes = listOf(DrawdownEpisodeAnalytics(
+                number = 1,
+                startAt = "2026-07-01T10:00:00Z",
+                troughAt = "2026-07-01T10:30:00Z",
+                endAt = "2026-07-01T12:00:00Z",
+                depthPercent = 12.5,
+                recovered = true,
+                elapsedSeconds = 7200L,
+                recoverySeconds = 5400L,
+                tradeKeys = listOf("DEMO:42"),
+            )),
+        ))
+
+        assertEquals(7.25, result.averageDepthPercent, 0.000001)
+        assertEquals(5400.0, result.averageLengthSeconds, 0.000001)
+        assertEquals(7200L, result.longestLengthSeconds)
+        assertEquals(62.5, result.timeUnderwaterPercent, 0.000001)
+        assertEquals(listOf("DEMO:42"), result.episodes.single().tradeKeys)
     }
 
     private fun point(index: Int, closedAt: String, drawdown: Double) = DrawdownPoint(

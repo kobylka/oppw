@@ -41,7 +41,6 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.oppw.monitor.data.AnalyticsFilters
 import com.oppw.monitor.data.AnalyticsResponse
-import com.oppw.monitor.data.DrawdownPoint
 import com.oppw.monitor.data.ExecutionLifecycle
 import com.oppw.monitor.data.LatencySummary
 import com.oppw.monitor.data.TradeAnalytics
@@ -86,7 +85,7 @@ private fun AnalyticsContent(state: UiState, analytics: AnalyticsResponse, onFil
     val summary = analytics.summary
     val allTradeKeys = analytics.recentTrades.filter { it.closed }.map(::tradeKey)
     val distributionTradeKeys = analytics.tradeDistribution.trades.map { "${it.strategyKey}:${it.ticket}" }.distinct()
-    val drawdowns = remember(analytics.drawdown.series) { drawdownStatistics(analytics.drawdown.series) }
+    val drawdowns = remember(analytics.drawdown) { drawdownStatistics(analytics.drawdown) }
     var drillDown by remember(analytics.generatedAt) { mutableStateOf<DrillDown?>(null) }
     var expandedExecutions by remember { mutableStateOf(setOf<String>()) }
     val openDrillDown: (String, List<String>) -> Unit = { title, keys -> drillDown = DrillDown(title, keys.distinct()) }
@@ -230,32 +229,34 @@ private fun AnalyticsContent(state: UiState, analytics: AnalyticsResponse, onFil
         }
         item {
             AppCard(Modifier.fillMaxWidth()) {
-                SectionTitle("Daily risk metrics", "${summary.riskSampleDays} cash-flow-adjusted daily returns")
-                MetricLink("Calmar ratio", ratioValue(summary.calmarRatio), emptyList(), openDrillDown)
+                SectionTitle("Risk metrics", "${summary.riskSampleDays} daily returns · ${analytics.drawdown.sampleCount} equity samples")
+                MetricLink("Calmar ratio · minute drawdown", ratioValue(summary.calmarRatio), analytics.drawdown.tradeKeys, openDrillDown)
                 MetricLink("Omega ratio", ratioValue(summary.omegaRatio), emptyList(), openDrillDown)
-                MetricLink("Ulcer index", unsignedPercent(summary.ulcerIndexPercent), emptyList(), openDrillDown)
+                MetricLink("Ulcer index · minute drawdown", unsignedPercent(summary.ulcerIndexPercent), analytics.drawdown.tradeKeys, openDrillDown)
                 MetricLink("Daily VaR 95% · loss", riskLossMagnitude(summary.valueAtRisk95Percent), emptyList(), openDrillDown)
                 MetricLink("Expected shortfall 95% · loss", riskLossMagnitude(summary.expectedShortfall95Percent), emptyList(), openDrillDown)
-                Text("VaR marks where the worst 5% of observed days begin; expected shortfall is the average loss within that tail. Loss values are shown as positive magnitudes.", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                Text("Calmar uses annualized daily return over maximum minute-equity drawdown. Ulcer uses every retained equity sample. VaR and expected shortfall remain daily-return metrics.", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
             }
         }
         item {
             AppCard(Modifier.fillMaxWidth()) {
-                SectionTitle("Closed-trade drawdowns", "${drawdowns.episodes.size} equity-curve episodes")
+                SectionTitle("Minute-equity drawdowns", "${drawdowns.episodes.size} episodes · ${drawdownSourceLabel(analytics.drawdown.sourceGranularity)}")
                 DrawdownChart(analytics, Modifier.fillMaxWidth().height(190.dp))
-                MetricLink("Maximum closed-trade drawdown", percent(-abs(analytics.drawdown.maxDrawdownPercent)), analytics.drawdown.tradeKeys, openDrillDown)
+                MetricLink("Maximum drawdown", percent(-abs(analytics.drawdown.maxDrawdownPercent)), analytics.drawdown.tradeKeys, openDrillDown)
+                MetricLink("Maximum drawdown · currency", money(-abs(analytics.drawdown.maxDrawdownCurrency), currency), analytics.drawdown.tradeKeys, openDrillDown)
+                MetricLink("Recovery factor", ratioValue(summary.recoveryFactor), analytics.drawdown.tradeKeys, openDrillDown)
                 MetricLink("Average drawdown depth", percent(-drawdowns.averageDepthPercent), drawdownTradeKeys(drawdowns.episodes), openDrillDown)
-                MetricLink("Average drawdown length", fullDays(drawdowns.averageLengthSeconds), drawdownTradeKeys(drawdowns.episodes), openDrillDown)
-                MetricLink("Longest drawdown length", fullDays(drawdowns.longestLengthSeconds.toDouble()), drawdowns.episodes.maxByOrNull { it.elapsedSeconds }?.tradeKeys.orEmpty(), openDrillDown)
-                MetricLink("Average trough-to-recovery length", fullDays(drawdowns.averageTroughRecoverySeconds), drawdownTradeKeys(drawdowns.episodes.filter { it.recovered }), openDrillDown)
-                MetricLink("Time under water", unsignedPercent(drawdowns.timeUnderwaterPercent), analytics.drawdown.series.filter { it.drawdownPercent < 0.0 }.map(DrawdownPoint::tradeKey), openDrillDown)
-                MetricLink("Average MAE", percent(analytics.drawdown.averageMaePercent), analytics.drawdown.tradeKeys, openDrillDown)
-                Text("Length is absolute wall-clock time from the last equity peak to recovery, or to the latest close when ongoing. Values show completed 24-hour days. Trough-to-recovery measures only the recovery leg.", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                MetricLink("Average drawdown length", duration(drawdowns.averageLengthSeconds.toLong()), drawdownTradeKeys(drawdowns.episodes), openDrillDown)
+                MetricLink("Longest drawdown length", duration(drawdowns.longestLengthSeconds), drawdowns.episodes.maxByOrNull { it.elapsedSeconds }?.tradeKeys.orEmpty(), openDrillDown)
+                MetricLink("Average trough-to-recovery length", duration(drawdowns.averageTroughRecoverySeconds.toLong()), drawdownTradeKeys(drawdowns.episodes.filter { it.recovered }), openDrillDown)
+                MetricLink("Time under water", unsignedPercent(drawdowns.timeUnderwaterPercent), analytics.drawdown.tradeKeys, openDrillDown)
+                Text("All values are cash-flow-adjusted and use retained minute equity, including unrealized intratrade losses. Length runs from the last equity peak to recovery, or to the latest minute when ongoing. Older retained history uses daily fallback points.", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                Text("Account/scope and rolling-window filters apply to this portfolio curve; leverage, exit-reason, and class filters remain trade-only.", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
             }
         }
-        item { SectionTitle("All drawdowns", "depth and elapsed full days") }
+        item { SectionTitle("All drawdowns", "minute-equity depth and elapsed time") }
         if (drawdowns.episodes.isEmpty()) {
-            item { AppCard(Modifier.fillMaxWidth()) { Text("No closed-trade drawdowns in the filtered sample.", color = TextSecondary) } }
+            item { AppCard(Modifier.fillMaxWidth()) { Text("No minute-equity drawdowns in the selected account window.", color = TextSecondary) } }
         } else {
             items(drawdowns.episodes.reversed(), key = { it.number }) { episode ->
                 DrawdownEpisodeCard(episode, openDrillDown)
@@ -414,16 +415,16 @@ private fun DrawdownEpisodeCard(episode: DrawdownEpisode, onClick: (String, List
     AppCard(Modifier.fillMaxWidth()) {
         SectionTitle("Drawdown #${episode.number}", if (episode.recovered) "RECOVERED" else "ONGOING")
         Text(
-            "${shortDateTime(episode.startAt)} to ${if (episode.recovered) shortDateTime(episode.endAt) else "latest close"}",
+            "${shortDateTime(episode.startAt)} to ${if (episode.recovered) shortDateTime(episode.endAt) else "latest sample"}",
             color = TextSecondary,
             style = MaterialTheme.typography.labelMedium,
         )
         MetricLink("Depth", percent(-episode.depthPercent), episode.tradeKeys, onClick, DangerRed)
-        MetricLink("Length", fullDays(episode.elapsedSeconds.toDouble()), episode.tradeKeys, onClick)
+        MetricLink("Length", duration(episode.elapsedSeconds), episode.tradeKeys, onClick)
         MetricLink("Trough", shortDateTime(episode.troughAt), episode.tradeKeys, onClick)
         MetricLink(
             "Trough-to-recovery",
-            episode.recoverySeconds?.let { fullDays(it.toDouble()) } ?: "Ongoing",
+            episode.recoverySeconds?.let(::duration) ?: "Ongoing",
             episode.tradeKeys,
             onClick,
             if (episode.recovered) BrightGreen else DangerRed,
@@ -433,6 +434,14 @@ private fun DrawdownEpisodeCard(episode: DrawdownEpisode, onClick: (String, List
 
 private fun drawdownTradeKeys(episodes: List<DrawdownEpisode>): List<String> =
     episodes.flatMap { it.tradeKeys }.distinct()
+
+private fun drawdownSourceLabel(source: String): String = when (source) {
+    "MINUTE" -> "minute samples"
+    "MINUTE_WITH_DAILY_FALLBACK" -> "minute + retained daily history"
+    "DAILY_FALLBACK" -> "retained daily history"
+    "NONE" -> "no equity samples"
+    else -> "legacy backend series"
+}
 
 @Composable
 private fun LatencyMetric(label: String, value: LatencySummary, onClick: (String, List<String>) -> Unit) {
@@ -629,10 +638,6 @@ private fun nullableRatio(value: Double?): String = if (value != null && value.i
 private fun ratioValue(value: Double): String = if (value.isFinite()) String.format("%.2f", value) else "∞"
 private fun riskLossMagnitude(value: Double): String = unsignedPercent(max(0.0, -value))
 private fun formatNumber(value: Double): String = String.format("%.2f", value)
-private fun fullDays(seconds: Double): String {
-    val days = (abs(seconds) / 86_400.0).toLong()
-    return "$days ${if (days == 1L) "day" else "days"}"
-}
 private fun milliseconds(value: Double?): String = when {
     value == null || !value.isFinite() -> "N/A"
     value >= 1000.0 -> String.format("%.2fs", value / 1000.0)

@@ -32,7 +32,43 @@ class AnalyticsParserTest {
                 "tradeClass": "A",
                 "trades": 1,
                 "averagePreleverageReturnPercent": 1.0
-              }]
+              }],
+              "drawdown": {
+                "sourceGranularity": "MINUTE",
+                "cashFlowAdjusted": true,
+                "statisticsExact": true,
+                "sampleCount": 1440,
+                "minuteSampleCount": 1440,
+                "maxDrawdownPercent": 8.5,
+                "maxDrawdownCurrency": 850.0,
+                "averageDepthPercent": 4.25,
+                "averageLengthSeconds": 3600,
+                "longestLengthSeconds": 7200,
+                "averageTroughRecoverySeconds": 1800,
+                "timeUnderwaterPercent": 25.0,
+                "ulcerIndexPercent": 2.75,
+                "episodes": [{
+                  "number": 1,
+                  "startAt": "2026-07-27T10:00:00Z",
+                  "troughAt": "2026-07-27T10:30:00Z",
+                  "endAt": "2026-07-27T12:00:00Z",
+                  "depthPercent": 8.5,
+                  "recovered": true,
+                  "elapsedSeconds": 7200,
+                  "recoverySeconds": 5400,
+                  "tradeKeys": ["DEMO:42"]
+                }],
+                "series": [{
+                  "index": 1,
+                  "capturedAt": "2026-07-27T10:00:00Z",
+                  "equity": 10000,
+                  "equityIndex": 100,
+                  "drawdownPercent": 0,
+                  "drawdownCurrency": 0,
+                  "tradeKeys": ["DEMO:42"],
+                  "sourceGranularity": "MINUTE"
+                }]
+              }
             }
         """.trimIndent())
 
@@ -53,6 +89,18 @@ class AnalyticsParserTest {
         assertEquals(0.798, analytics.weekly.single().preleverageReturnPercent, 0.000001)
         assertEquals(7.8, analytics.weekly.single().leveragedReturnPercent, 0.000001)
         assertEquals(1.0, analytics.tradeClasses.single().averagePreleverageReturnPercent, 0.000001)
+        with(analytics.drawdown) {
+            assertEquals("MINUTE", sourceGranularity)
+            assertEquals(true, cashFlowAdjusted)
+            assertEquals(true, statisticsExact)
+            assertEquals(1440, sampleCount)
+            assertEquals(8.5, maxDrawdownPercent, 0.000001)
+            assertEquals(850.0, maxDrawdownCurrency, 0.000001)
+            assertEquals(7200L, longestLengthSeconds)
+            assertEquals("2026-07-27T10:30:00Z", episodes.single().troughAt)
+            assertEquals("2026-07-27T10:00:00Z", series.single().capturedAt)
+            assertEquals(listOf("DEMO:42"), series.single().tradeKeys)
+        }
     }
 
     @Test

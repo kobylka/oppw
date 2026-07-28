@@ -210,14 +210,56 @@ object JsonParser {
                 )) }
             },
             drawdown = (root.optJSONObject("drawdown") ?: JSONObject()).let { value -> DrawdownAnalytics(
-                maxDrawdownPercent = value.optDouble("maxDrawdownPercent"), averageMaePercent = value.optDouble("averageMaePercent"),
+                maxDrawdownPercent = value.optDouble("maxDrawdownPercent"),
+                maxDrawdownCurrency = value.optDouble("maxDrawdownCurrency"),
+                averageMaePercent = value.optDouble("averageMaePercent"),
+                averageDepthPercent = value.optDouble("averageDepthPercent"),
+                averageLengthSeconds = value.optDouble("averageLengthSeconds"),
+                longestLengthSeconds = value.optLong("longestLengthSeconds"),
+                averageTroughRecoverySeconds = value.optDouble("averageTroughRecoverySeconds"),
+                timeUnderwaterPercent = value.optDouble("timeUnderwaterPercent"),
+                ulcerIndexPercent = value.optDouble("ulcerIndexPercent"),
+                sourceGranularity = value.optString("sourceGranularity"),
+                cashFlowAdjusted = value.optBoolean("cashFlowAdjusted"),
+                statisticsExact = value.optBoolean("statisticsExact"),
+                sampleCount = value.optInt("sampleCount"),
+                minuteSampleCount = value.optInt("minuteSampleCount"),
+                dailyFallbackSampleCount = value.optInt("dailyFallbackSampleCount"),
+                seriesDownsampled = value.optBoolean("seriesDownsampled"),
                 series = buildList {
                     val values = value.optJSONArray("series") ?: JSONArray()
-                    for (i in 0 until values.length()) values.getJSONObject(i).let { item -> add(DrawdownPoint(
-                        index = item.optInt("index"), tradeKey = item.optString("tradeKey"), closedAt = item.optString("closedAt"),
-                        equityIndex = item.optDouble("equityIndex"), drawdownPercent = item.optDouble("drawdownPercent"), maePercent = item.optDouble("maePercent"),
+                    for (i in 0 until values.length()) values.getJSONObject(i).let { item ->
+                        val capturedAt = item.optString("capturedAt", item.optString("closedAt"))
+                        add(DrawdownPoint(
+                            index = item.optInt("index"),
+                            tradeKey = item.optString("tradeKey"),
+                            closedAt = item.optString("closedAt", capturedAt),
+                            equityIndex = item.optDouble("equityIndex"),
+                            drawdownPercent = item.optDouble("drawdownPercent"),
+                            maePercent = item.optDouble("maePercent"),
+                            capturedAt = capturedAt,
+                            equity = item.optDouble("equity"),
+                            drawdownCurrency = item.optDouble("drawdownCurrency"),
+                            tradeKeys = item.optJSONArray("tradeKeys").toStrings(),
+                            sourceGranularity = item.optString("sourceGranularity"),
+                        ))
+                    }
+                },
+                episodes = buildList {
+                    val values = value.optJSONArray("episodes") ?: JSONArray()
+                    for (i in 0 until values.length()) values.getJSONObject(i).let { item -> add(DrawdownEpisodeAnalytics(
+                        number = item.optInt("number"),
+                        startAt = item.optString("startAt"),
+                        troughAt = item.optString("troughAt"),
+                        endAt = item.optString("endAt"),
+                        depthPercent = item.optDouble("depthPercent"),
+                        recovered = item.optBoolean("recovered"),
+                        elapsedSeconds = item.optLong("elapsedSeconds"),
+                        recoverySeconds = if (item.has("recoverySeconds") && !item.isNull("recoverySeconds")) item.optLong("recoverySeconds") else null,
+                        tradeKeys = item.optJSONArray("tradeKeys").toStrings(),
                     )) }
-                }, tradeKeys = value.optJSONArray("tradeKeys").toStrings(),
+                },
+                tradeKeys = value.optJSONArray("tradeKeys").toStrings(),
             ) },
             parameterComparison = buildList {
                 val values = root.optJSONArray("parameterComparison") ?: JSONArray()

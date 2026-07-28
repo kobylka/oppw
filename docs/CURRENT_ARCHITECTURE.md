@@ -79,6 +79,8 @@ Authentication endpoints live under `Mobile/backend/auth/`; push endpoints live 
 Daily and weekly mobile equity curves use Europe/Warsaw period boundaries derived from the exchange-calendar `weekCashOpen`. On the first actual trading session of a week, both begin at the cash open (normally 15:30); when an explicitly identified manual position opened earlier that same day, its exact opening timestamp becomes the boundary. On subsequent trading days the daily curve begins at midnight while the weekly curve retains the first-session boundary. The MT5 publisher supplies the additive `position.manual` authority, and Android parses it without changing trading behavior.
 Android also enforces the published weekly boundary while parsing status responses. This compatibility guard removes pre-open points from an older backend response and leaves an intentionally completed prior-week curve unchanged. It does not infer a boundary from a calendar-week timestamp, because only exchange-calendar `weekCashOpen` can identify a holiday-delayed first trading session.
 
+Analytics portfolio drawdowns use cash-flow-adjusted minute equity from `strategy_equity_points`, not closed-trade returns or daily closes. The backend computes exact maximum percentage/currency drawdown, episodes, durations, time under water, Recovery factor, the Calmar denominator, and Ulcer index before sending a bounded chart series to Android. Account/scope and rolling-window filters define this observed portfolio curve; trade-only leverage, exit-reason, and class filters do not claim to reconstruct a hypothetical equity series. History older than the minute retention window uses explicitly labeled `strategy_equity_daily` fallback points only when no minute rows remain for that account-day.
+
 ## Data authority
 
 | Record type | Authority |
@@ -103,7 +105,7 @@ Immutable authority records use deterministic identifiers and reject mutation. P
 
 ## Data lifecycle and recovery
 
-`Mobile/backend/admin/retention.php` is the sole operational-history retention command. It is CLI-only, dry-run by default, takes a database advisory lock, writes and verifies bounded gzip NDJSON archives, and can delete only ordinary diagnostic events older than 180 days and complete UTC account-days of minute equity older than 400 days. Equity deletion and its indefinite daily rollup commit atomically. Legacy `EXECUTION_STAGE` diagnostics remain available to the compatibility fallback.
+`Mobile/backend/admin/retention.php` is the sole operational-history retention command. It is CLI-only, dry-run by default, takes a database advisory lock, writes and verifies bounded gzip NDJSON archives, and can delete only ordinary diagnostic events older than 180 days and complete UTC account-days of minute equity older than 400 days. Equity deletion and its indefinite daily rollup commit atomically. Hot-window drawdown analytics use minute equity; older windows use the daily projection as an explicit fallback. Legacy `EXECUTION_STAGE` diagnostics remain available to the compatibility fallback.
 
 Strategy authority, cash flows, service-control audits, and every `strategy_market_points` minute OHLC record stay online indefinitely. The database rejects market-minute deletion independently of the retention command. Index changes require production-shaped measurement; existing event, equity, market, and service-control access indexes remain canonical until evidence supports a forward migration.
 

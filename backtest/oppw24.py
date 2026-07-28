@@ -638,9 +638,11 @@ class Sim:
                 qqq_open_price = qqq_open
                 self.trade_no += 1
                 
-                if(self.deposited < 100000):
-                    self.deposited += 1000
-                    self.balance += 1000
+                if(self.deposited < 200000):
+                    granular = int((self.balance/1.765/2240))
+                    plus_one = int(2240*(granular+1)*1.765-self.balance+100)
+                    self.deposited += plus_one
+                    self.balance += plus_one
 
             # --------------------------------------------------------
             # Cash-open exits.

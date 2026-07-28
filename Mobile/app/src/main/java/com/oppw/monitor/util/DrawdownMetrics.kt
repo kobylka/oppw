@@ -1,5 +1,6 @@
 package com.oppw.monitor.util
 
+import com.oppw.monitor.data.DrawdownAnalytics
 import com.oppw.monitor.data.DrawdownPoint
 import java.time.Instant
 import java.time.OffsetDateTime
@@ -29,7 +30,7 @@ data class DrawdownStatistics(
 fun drawdownStatistics(series: List<DrawdownPoint>): DrawdownStatistics {
     if (series.isEmpty()) return DrawdownStatistics()
 
-    val ordered = series.sortedWith(compareBy<DrawdownPoint> { it.index }.thenBy { it.closedAt })
+    val ordered = series.sortedWith(compareBy<DrawdownPoint> { it.index }.thenBy { it.capturedAt })
     val episodes = mutableListOf<DrawdownEpisode>()
     var startIndex: Int? = null
     var troughIndex = -1
@@ -38,20 +39,23 @@ fun drawdownStatistics(series: List<DrawdownPoint>): DrawdownStatistics {
         val start = startIndex ?: return
         val trough = ordered[troughIndex]
         val end = ordered[endIndex]
-        val startEpoch = parseDrawdownEpoch(ordered[start].closedAt)
-        val troughEpoch = parseDrawdownEpoch(trough.closedAt)
-        val endEpoch = parseDrawdownEpoch(end.closedAt)
+        val startEpoch = parseDrawdownEpoch(ordered[start].capturedAt)
+        val troughEpoch = parseDrawdownEpoch(trough.capturedAt)
+        val endEpoch = parseDrawdownEpoch(end.capturedAt)
         val elapsedSeconds = absoluteSeconds(startEpoch, endEpoch)
         episodes += DrawdownEpisode(
             number = episodes.size + 1,
-            startAt = ordered[start].closedAt,
-            troughAt = trough.closedAt,
-            endAt = end.closedAt,
+            startAt = ordered[start].capturedAt,
+            troughAt = trough.capturedAt,
+            endAt = end.capturedAt,
             depthPercent = -trough.drawdownPercent.coerceAtMost(0.0),
             recovered = recovered,
             elapsedSeconds = elapsedSeconds,
             recoverySeconds = if (recovered) absoluteSeconds(troughEpoch, endEpoch) else null,
-            tradeKeys = ordered.subList(start, endIndex + 1).map { it.tradeKey }.filter(String::isNotBlank).distinct(),
+            tradeKeys = ordered.subList(start, endIndex + 1)
+                .flatMap { point -> point.tradeKeys.ifEmpty { listOf(point.tradeKey) } }
+                .filter(String::isNotBlank)
+                .distinct(),
         )
         startIndex = null
         troughIndex = -1
@@ -72,8 +76,8 @@ fun drawdownStatistics(series: List<DrawdownPoint>): DrawdownStatistics {
     if (startIndex != null) closeEpisode(ordered.lastIndex, recovered = false)
 
     val completedRecoveries = episodes.mapNotNull { it.recoverySeconds }
-    val firstEpoch = parseDrawdownEpoch(ordered.first().closedAt)
-    val lastEpoch = parseDrawdownEpoch(ordered.last().closedAt)
+    val firstEpoch = parseDrawdownEpoch(ordered.first().capturedAt)
+    val lastEpoch = parseDrawdownEpoch(ordered.last().capturedAt)
     val observedSeconds = absoluteSeconds(firstEpoch, lastEpoch)
     val timeUnderwaterPercent = if (observedSeconds > 0L) {
         episodes.sumOf { it.elapsedSeconds }.toDouble() / observedSeconds.toDouble() * 100.0
@@ -87,6 +91,28 @@ fun drawdownStatistics(series: List<DrawdownPoint>): DrawdownStatistics {
         longestLengthSeconds = episodes.maxOfOrNull { it.elapsedSeconds } ?: 0L,
         averageTroughRecoverySeconds = completedRecoveries.map(Long::toDouble).averageOrZero(),
         timeUnderwaterPercent = timeUnderwaterPercent,
+    )
+}
+
+fun drawdownStatistics(drawdown: DrawdownAnalytics): DrawdownStatistics {
+    if (!drawdown.statisticsExact) return drawdownStatistics(drawdown.series)
+    return DrawdownStatistics(
+        episodes = drawdown.episodes.map { episode -> DrawdownEpisode(
+            number = episode.number,
+            startAt = episode.startAt,
+            troughAt = episode.troughAt,
+            endAt = episode.endAt,
+            depthPercent = episode.depthPercent,
+            recovered = episode.recovered,
+            elapsedSeconds = episode.elapsedSeconds,
+            recoverySeconds = episode.recoverySeconds,
+            tradeKeys = episode.tradeKeys,
+        ) },
+        averageDepthPercent = drawdown.averageDepthPercent,
+        averageLengthSeconds = drawdown.averageLengthSeconds,
+        longestLengthSeconds = drawdown.longestLengthSeconds,
+        averageTroughRecoverySeconds = drawdown.averageTroughRecoverySeconds,
+        timeUnderwaterPercent = drawdown.timeUnderwaterPercent,
     )
 }
 

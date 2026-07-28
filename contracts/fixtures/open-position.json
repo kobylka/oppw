@@ -232,6 +232,10 @@
       {"weekOffset": -1, "dayOffset": 3, "equity": 1080.0},
       {"weekOffset": -1, "dayOffset": 4, "equity": 972.0},
       {"weekOffset": 0, "dayOffset": 0, "equity": 1020.0}
+    ],
+    "intradayEquity": [
+      {"weekOffset": -1, "dayOffset": 0, "hour": 15, "minute": 29, "equity": 1000.0},
+      {"weekOffset": -1, "dayOffset": 0, "hour": 16, "minute": 0, "equity": 700.0, "positionTicket": 990101}
     ]
   }
 }

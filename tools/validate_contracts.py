@@ -245,14 +245,15 @@ def seed_analytics_fixture(
     )
 
     equity_rows = []
-    for item in fixture["dailyEquity"]:
+    for item in fixture["dailyEquity"] + fixture.get("intradayEquity", []):
         captured = (current_monday + timedelta(
             weeks=int(item["weekOffset"]), days=int(item["dayOffset"]),
-        )).replace(hour=21, minute=0)
+        )).replace(hour=int(item.get("hour", 21)), minute=int(item.get("minute", 0)))
         captured_utc = captured.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         equity = float(item["equity"])
+        position_ticket = str(int(item["positionTicket"])) if item.get("positionTicket") else "NULL"
         equity_rows.append(
-            f"({sql_text(account_key)},{sql_text(captured_utc)},{equity},{equity},0,0,NULL)"
+            f"({sql_text(account_key)},{sql_text(captured_utc)},{equity},{equity},0,0,{position_ticket})"
         )
     docker_sql(
         docker, container,
@@ -788,6 +789,20 @@ return [
                 raise AssertionError(
                     f"analytics riskSampleDays: expected {expected['riskSampleDays']}, got {summary['riskSampleDays']}"
                 )
+            assert_close(summary["maxDrawdown"], -float(expected["maxDrawdownCurrency"]), "minute max drawdown currency")
+            assert_close(summary["recoveryFactor"], float(expected["recoveryFactor"]), "minute recovery factor")
+            drawdown = analytics["drawdown"]
+            assert_close(drawdown["maxDrawdownPercent"], float(expected["maxDrawdownPercent"]), "minute max drawdown percent")
+            assert_close(drawdown["maxDrawdownCurrency"], float(expected["maxDrawdownCurrency"]), "drawdown currency magnitude")
+            assert_close(drawdown["ulcerIndexPercent"], float(expected["ulcerIndexPercent"]), "minute ulcer index")
+            if drawdown["sourceGranularity"] != "MINUTE" or not drawdown["cashFlowAdjusted"] or not drawdown["statisticsExact"]:
+                raise AssertionError("drawdown response did not identify exact cash-flow-adjusted minute equity authority")
+            if int(drawdown["sampleCount"]) != int(expected["drawdownSampleCount"]):
+                raise AssertionError("drawdown response omitted minute equity samples")
+            if len(drawdown["episodes"]) != int(expected["drawdownEpisodeCount"]):
+                raise AssertionError("drawdown response did not reconstruct minute equity episodes")
+            if "DEMO:990101" not in drawdown["episodes"][0]["tradeKeys"]:
+                raise AssertionError("drawdown episode lost its active position link")
             class_values = {item["tradeClass"]: item for item in analytics["tradeClasses"]}
             for trade_class, expected_return in expected["classAveragePreleverageReturnPercent"].items():
                 assert_close(

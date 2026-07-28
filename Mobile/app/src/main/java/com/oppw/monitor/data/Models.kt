@@ -486,12 +486,44 @@ data class DrawdownPoint(
     val equityIndex: Double,
     val drawdownPercent: Double,
     val maePercent: Double,
+    val capturedAt: String = closedAt,
+    val equity: Double = 0.0,
+    val drawdownCurrency: Double = 0.0,
+    val tradeKeys: List<String> = emptyList(),
+    val sourceGranularity: String = "",
+)
+
+data class DrawdownEpisodeAnalytics(
+    val number: Int,
+    val startAt: String,
+    val troughAt: String,
+    val endAt: String,
+    val depthPercent: Double,
+    val recovered: Boolean,
+    val elapsedSeconds: Long,
+    val recoverySeconds: Long?,
+    val tradeKeys: List<String>,
 )
 
 data class DrawdownAnalytics(
     val maxDrawdownPercent: Double = 0.0,
+    val maxDrawdownCurrency: Double = 0.0,
     val averageMaePercent: Double = 0.0,
+    val averageDepthPercent: Double = 0.0,
+    val averageLengthSeconds: Double = 0.0,
+    val longestLengthSeconds: Long = 0L,
+    val averageTroughRecoverySeconds: Double = 0.0,
+    val timeUnderwaterPercent: Double = 0.0,
+    val ulcerIndexPercent: Double = 0.0,
+    val sourceGranularity: String = "",
+    val cashFlowAdjusted: Boolean = false,
+    val statisticsExact: Boolean = false,
+    val sampleCount: Int = 0,
+    val minuteSampleCount: Int = 0,
+    val dailyFallbackSampleCount: Int = 0,
+    val seriesDownsampled: Boolean = false,
     val series: List<DrawdownPoint> = emptyList(),
+    val episodes: List<DrawdownEpisodeAnalytics> = emptyList(),
     val tradeKeys: List<String> = emptyList(),
 )
 

@@ -285,14 +285,14 @@ def main() -> int:
 
     contract_files = {
         "contracts/README.md": ("Executable cross-component contracts",),
-        "contracts/expectations.json": ('"decisionToSendMs"', '"backendPublicationMs"', '"authorityStages"'),
+        "contracts/expectations.json": ('"decisionToSendMs"', '"backendPublicationMs"', '"authorityStages"', '"maxDrawdownPercent"'),
         "contracts/fixtures/open-position.json": ('"strategyDocument"', '"PUBLISHED"'),
         "tools/validate_contracts.py": (
             "coordination.php", "ingest.php", "status.php", "analytics.php",
-            "mobile-receipt.php", "ContractResponseParserTest",
+            "mobile-receipt.php", "ContractResponseParserTest", "sourceGranularity",
         ),
         "Mobile/app/src/test/java/com/oppw/monitor/data/ContractResponseParserTest.kt": (
-            "parseAccounts", "parseResponse", "parseAnalytics",
+            "parseAccounts", "parseResponse", "parseAnalytics", "maxDrawdownPercent",
         ),
     }
     for relative, markers in contract_files.items():
@@ -362,6 +362,10 @@ def main() -> int:
             "manual-after-open weekly", "following-day daily", "completed-week weekly",
         ),
         "Mobile/backend/analytics.php": ("strategy_equity_daily", "minuteEquitySql"),
+        "Mobile/backend/analytics-drawdown.php": (
+            "cashFlowAdjusted", "statisticsExact", "MINUTE_WITH_DAILY_FALLBACK",
+            "oppw_downsample_drawdown_series",
+        ),
         "tools/validate_backup_restore.ps1": (
             "--single-transaction", "--routines", "--triggers", "sourceContainer",
             "restoreContainer", "strategy_market_points", "strategy_service_control_events",
