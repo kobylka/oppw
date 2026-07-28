@@ -1,6 +1,6 @@
 # ADR 0015: Material drawdown episode presentation
 
-- Status: Accepted
+- Status: Superseded by ADR 0016
 - Date: 2026-07-28
 
 ## Context

@@ -149,12 +149,14 @@ class DrawdownMetricsTest {
                     elapsedSeconds = 86_400L,
                     recoverySeconds = 82_800L,
                     tradeKeys = listOf("DEMO:2"),
+                    troughSource = "MINUTE_EQUITY",
                 ),
             ),
         ))
 
         assertEquals(2, result.episodeCount)
         assertEquals(listOf("DEMO:2"), result.episodes.single().tradeKeys)
+        assertEquals("MINUTE_EQUITY", result.episodes.single().troughSource)
         assertEquals(3.5, result.averageDepthPercent, 0.000001)
         assertEquals(45_000.0, result.averageLengthSeconds, 0.000001)
     }

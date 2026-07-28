@@ -82,7 +82,7 @@ class ContractResponseParserTest {
             assertEquals(-6.0, summary.averageLossLeveragedReturnPercent, 0.01)
             assertEquals(6.0341606292, summary.calmarRatio, 0.01)
             assertEquals(1.2014590348, summary.omegaRatio, 0.01)
-            assertEquals(12.2045242932, summary.ulcerIndexPercent, 0.01)
+            assertEquals(14.6644125490, summary.ulcerIndexPercent, 0.01)
             assertEquals(-10.0, summary.valueAtRisk95Percent, 0.01)
             assertEquals(-10.0, summary.expectedShortfall95Percent, 0.01)
             assertEquals(5, summary.riskSampleDays)
@@ -90,16 +90,19 @@ class ContractResponseParserTest {
             assertEquals(0.1, summary.recoveryFactor, 0.01)
         }
         analytics.drawdown.let { drawdown ->
-            assertEquals("MINUTE", drawdown.sourceGranularity)
+            assertEquals("DAILY_CLOSE_WITH_MINUTE_LOW", drawdown.sourceGranularity)
             assertTrue(drawdown.cashFlowAdjusted)
             assertTrue(drawdown.statisticsExact)
-            assertEquals(8, drawdown.sampleCount)
+            assertEquals(9, drawdown.sampleCount)
             assertEquals(30.0, drawdown.maxDrawdownPercent, 0.01)
             assertEquals(300.0, drawdown.maxDrawdownCurrency, 0.01)
             assertEquals(2, drawdown.episodeCount)
             assertEquals(86_400L, drawdown.episodeMinimumSeconds)
-            assertEquals(1, drawdown.episodes.size)
-            assertTrue("DEMO:990104" in drawdown.episodes.first().tradeKeys)
+            assertEquals("CLOSED_TRADES_WITH_MINUTE_EQUITY_REFINEMENT", drawdown.episodeAuthority)
+            assertEquals(2, drawdown.episodes.size)
+            assertEquals(20.0, drawdown.episodes.first().depthPercent, 0.01)
+            assertEquals("MINUTE_EQUITY", drawdown.episodes.first().troughSource)
+            assertTrue("DEMO:990102" in drawdown.episodes.first().tradeKeys)
         }
         mapOf("A" to 1.0, "B" to 0.5, "C" to -0.2, "D" to -1.0).forEach { (tradeClass, expectedReturn) ->
             val value = analytics.tradeClasses.first { it.tradeClass == tradeClass }

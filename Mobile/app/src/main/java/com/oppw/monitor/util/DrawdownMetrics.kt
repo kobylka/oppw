@@ -16,6 +16,7 @@ data class DrawdownEpisode(
     val elapsedSeconds: Long,
     val recoverySeconds: Long?,
     val tradeKeys: List<String>,
+    val troughSource: String = "",
 )
 
 data class DrawdownStatistics(
@@ -57,6 +58,7 @@ fun drawdownStatistics(series: List<DrawdownPoint>): DrawdownStatistics {
                 .flatMap { point -> point.tradeKeys.ifEmpty { listOf(point.tradeKey) } }
                 .filter(String::isNotBlank)
                 .distinct(),
+            troughSource = "RETURNED_SERIES",
         )
         startIndex = null
         troughIndex = -1
@@ -110,6 +112,7 @@ fun drawdownStatistics(drawdown: DrawdownAnalytics): DrawdownStatistics {
             elapsedSeconds = episode.elapsedSeconds,
             recoverySeconds = episode.recoverySeconds,
             tradeKeys = episode.tradeKeys,
+            troughSource = episode.troughSource,
         ) }.filter { it.elapsedSeconds >= minimumSeconds },
         episodeCount = maxOf(drawdown.episodeCount, drawdown.episodes.size),
         averageDepthPercent = drawdown.averageDepthPercent,

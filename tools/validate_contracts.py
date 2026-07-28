@@ -774,7 +774,7 @@ return [
             ):
                 raise AssertionError("status all-time equity omitted retained daily history")
             _, analytics, analytics_raw = http_json(
-                "GET", base_url + "analytics.php?account=DEMO&rolling_weeks=2", token=access_token,
+                "GET", base_url + "analytics.php?account=DEMO&rolling_weeks=3", token=access_token,
             )
             summary = analytics["summary"]
             for key in (
@@ -789,24 +789,48 @@ return [
                 raise AssertionError(
                     f"analytics riskSampleDays: expected {expected['riskSampleDays']}, got {summary['riskSampleDays']}"
                 )
-            assert_close(summary["maxDrawdown"], -float(expected["maxDrawdownCurrency"]), "minute max drawdown currency")
-            assert_close(summary["recoveryFactor"], float(expected["recoveryFactor"]), "minute recovery factor")
+            assert_close(summary["maxDrawdown"], -float(expected["maxDrawdownCurrency"]), "daily-low max drawdown currency")
+            assert_close(summary["recoveryFactor"], float(expected["recoveryFactor"]), "daily-low recovery factor")
             drawdown = analytics["drawdown"]
-            assert_close(drawdown["maxDrawdownPercent"], float(expected["maxDrawdownPercent"]), "minute max drawdown percent")
+            assert_close(drawdown["maxDrawdownPercent"], float(expected["maxDrawdownPercent"]), "daily-low max drawdown percent")
             assert_close(drawdown["maxDrawdownCurrency"], float(expected["maxDrawdownCurrency"]), "drawdown currency magnitude")
-            assert_close(drawdown["ulcerIndexPercent"], float(expected["ulcerIndexPercent"]), "minute ulcer index")
-            if drawdown["sourceGranularity"] != "MINUTE" or not drawdown["cashFlowAdjusted"] or not drawdown["statisticsExact"]:
-                raise AssertionError("drawdown response did not identify exact cash-flow-adjusted minute equity authority")
+            assert_close(drawdown["ulcerIndexPercent"], float(expected["ulcerIndexPercent"]), "daily-low ulcer index")
+            if drawdown["sourceGranularity"] != expected["drawdownSourceGranularity"] or not drawdown["cashFlowAdjusted"] or not drawdown["statisticsExact"]:
+                raise AssertionError("drawdown response did not identify the exact cash-flow-adjusted daily/minute-low authority")
             if int(drawdown["sampleCount"]) != int(expected["drawdownSampleCount"]):
-                raise AssertionError("drawdown response omitted minute equity samples")
+                raise AssertionError("drawdown response omitted daily first/low/close samples")
+            if drawdown["episodeAuthority"] != expected["drawdownEpisodeAuthority"]:
+                raise AssertionError("drawdown response did not identify its closed-trade episode authority")
             if int(drawdown["episodeCount"]) != int(expected["drawdownEpisodeCount"]):
-                raise AssertionError("drawdown response did not count every minute-equity episode")
+                raise AssertionError("drawdown response did not count every closed-trade drawdown episode")
             if int(drawdown["episodeMinimumSeconds"]) != int(expected["drawdownEpisodeMinimumSeconds"]):
                 raise AssertionError("drawdown response did not publish its episode-duration threshold")
             if len(drawdown["episodes"]) != int(expected["drawdownDisplayedEpisodeCount"]):
                 raise AssertionError("drawdown response did not omit episodes shorter than 24 hours")
-            if "DEMO:990104" not in drawdown["episodes"][0]["tradeKeys"]:
-                raise AssertionError("displayed drawdown episode lost its active position link")
+            first_episode = drawdown["episodes"][0]
+            if first_episode["troughSource"] != "MINUTE_EQUITY":
+                raise AssertionError("closed-trade drawdown did not use its minute-equity trough")
+            assert_close(first_episode["depthPercent"], float(expected["drawdownEpisodeMinuteDepthPercent"]), "minute-refined trade episode depth")
+            expected_trough = (current_monday + timedelta(weeks=-1, days=2)).replace(hour=16, minute=0)
+            actual_trough = datetime.fromisoformat(first_episode["troughAt"].replace("Z", "+00:00"))
+            if actual_trough != expected_trough.astimezone(timezone.utc):
+                raise AssertionError("closed-trade drawdown lost the exact minute trough timestamp")
+            if "DEMO:990102" not in first_episode["tradeKeys"]:
+                raise AssertionError("closed-trade drawdown episode lost its member trade link")
+            if int(analytics["filterOptions"]["effectiveRollingWeeks"]) != 3:
+                raise AssertionError("analytics rolling window ignored the latest equity week")
+            latest_episode = drawdown["episodes"][-1]
+            if latest_episode["recovered"] or latest_episode["troughSource"] != "MINUTE_EQUITY":
+                raise AssertionError("ongoing closed-trade drawdown did not use later minute equity")
+            assert_close(
+                latest_episode["depthPercent"],
+                float(expected["drawdownLatestEpisodeMinuteDepthPercent"]),
+                "latest minute-refined trade episode depth",
+            )
+            expected_latest_trough = (current_monday + timedelta(weeks=1)).replace(hour=21, minute=0)
+            actual_latest_trough = datetime.fromisoformat(latest_episode["troughAt"].replace("Z", "+00:00"))
+            if actual_latest_trough != expected_latest_trough.astimezone(timezone.utc):
+                raise AssertionError("ongoing drawdown omitted equity from a week later than the latest trade")
             class_values = {item["tradeClass"]: item for item in analytics["tradeClasses"]}
             for trade_class, expected_return in expected["classAveragePreleverageReturnPercent"].items():
                 assert_close(

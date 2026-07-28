@@ -227,6 +227,7 @@ object JsonParser {
                 dailyFallbackSampleCount = value.optInt("dailyFallbackSampleCount"),
                 episodeCount = value.optInt("episodeCount"),
                 episodeMinimumSeconds = value.optLong("episodeMinimumSeconds", 86_400L),
+                episodeAuthority = value.optString("episodeAuthority"),
                 seriesDownsampled = value.optBoolean("seriesDownsampled"),
                 series = buildList {
                     val values = value.optJSONArray("series") ?: JSONArray()
@@ -259,6 +260,7 @@ object JsonParser {
                         elapsedSeconds = item.optLong("elapsedSeconds"),
                         recoverySeconds = if (item.has("recoverySeconds") && !item.isNull("recoverySeconds")) item.optLong("recoverySeconds") else null,
                         tradeKeys = item.optJSONArray("tradeKeys").toStrings(),
+                        troughSource = item.optString("troughSource"),
                     )) }
                 },
                 tradeKeys = value.optJSONArray("tradeKeys").toStrings(),

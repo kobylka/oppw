@@ -34,13 +34,14 @@ class AnalyticsParserTest {
                 "averagePreleverageReturnPercent": 1.0
               }],
               "drawdown": {
-                "sourceGranularity": "MINUTE",
+                "sourceGranularity": "DAILY_CLOSE_WITH_MINUTE_LOW",
                 "cashFlowAdjusted": true,
                 "statisticsExact": true,
                 "sampleCount": 1440,
                 "minuteSampleCount": 1440,
                 "episodeCount": 2,
                 "episodeMinimumSeconds": 86400,
+                "episodeAuthority": "CLOSED_TRADES_WITH_MINUTE_EQUITY_REFINEMENT",
                 "maxDrawdownPercent": 8.5,
                 "maxDrawdownCurrency": 850.0,
                 "averageDepthPercent": 4.25,
@@ -58,7 +59,8 @@ class AnalyticsParserTest {
                   "recovered": true,
                   "elapsedSeconds": 86400,
                   "recoverySeconds": 84600,
-                  "tradeKeys": ["DEMO:42"]
+                  "tradeKeys": ["DEMO:42"],
+                  "troughSource": "MINUTE_EQUITY"
                 }],
                 "series": [{
                   "index": 1,
@@ -92,16 +94,18 @@ class AnalyticsParserTest {
         assertEquals(7.8, analytics.weekly.single().leveragedReturnPercent, 0.000001)
         assertEquals(1.0, analytics.tradeClasses.single().averagePreleverageReturnPercent, 0.000001)
         with(analytics.drawdown) {
-            assertEquals("MINUTE", sourceGranularity)
+            assertEquals("DAILY_CLOSE_WITH_MINUTE_LOW", sourceGranularity)
             assertEquals(true, cashFlowAdjusted)
             assertEquals(true, statisticsExact)
             assertEquals(1440, sampleCount)
             assertEquals(2, episodeCount)
             assertEquals(86_400L, episodeMinimumSeconds)
+            assertEquals("CLOSED_TRADES_WITH_MINUTE_EQUITY_REFINEMENT", episodeAuthority)
             assertEquals(8.5, maxDrawdownPercent, 0.000001)
             assertEquals(850.0, maxDrawdownCurrency, 0.000001)
             assertEquals(86_400L, longestLengthSeconds)
             assertEquals("2026-07-27T10:30:00Z", episodes.single().troughAt)
+            assertEquals("MINUTE_EQUITY", episodes.single().troughSource)
             assertEquals("2026-07-27T10:00:00Z", series.single().capturedAt)
             assertEquals(listOf("DEMO:42"), series.single().tradeKeys)
         }

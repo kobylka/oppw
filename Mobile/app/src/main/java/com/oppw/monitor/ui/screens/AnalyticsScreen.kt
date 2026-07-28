@@ -229,18 +229,18 @@ private fun AnalyticsContent(state: UiState, analytics: AnalyticsResponse, onFil
         }
         item {
             AppCard(Modifier.fillMaxWidth()) {
-                SectionTitle("Risk metrics", "${summary.riskSampleDays} daily returns · ${analytics.drawdown.sampleCount} equity samples")
-                MetricLink("Calmar ratio · minute drawdown", ratioValue(summary.calmarRatio), analytics.drawdown.tradeKeys, openDrillDown)
+                SectionTitle("Risk metrics", "${summary.riskSampleDays} returns · ${analytics.drawdown.sampleCount} samples")
+                MetricLink("Calmar ratio · daily + minute low", ratioValue(summary.calmarRatio), analytics.drawdown.tradeKeys, openDrillDown)
                 MetricLink("Omega ratio", ratioValue(summary.omegaRatio), emptyList(), openDrillDown)
-                MetricLink("Ulcer index · minute drawdown", unsignedPercent(summary.ulcerIndexPercent), analytics.drawdown.tradeKeys, openDrillDown)
+                MetricLink("Ulcer index · daily + minute low", unsignedPercent(summary.ulcerIndexPercent), analytics.drawdown.tradeKeys, openDrillDown)
                 MetricLink("Daily VaR 95% · loss", riskLossMagnitude(summary.valueAtRisk95Percent), emptyList(), openDrillDown)
                 MetricLink("Expected shortfall 95% · loss", riskLossMagnitude(summary.expectedShortfall95Percent), emptyList(), openDrillDown)
-                Text("Calmar uses annualized daily return over maximum minute-equity drawdown. Ulcer uses every retained equity sample. VaR and expected shortfall remain daily-return metrics.", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                Text("Calmar and Ulcer use daily equity augmented with each day's lowest minute-equity point. VaR and expected shortfall remain daily-return metrics.", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
             }
         }
         item {
             AppCard(Modifier.fillMaxWidth()) {
-                SectionTitle("Minute-equity drawdowns", "${drawdowns.episodes.size}/${drawdowns.episodeCount} shown · ≥24h")
+                SectionTitle("Daily-equity drawdown")
                 DrawdownChart(analytics, Modifier.fillMaxWidth().height(190.dp))
                 MetricLink("Maximum drawdown", percent(-abs(analytics.drawdown.maxDrawdownPercent)), analytics.drawdown.tradeKeys, openDrillDown)
                 MetricLink("Maximum drawdown · currency", money(drawdownCurrencyValue(analytics.drawdown.maxDrawdownCurrency), currency), analytics.drawdown.tradeKeys, openDrillDown)
@@ -250,13 +250,13 @@ private fun AnalyticsContent(state: UiState, analytics: AnalyticsResponse, onFil
                 MetricLink("Longest drawdown length", duration(drawdowns.longestLengthSeconds), analytics.drawdown.tradeKeys, openDrillDown)
                 MetricLink("Average trough-to-recovery length", duration(drawdowns.averageTroughRecoverySeconds.toLong()), analytics.drawdown.tradeKeys, openDrillDown)
                 MetricLink("Time under water", unsignedPercent(drawdowns.timeUnderwaterPercent), analytics.drawdown.tradeKeys, openDrillDown)
-                Text("Source: ${drawdownSourceLabel(analytics.drawdown.sourceGranularity)}. All aggregate values are cash-flow-adjusted and include every retained minute-equity drawdown, including unrealized intratrade losses. Only episode cards lasting at least 24 hours are transferred and shown. Length runs from the last equity peak to recovery, or to the latest minute when ongoing. Older retained history uses daily fallback points.", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
-                Text("Account/scope and rolling-window filters apply to this portfolio curve; leverage, exit-reason, and class filters remain trade-only.", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                Text("Source: ${drawdownSourceLabel(analytics.drawdown.sourceGranularity)}. All aggregate values are cash-flow-adjusted and use each Warsaw weekday's first, lowest-minute, and closing equity points. This preserves intraday unrealized troughs without treating every minute fluctuation as a separate daily drawdown.", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                Text("Episode cards below are formed only from closed-trade peaks and recoveries. Minute equity refines their starting point, lowest point, depth, recovery duration, and the current length of an ongoing episode. Account/scope and rolling-window filters apply to the equity curve; leverage, exit-reason, and class filters apply to the closed-trade list.", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
             }
         }
-        item { SectionTitle("Drawdowns lasting at least 24 hours", "minute-equity depth and elapsed time") }
+        item { SectionTitle("Closed-trade drawdowns", "${drawdowns.episodes.size}/${drawdowns.episodeCount} shown · ≥24h") }
         if (drawdowns.episodes.isEmpty()) {
-            item { AppCard(Modifier.fillMaxWidth()) { Text("No minute-equity drawdown lasted at least 24 hours in the selected account window.", color = TextSecondary) } }
+            item { AppCard(Modifier.fillMaxWidth()) { Text("No closed-trade drawdown lasted at least 24 hours in the selected account window.", color = TextSecondary) } }
         } else {
             items(drawdowns.episodes.reversed(), key = { it.number }) { episode ->
                 DrawdownEpisodeCard(episode, openDrillDown)
@@ -421,7 +421,12 @@ private fun DrawdownEpisodeCard(episode: DrawdownEpisode, onClick: (String, List
         )
         MetricLink("Depth", percent(-episode.depthPercent), episode.tradeKeys, onClick, DangerRed)
         MetricLink("Length", duration(episode.elapsedSeconds), episode.tradeKeys, onClick)
-        MetricLink("Trough", shortDateTime(episode.troughAt), episode.tradeKeys, onClick)
+        MetricLink(
+            if (episode.troughSource == "MINUTE_EQUITY") "Trough · minute equity" else "Trough",
+            shortDateTime(episode.troughAt),
+            episode.tradeKeys,
+            onClick,
+        )
         MetricLink(
             "Trough-to-recovery",
             episode.recoverySeconds?.let(::duration) ?: "Ongoing",
@@ -433,6 +438,8 @@ private fun DrawdownEpisodeCard(episode: DrawdownEpisode, onClick: (String, List
 }
 
 private fun drawdownSourceLabel(source: String): String = when (source) {
+    "DAILY_CLOSE_WITH_MINUTE_LOW" -> "daily + minute low"
+    "DAILY_CLOSE_WITH_MINUTE_LOW_AND_DAILY_FALLBACK" -> "daily + minute low + retained history"
     "MINUTE" -> "minute samples"
     "MINUTE_WITH_DAILY_FALLBACK" -> "minute + retained daily history"
     "DAILY_FALLBACK" -> "retained daily history"

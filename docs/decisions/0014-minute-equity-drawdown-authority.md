@@ -1,6 +1,6 @@
 # ADR 0014: Minute-equity drawdown authority
 
-- Status: Accepted
+- Status: Superseded by ADR 0016
 - Date: 2026-07-28
 
 ## Context

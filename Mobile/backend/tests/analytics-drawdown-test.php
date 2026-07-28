@@ -14,6 +14,13 @@ $row = static fn(string $time, float $equity, ?int $ticket = null): array => [
     'tradeKeys' => $ticket === null ? [] : ['DEMO:' . $ticket],
     'sourceGranularity' => 'MINUTE',
 ];
+$trade = static fn(int $ticket, string $openedAt, string $closedAt, float $return): array => [
+    'strategyKey' => 'DEMO',
+    'ticket' => $ticket,
+    'openedAt' => $openedAt,
+    'closedAt' => $closedAt,
+    'tradeReturn' => $return,
+];
 
 $intraday = oppw_drawdown_analyze([
     $row('2026-07-27T10:00:00Z', 100.0, 1),
@@ -54,6 +61,63 @@ if ($visibleEpisode['elapsedSeconds'] !== 86400 || !$visibleEpisode['recovered']
 }
 if ($visibleEpisode['troughAt'] !== '2026-07-25T01:00:00Z' || $visibleEpisode['tradeKeys'] !== ['DEMO:11']) {
     throw new RuntimeException('visible drawdown timing or trade links were lost');
+}
+
+$dailyHybrid = oppw_daily_equity_drawdown_analyze([
+    $row('2026-07-20T09:00:00Z', 100.0),
+    $row('2026-07-20T11:00:00Z', 110.0, 1),
+    $row('2026-07-20T13:00:00Z', 110.0),
+    $row('2026-07-21T09:00:00Z', 110.0),
+    $row('2026-07-21T10:00:00Z', 200.0),
+    $row('2026-07-21T11:00:00Z', 80.0, 2),
+    $row('2026-07-21T21:00:00Z', 110.0),
+    $row('2026-07-23T12:00:00Z', 120.0, 3),
+], [], [
+    $trade(1, '2026-07-20T10:00:00Z', '2026-07-20T12:00:00Z', 0.10),
+    $trade(2, '2026-07-21T10:00:00Z', '2026-07-22T12:00:00Z', -0.10),
+    $trade(3, '2026-07-23T10:00:00Z', '2026-07-23T12:00:00Z', 0.20),
+]);
+$assertClose((1.0 - 80.0 / 110.0) * 100.0, $dailyHybrid['maxDrawdownPercent'], 'daily curve with minute low');
+$assertClose(30.0, $dailyHybrid['maxDrawdownCurrency'], 'daily currency drawdown with minute low');
+if ($dailyHybrid['sourceGranularity'] !== 'DAILY_CLOSE_WITH_MINUTE_LOW'
+    || $dailyHybrid['sampleCount'] !== 6
+    || $dailyHybrid['minuteSampleCount'] !== 8) {
+    throw new RuntimeException('daily first/low/close curve did not retain its raw minute provenance');
+}
+if (count(array_filter($dailyHybrid['series'], static fn(array $point): bool => (float)$point['equity'] === 200.0)) !== 0) {
+    throw new RuntimeException('intraday highs incorrectly changed the daily drawdown curve');
+}
+if ($dailyHybrid['episodeAuthority'] !== 'CLOSED_TRADES_WITH_MINUTE_EQUITY_REFINEMENT'
+    || $dailyHybrid['episodeCount'] !== 1
+    || count($dailyHybrid['episodes']) !== 1) {
+    throw new RuntimeException('episode cards were not defined by closed-trade drawdowns');
+}
+$tradeEpisode = $dailyHybrid['episodes'][0];
+$assertClose((1.0 - 80.0 / 110.0) * 100.0, $tradeEpisode['depthPercent'], 'minute-refined trade drawdown depth');
+if ($tradeEpisode['troughAt'] !== '2026-07-21T11:00:00Z'
+    || $tradeEpisode['troughSource'] !== 'MINUTE_EQUITY'
+    || $tradeEpisode['startAt'] !== '2026-07-20T13:00:00Z'
+    || $tradeEpisode['elapsedSeconds'] !== 255600
+    || $tradeEpisode['recoverySeconds'] !== 176400
+    || $tradeEpisode['tradeKeys'] !== ['DEMO:1', 'DEMO:2', 'DEMO:3']) {
+    throw new RuntimeException('minute trough and timing did not refine the closed-trade episode');
+}
+
+$ongoingTradeDrawdown = oppw_daily_equity_drawdown_analyze([
+    $row('2026-07-20T12:00:00Z', 110.0, 21),
+    $row('2026-07-21T12:00:00Z', 99.0, 22),
+    $row('2026-07-24T12:00:00Z', 80.0, 22),
+], [], [
+    $trade(21, '2026-07-20T10:00:00Z', '2026-07-20T12:00:00Z', 0.10),
+    $trade(22, '2026-07-21T10:00:00Z', '2026-07-21T12:00:00Z', -0.10),
+]);
+$ongoingEpisode = $ongoingTradeDrawdown['episodes'][0];
+if ($ongoingEpisode['recovered']
+    || $ongoingEpisode['endAt'] !== '2026-07-24T12:00:00Z'
+    || $ongoingEpisode['elapsedSeconds'] !== 345600
+    || $ongoingEpisode['recoverySeconds'] !== null
+    || $ongoingEpisode['troughSource'] !== 'MINUTE_EQUITY') {
+    throw new RuntimeException('ongoing closed-trade drawdown did not extend to the latest minute-equity point');
 }
 
 $cashFlowAdjusted = oppw_drawdown_analyze([
@@ -100,4 +164,4 @@ if (!$bounded['seriesDownsampled'] || count($bounded['series']) > 6) {
     throw new RuntimeException('drawdown chart series was not bounded');
 }
 
-echo "ANALYTICS DRAWDOWN TESTS PASSED cases=6\n";
+echo "ANALYTICS DRAWDOWN TESTS PASSED cases=10\n";

@@ -503,6 +503,7 @@ data class DrawdownEpisodeAnalytics(
     val elapsedSeconds: Long,
     val recoverySeconds: Long?,
     val tradeKeys: List<String>,
+    val troughSource: String = "",
 )
 
 data class DrawdownAnalytics(
@@ -523,6 +524,7 @@ data class DrawdownAnalytics(
     val dailyFallbackSampleCount: Int = 0,
     val episodeCount: Int = 0,
     val episodeMinimumSeconds: Long = 86_400L,
+    val episodeAuthority: String = "",
     val seriesDownsampled: Boolean = false,
     val series: List<DrawdownPoint> = emptyList(),
     val episodes: List<DrawdownEpisodeAnalytics> = emptyList(),
