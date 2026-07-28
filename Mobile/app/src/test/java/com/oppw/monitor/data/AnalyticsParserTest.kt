@@ -39,11 +39,13 @@ class AnalyticsParserTest {
                 "statisticsExact": true,
                 "sampleCount": 1440,
                 "minuteSampleCount": 1440,
+                "episodeCount": 2,
+                "episodeMinimumSeconds": 86400,
                 "maxDrawdownPercent": 8.5,
                 "maxDrawdownCurrency": 850.0,
                 "averageDepthPercent": 4.25,
                 "averageLengthSeconds": 3600,
-                "longestLengthSeconds": 7200,
+                "longestLengthSeconds": 86400,
                 "averageTroughRecoverySeconds": 1800,
                 "timeUnderwaterPercent": 25.0,
                 "ulcerIndexPercent": 2.75,
@@ -51,11 +53,11 @@ class AnalyticsParserTest {
                   "number": 1,
                   "startAt": "2026-07-27T10:00:00Z",
                   "troughAt": "2026-07-27T10:30:00Z",
-                  "endAt": "2026-07-27T12:00:00Z",
+                  "endAt": "2026-07-28T10:00:00Z",
                   "depthPercent": 8.5,
                   "recovered": true,
-                  "elapsedSeconds": 7200,
-                  "recoverySeconds": 5400,
+                  "elapsedSeconds": 86400,
+                  "recoverySeconds": 84600,
                   "tradeKeys": ["DEMO:42"]
                 }],
                 "series": [{
@@ -94,9 +96,11 @@ class AnalyticsParserTest {
             assertEquals(true, cashFlowAdjusted)
             assertEquals(true, statisticsExact)
             assertEquals(1440, sampleCount)
+            assertEquals(2, episodeCount)
+            assertEquals(86_400L, episodeMinimumSeconds)
             assertEquals(8.5, maxDrawdownPercent, 0.000001)
             assertEquals(850.0, maxDrawdownCurrency, 0.000001)
-            assertEquals(7200L, longestLengthSeconds)
+            assertEquals(86_400L, longestLengthSeconds)
             assertEquals("2026-07-27T10:30:00Z", episodes.single().troughAt)
             assertEquals("2026-07-27T10:00:00Z", series.single().capturedAt)
             assertEquals(listOf("DEMO:42"), series.single().tradeKeys)
@@ -132,6 +136,7 @@ class AnalyticsParserTest {
         assertEquals(4.5, analytics.drawdown.maxDrawdownPercent, 0.0)
         assertEquals(0.0, analytics.drawdown.maxDrawdownCurrency, 0.0)
         assertEquals(0.0, analytics.drawdown.averageDepthPercent, 0.0)
+        assertEquals(86_400L, analytics.drawdown.episodeMinimumSeconds)
         assertEquals(0.0, analytics.drawdown.series.single().equity, 0.0)
         assertEquals(0.0, analytics.drawdown.series.single().drawdownCurrency, 0.0)
     }

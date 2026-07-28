@@ -225,6 +225,8 @@ object JsonParser {
                 sampleCount = value.optInt("sampleCount"),
                 minuteSampleCount = value.optInt("minuteSampleCount"),
                 dailyFallbackSampleCount = value.optInt("dailyFallbackSampleCount"),
+                episodeCount = value.optInt("episodeCount"),
+                episodeMinimumSeconds = value.optLong("episodeMinimumSeconds", 86_400L),
                 seriesDownsampled = value.optBoolean("seriesDownsampled"),
                 series = buildList {
                     val values = value.optJSONArray("series") ?: JSONArray()

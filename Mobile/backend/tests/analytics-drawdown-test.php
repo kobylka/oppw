@@ -27,14 +27,33 @@ $assertClose(sqrt((100.0 + (100.0 / 21.0) ** 2) / 4.0), $intraday['ulcerIndexPer
 if ($intraday['sampleCount'] !== 4 || $intraday['minuteSampleCount'] !== 4) {
     throw new RuntimeException('minute samples were not used as the drawdown authority');
 }
-if (count($intraday['episodes']) !== 2) throw new RuntimeException('expected recovered and ongoing minute drawdowns');
-$first = $intraday['episodes'][0];
-if (!$first['recovered'] || $first['elapsedSeconds'] !== 120 || $first['recoverySeconds'] !== 60) {
-    throw new RuntimeException('minute episode timing was not reconstructed exactly');
+if ($intraday['episodeCount'] !== 2 || count($intraday['episodes']) !== 0) {
+    throw new RuntimeException('short drawdowns were not counted exactly and omitted from the response');
 }
-if ($first['troughAt'] !== '2026-07-27T10:01:00Z') throw new RuntimeException('minute trough timestamp was lost');
-if ($intraday['episodes'][1]['recovered'] || $intraday['episodes'][1]['elapsedSeconds'] !== 60) {
-    throw new RuntimeException('ongoing minute drawdown was not measured to the latest sample');
+$assertClose((10.0 + 100.0 / 21.0) / 2.0, $intraday['averageDepthPercent'], 'all-episode average depth');
+$assertClose(90.0, $intraday['averageLengthSeconds'], 'all-episode average length');
+$assertClose(60.0, $intraday['averageTroughRecoverySeconds'], 'all-episode average recovery');
+if ($intraday['longestLengthSeconds'] !== 120 || $intraday['episodeMinimumSeconds'] !== 86400) {
+    throw new RuntimeException('short episodes stopped contributing to exact aggregate metrics');
+}
+
+$minimumDuration = oppw_drawdown_analyze([
+    $row('2026-07-25T00:00:00Z', 100.0),
+    $row('2026-07-25T01:00:00Z', 90.0, 11),
+    $row('2026-07-26T00:00:00Z', 100.0),
+    $row('2026-07-26T01:00:00Z', 100.0),
+    $row('2026-07-26T02:00:00Z', 90.0, 12),
+    $row('2026-07-26T03:00:00Z', 100.0),
+], []);
+if ($minimumDuration['episodeCount'] !== 2 || count($minimumDuration['episodes']) !== 1) {
+    throw new RuntimeException('drawdown response did not retain only episodes lasting at least 24 hours');
+}
+$visibleEpisode = $minimumDuration['episodes'][0];
+if ($visibleEpisode['elapsedSeconds'] !== 86400 || !$visibleEpisode['recovered'] || $visibleEpisode['recoverySeconds'] !== 82800) {
+    throw new RuntimeException('the inclusive 24-hour drawdown boundary was not preserved exactly');
+}
+if ($visibleEpisode['troughAt'] !== '2026-07-25T01:00:00Z' || $visibleEpisode['tradeKeys'] !== ['DEMO:11']) {
+    throw new RuntimeException('visible drawdown timing or trade links were lost');
 }
 
 $cashFlowAdjusted = oppw_drawdown_analyze([
@@ -81,4 +100,4 @@ if (!$bounded['seriesDownsampled'] || count($bounded['series']) > 6) {
     throw new RuntimeException('drawdown chart series was not bounded');
 }
 
-echo "ANALYTICS DRAWDOWN TESTS PASSED cases=4\n";
+echo "ANALYTICS DRAWDOWN TESTS PASSED cases=6\n";

@@ -521,6 +521,8 @@ data class DrawdownAnalytics(
     val sampleCount: Int = 0,
     val minuteSampleCount: Int = 0,
     val dailyFallbackSampleCount: Int = 0,
+    val episodeCount: Int = 0,
+    val episodeMinimumSeconds: Long = 86_400L,
     val seriesDownsampled: Boolean = false,
     val series: List<DrawdownPoint> = emptyList(),
     val episodes: List<DrawdownEpisodeAnalytics> = emptyList(),

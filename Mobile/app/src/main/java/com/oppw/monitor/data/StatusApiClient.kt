@@ -159,7 +159,7 @@ class StatusApiClient(context: Context, private val baseUrl: String = BuildConfi
         val connection = (url.openConnection() as HttpsURLConnection).apply {
             requestMethod = method
             connectTimeout = 8_000
-            readTimeout = 8_000
+            readTimeout = requestReadTimeoutMillis(path)
             setRequestProperty("Accept", "application/json")
             setRequestProperty("Content-Type", "application/json; charset=utf-8")
             if (!accessToken.isNullOrBlank()) setRequestProperty("Authorization", "Bearer $accessToken")
@@ -185,3 +185,6 @@ class StatusApiClient(context: Context, private val baseUrl: String = BuildConfi
         private val PROCESS_REFRESH_MUTEX = Mutex()
     }
 }
+
+internal fun requestReadTimeoutMillis(path: String): Int =
+    if (path.substringBefore('?') == "analytics.php") 30_000 else 8_000

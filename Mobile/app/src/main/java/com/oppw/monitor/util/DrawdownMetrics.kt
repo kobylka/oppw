@@ -20,6 +20,7 @@ data class DrawdownEpisode(
 
 data class DrawdownStatistics(
     val episodes: List<DrawdownEpisode> = emptyList(),
+    val episodeCount: Int = 0,
     val averageDepthPercent: Double = 0.0,
     val averageLengthSeconds: Double = 0.0,
     val longestLengthSeconds: Long = 0L,
@@ -31,7 +32,7 @@ fun drawdownStatistics(series: List<DrawdownPoint>): DrawdownStatistics {
     if (series.isEmpty()) return DrawdownStatistics()
 
     val ordered = series.sortedWith(compareBy<DrawdownPoint> { it.index }.thenBy { it.capturedAt })
-    val episodes = mutableListOf<DrawdownEpisode>()
+    val allEpisodes = mutableListOf<DrawdownEpisode>()
     var startIndex: Int? = null
     var troughIndex = -1
 
@@ -43,8 +44,8 @@ fun drawdownStatistics(series: List<DrawdownPoint>): DrawdownStatistics {
         val troughEpoch = parseDrawdownEpoch(trough.capturedAt)
         val endEpoch = parseDrawdownEpoch(end.capturedAt)
         val elapsedSeconds = absoluteSeconds(startEpoch, endEpoch)
-        episodes += DrawdownEpisode(
-            number = episodes.size + 1,
+        allEpisodes += DrawdownEpisode(
+            number = allEpisodes.size + 1,
             startAt = ordered[start].capturedAt,
             troughAt = trough.capturedAt,
             endAt = end.capturedAt,
@@ -75,20 +76,21 @@ fun drawdownStatistics(series: List<DrawdownPoint>): DrawdownStatistics {
     }
     if (startIndex != null) closeEpisode(ordered.lastIndex, recovered = false)
 
-    val completedRecoveries = episodes.mapNotNull { it.recoverySeconds }
+    val completedRecoveries = allEpisodes.mapNotNull { it.recoverySeconds }
     val firstEpoch = parseDrawdownEpoch(ordered.first().capturedAt)
     val lastEpoch = parseDrawdownEpoch(ordered.last().capturedAt)
     val observedSeconds = absoluteSeconds(firstEpoch, lastEpoch)
     val timeUnderwaterPercent = if (observedSeconds > 0L) {
-        episodes.sumOf { it.elapsedSeconds }.toDouble() / observedSeconds.toDouble() * 100.0
+        allEpisodes.sumOf { it.elapsedSeconds }.toDouble() / observedSeconds.toDouble() * 100.0
     } else {
         ordered.count { it.drawdownPercent < -DRAWDOWN_EPSILON }.toDouble() / ordered.size * 100.0
     }
     return DrawdownStatistics(
-        episodes = episodes,
-        averageDepthPercent = episodes.map { it.depthPercent }.averageOrZero(),
-        averageLengthSeconds = episodes.map { it.elapsedSeconds.toDouble() }.averageOrZero(),
-        longestLengthSeconds = episodes.maxOfOrNull { it.elapsedSeconds } ?: 0L,
+        episodes = allEpisodes.filter { it.elapsedSeconds >= DRAWDOWN_EPISODE_MINIMUM_SECONDS },
+        episodeCount = allEpisodes.size,
+        averageDepthPercent = allEpisodes.map { it.depthPercent }.averageOrZero(),
+        averageLengthSeconds = allEpisodes.map { it.elapsedSeconds.toDouble() }.averageOrZero(),
+        longestLengthSeconds = allEpisodes.maxOfOrNull { it.elapsedSeconds } ?: 0L,
         averageTroughRecoverySeconds = completedRecoveries.map(Long::toDouble).averageOrZero(),
         timeUnderwaterPercent = timeUnderwaterPercent,
     )
@@ -96,6 +98,7 @@ fun drawdownStatistics(series: List<DrawdownPoint>): DrawdownStatistics {
 
 fun drawdownStatistics(drawdown: DrawdownAnalytics): DrawdownStatistics {
     if (!drawdown.statisticsExact) return drawdownStatistics(drawdown.series)
+    val minimumSeconds = drawdown.episodeMinimumSeconds.coerceAtLeast(DRAWDOWN_EPISODE_MINIMUM_SECONDS)
     return DrawdownStatistics(
         episodes = drawdown.episodes.map { episode -> DrawdownEpisode(
             number = episode.number,
@@ -107,7 +110,8 @@ fun drawdownStatistics(drawdown: DrawdownAnalytics): DrawdownStatistics {
             elapsedSeconds = episode.elapsedSeconds,
             recoverySeconds = episode.recoverySeconds,
             tradeKeys = episode.tradeKeys,
-        ) },
+        ) }.filter { it.elapsedSeconds >= minimumSeconds },
+        episodeCount = maxOf(drawdown.episodeCount, drawdown.episodes.size),
         averageDepthPercent = drawdown.averageDepthPercent,
         averageLengthSeconds = drawdown.averageLengthSeconds,
         longestLengthSeconds = drawdown.longestLengthSeconds,
@@ -125,4 +129,5 @@ private fun absoluteSeconds(startEpoch: Long?, endEpoch: Long?): Long =
 
 private fun List<Double>.averageOrZero(): Double = if (isEmpty()) 0.0 else average()
 
+const val DRAWDOWN_EPISODE_MINIMUM_SECONDS = 86_400L
 private const val DRAWDOWN_EPSILON = 1e-9

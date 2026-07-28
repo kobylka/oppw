@@ -96,8 +96,10 @@ class ContractResponseParserTest {
             assertEquals(8, drawdown.sampleCount)
             assertEquals(30.0, drawdown.maxDrawdownPercent, 0.01)
             assertEquals(300.0, drawdown.maxDrawdownCurrency, 0.01)
-            assertEquals(2, drawdown.episodes.size)
-            assertTrue("DEMO:990101" in drawdown.episodes.first().tradeKeys)
+            assertEquals(2, drawdown.episodeCount)
+            assertEquals(86_400L, drawdown.episodeMinimumSeconds)
+            assertEquals(1, drawdown.episodes.size)
+            assertTrue("DEMO:990104" in drawdown.episodes.first().tradeKeys)
         }
         mapOf("A" to 1.0, "B" to 0.5, "C" to -0.2, "D" to -1.0).forEach { (tradeClass, expectedReturn) ->
             val value = analytics.tradeClasses.first { it.tradeClass == tradeClass }

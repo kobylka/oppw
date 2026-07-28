@@ -240,23 +240,23 @@ private fun AnalyticsContent(state: UiState, analytics: AnalyticsResponse, onFil
         }
         item {
             AppCard(Modifier.fillMaxWidth()) {
-                SectionTitle("Minute-equity drawdowns", "${drawdowns.episodes.size} episodes · ${drawdownSourceLabel(analytics.drawdown.sourceGranularity)}")
+                SectionTitle("Minute-equity drawdowns", "${drawdowns.episodes.size}/${drawdowns.episodeCount} shown · ≥24h")
                 DrawdownChart(analytics, Modifier.fillMaxWidth().height(190.dp))
                 MetricLink("Maximum drawdown", percent(-abs(analytics.drawdown.maxDrawdownPercent)), analytics.drawdown.tradeKeys, openDrillDown)
                 MetricLink("Maximum drawdown · currency", money(drawdownCurrencyValue(analytics.drawdown.maxDrawdownCurrency), currency), analytics.drawdown.tradeKeys, openDrillDown)
                 MetricLink("Recovery factor", ratioValue(summary.recoveryFactor), analytics.drawdown.tradeKeys, openDrillDown)
-                MetricLink("Average drawdown depth", percent(-drawdowns.averageDepthPercent), drawdownTradeKeys(drawdowns.episodes), openDrillDown)
-                MetricLink("Average drawdown length", duration(drawdowns.averageLengthSeconds.toLong()), drawdownTradeKeys(drawdowns.episodes), openDrillDown)
-                MetricLink("Longest drawdown length", duration(drawdowns.longestLengthSeconds), drawdowns.episodes.maxByOrNull { it.elapsedSeconds }?.tradeKeys.orEmpty(), openDrillDown)
-                MetricLink("Average trough-to-recovery length", duration(drawdowns.averageTroughRecoverySeconds.toLong()), drawdownTradeKeys(drawdowns.episodes.filter { it.recovered }), openDrillDown)
+                MetricLink("Average drawdown depth", percent(-drawdowns.averageDepthPercent), analytics.drawdown.tradeKeys, openDrillDown)
+                MetricLink("Average drawdown length", duration(drawdowns.averageLengthSeconds.toLong()), analytics.drawdown.tradeKeys, openDrillDown)
+                MetricLink("Longest drawdown length", duration(drawdowns.longestLengthSeconds), analytics.drawdown.tradeKeys, openDrillDown)
+                MetricLink("Average trough-to-recovery length", duration(drawdowns.averageTroughRecoverySeconds.toLong()), analytics.drawdown.tradeKeys, openDrillDown)
                 MetricLink("Time under water", unsignedPercent(drawdowns.timeUnderwaterPercent), analytics.drawdown.tradeKeys, openDrillDown)
-                Text("All values are cash-flow-adjusted and use retained minute equity, including unrealized intratrade losses. Length runs from the last equity peak to recovery, or to the latest minute when ongoing. Older retained history uses daily fallback points.", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                Text("Source: ${drawdownSourceLabel(analytics.drawdown.sourceGranularity)}. All aggregate values are cash-flow-adjusted and include every retained minute-equity drawdown, including unrealized intratrade losses. Only episode cards lasting at least 24 hours are transferred and shown. Length runs from the last equity peak to recovery, or to the latest minute when ongoing. Older retained history uses daily fallback points.", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
                 Text("Account/scope and rolling-window filters apply to this portfolio curve; leverage, exit-reason, and class filters remain trade-only.", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
             }
         }
-        item { SectionTitle("All drawdowns", "minute-equity depth and elapsed time") }
+        item { SectionTitle("Drawdowns lasting at least 24 hours", "minute-equity depth and elapsed time") }
         if (drawdowns.episodes.isEmpty()) {
-            item { AppCard(Modifier.fillMaxWidth()) { Text("No minute-equity drawdowns in the selected account window.", color = TextSecondary) } }
+            item { AppCard(Modifier.fillMaxWidth()) { Text("No minute-equity drawdown lasted at least 24 hours in the selected account window.", color = TextSecondary) } }
         } else {
             items(drawdowns.episodes.reversed(), key = { it.number }) { episode ->
                 DrawdownEpisodeCard(episode, openDrillDown)
@@ -431,9 +431,6 @@ private fun DrawdownEpisodeCard(episode: DrawdownEpisode, onClick: (String, List
         )
     }
 }
-
-private fun drawdownTradeKeys(episodes: List<DrawdownEpisode>): List<String> =
-    episodes.flatMap { it.tradeKeys }.distinct()
 
 private fun drawdownSourceLabel(source: String): String = when (source) {
     "MINUTE" -> "minute samples"

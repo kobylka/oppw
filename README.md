@@ -116,7 +116,7 @@ The service runs as LocalSystem and launches canonical MT5 children in the confi
 
 ## Analytics and data lifecycle
 
-Portfolio drawdowns are calculated by the backend from cash-flow-adjusted `strategy_equity_points` minute equity. Maximum percentage and currency drawdown, episodes, duration, time underwater, Recovery factor, the Calmar denominator, and Ulcer index all share this authority. Exact statistics are computed before the chart series is bounded for Android.
+Portfolio drawdowns are calculated by the backend from cash-flow-adjusted `strategy_equity_points` minute equity. Maximum percentage and currency drawdown, duration, time underwater, Recovery factor, the Calmar denominator, and Ulcer index all share this authority and include every drawdown. Exact statistics are computed before the chart series is bounded for Android; to keep long-window analytics responsive, only episode details lasting at least 24 hours are transferred and shown.
 
 Minute equity remains hot for 400 days. Retention atomically creates indefinite `strategy_equity_daily` projections before removing eligible minute rows, and older analytics explicitly report daily fallback granularity. `strategy_market_points` minute OHLC history and immutable strategy authority remain online indefinitely.
 

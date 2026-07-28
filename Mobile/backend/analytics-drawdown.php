@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 const OPPW_DRAWDOWN_EPSILON = 1.0e-12;
 const OPPW_DRAWDOWN_SERIES_MAXIMUM = 2000;
+const OPPW_DRAWDOWN_EPISODE_MINIMUM_SECONDS = 86400;
 
 function oppw_drawdown_iso(string $value): string
 {
@@ -161,6 +162,7 @@ function oppw_empty_drawdown_result(): array
     return [
         'sourceGranularity' => 'NONE', 'cashFlowAdjusted' => true, 'statisticsExact' => true,
         'sampleCount' => 0, 'minuteSampleCount' => 0, 'dailyFallbackSampleCount' => 0,
+        'episodeCount' => 0, 'episodeMinimumSeconds' => OPPW_DRAWDOWN_EPISODE_MINIMUM_SECONDS,
         'seriesDownsampled' => false, 'maxDrawdownPercent' => 0.0, 'maxDrawdownCurrency' => 0.0,
         'averageDepthPercent' => 0.0, 'averageLengthSeconds' => 0.0,
         'longestLengthSeconds' => 0, 'averageTroughRecoverySeconds' => 0.0,
@@ -181,6 +183,13 @@ function oppw_drawdown_analyze(
 
     $series = [];
     $episodes = [];
+    $episodeCount = 0;
+    $episodeDepthSum = 0.0;
+    $episodeLengthSum = 0.0;
+    $longestLengthSeconds = 0;
+    $recoveryCount = 0;
+    $recoverySum = 0.0;
+    $underwaterSeconds = 0;
     $allTradeKeys = [];
     $sampleCount = 0;
     $minuteSampleCount = 0;
@@ -203,6 +212,26 @@ function oppw_drawdown_analyze(
     $latestPeakPoint = null;
     $firstPoint = null;
     $lastPoint = null;
+    $recordEpisode = static function (array $episode) use (
+        &$episodes,
+        &$episodeDepthSum,
+        &$episodeLengthSum,
+        &$longestLengthSeconds,
+        &$recoveryCount,
+        &$recoverySum,
+        &$underwaterSeconds
+    ): void {
+        $elapsedSeconds = (int)$episode['elapsedSeconds'];
+        $episodeDepthSum += (float)$episode['depthPercent'];
+        $episodeLengthSum += $elapsedSeconds;
+        $longestLengthSeconds = max($longestLengthSeconds, $elapsedSeconds);
+        $underwaterSeconds += $elapsedSeconds;
+        if ($episode['recoverySeconds'] !== null) {
+            $recoveryCount++;
+            $recoverySum += (int)$episode['recoverySeconds'];
+        }
+        if ($elapsedSeconds >= OPPW_DRAWDOWN_EPISODE_MINIMUM_SECONDS) $episodes[] = $episode;
+    };
 
     foreach ($portfolioRows as $row) {
         $capturedAt = (string)($row['capturedAt'] ?? '');
@@ -275,7 +304,8 @@ function oppw_drawdown_analyze(
         } else {
             if ($activeEpisode !== null) {
                 foreach ($point['tradeKeys'] as $key) $activeEpisode['tradeKeys'][$key] = true;
-                $episodes[] = oppw_close_drawdown_episode($activeEpisode, $point, true, count($episodes) + 1);
+                $episodeCount++;
+                $recordEpisode(oppw_close_drawdown_episode($activeEpisode, $point, true, $episodeCount));
                 $activeEpisode = null;
             }
             $latestPeakPoint = $point;
@@ -287,16 +317,13 @@ function oppw_drawdown_analyze(
 
     if ($sampleCount === 0 || $firstPoint === null || $lastPoint === null) return oppw_empty_drawdown_result();
     if ($activeEpisode !== null) {
-        $episodes[] = oppw_close_drawdown_episode($activeEpisode, $lastPoint, false, count($episodes) + 1);
+        $episodeCount++;
+        $recordEpisode(oppw_close_drawdown_episode($activeEpisode, $lastPoint, false, $episodeCount));
     }
 
-    $depths = array_column($episodes, 'depthPercent');
-    $lengths = array_column($episodes, 'elapsedSeconds');
-    $recoveries = array_values(array_filter(array_column($episodes, 'recoverySeconds'), static fn(mixed $value): bool => $value !== null));
     $firstEpoch = oppw_drawdown_epoch((string)$firstPoint['capturedAt']);
     $lastEpoch = oppw_drawdown_epoch((string)$lastPoint['capturedAt']);
     $observedSeconds = $firstEpoch !== null && $lastEpoch !== null ? max(0, $lastEpoch - $firstEpoch) : 0;
-    $underwaterSeconds = array_sum($lengths);
     $timeUnderwaterPercent = $observedSeconds > 0
         ? min(100.0, $underwaterSeconds / $observedSeconds * 100.0)
         : ($underwaterSampleCount / $sampleCount * 100.0);
@@ -312,13 +339,15 @@ function oppw_drawdown_analyze(
         'sampleCount' => $sampleCount,
         'minuteSampleCount' => $minuteSampleCount,
         'dailyFallbackSampleCount' => $dailyFallbackSampleCount,
+        'episodeCount' => $episodeCount,
+        'episodeMinimumSeconds' => OPPW_DRAWDOWN_EPISODE_MINIMUM_SECONDS,
         'seriesDownsampled' => count($boundedSeries) < $sampleCount,
         'maxDrawdownPercent' => abs($maximumDrawdownPercent),
         'maxDrawdownCurrency' => abs($maximumDrawdownCurrency),
-        'averageDepthPercent' => $depths ? array_sum($depths) / count($depths) : 0.0,
-        'averageLengthSeconds' => $lengths ? array_sum($lengths) / count($lengths) : 0.0,
-        'longestLengthSeconds' => $lengths ? max($lengths) : 0,
-        'averageTroughRecoverySeconds' => $recoveries ? array_sum($recoveries) / count($recoveries) : 0.0,
+        'averageDepthPercent' => $episodeCount > 0 ? $episodeDepthSum / $episodeCount : 0.0,
+        'averageLengthSeconds' => $episodeCount > 0 ? $episodeLengthSum / $episodeCount : 0.0,
+        'longestLengthSeconds' => $longestLengthSeconds,
+        'averageTroughRecoverySeconds' => $recoveryCount > 0 ? $recoverySum / $recoveryCount : 0.0,
         'timeUnderwaterPercent' => $timeUnderwaterPercent,
         'ulcerIndexPercent' => sqrt($ulcerSquares / $sampleCount),
         'series' => $boundedSeries,

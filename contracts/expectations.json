@@ -28,6 +28,8 @@
   "recoveryFactor": 0.1,
   "drawdownSampleCount": 8,
   "drawdownEpisodeCount": 2,
+  "drawdownDisplayedEpisodeCount": 1,
+  "drawdownEpisodeMinimumSeconds": 86400,
   "authorityStages": 10,
   "authorityFills": 2,
   "strategyDecisions": 1,

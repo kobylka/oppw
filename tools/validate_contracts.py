@@ -799,10 +799,14 @@ return [
                 raise AssertionError("drawdown response did not identify exact cash-flow-adjusted minute equity authority")
             if int(drawdown["sampleCount"]) != int(expected["drawdownSampleCount"]):
                 raise AssertionError("drawdown response omitted minute equity samples")
-            if len(drawdown["episodes"]) != int(expected["drawdownEpisodeCount"]):
-                raise AssertionError("drawdown response did not reconstruct minute equity episodes")
-            if "DEMO:990101" not in drawdown["episodes"][0]["tradeKeys"]:
-                raise AssertionError("drawdown episode lost its active position link")
+            if int(drawdown["episodeCount"]) != int(expected["drawdownEpisodeCount"]):
+                raise AssertionError("drawdown response did not count every minute-equity episode")
+            if int(drawdown["episodeMinimumSeconds"]) != int(expected["drawdownEpisodeMinimumSeconds"]):
+                raise AssertionError("drawdown response did not publish its episode-duration threshold")
+            if len(drawdown["episodes"]) != int(expected["drawdownDisplayedEpisodeCount"]):
+                raise AssertionError("drawdown response did not omit episodes shorter than 24 hours")
+            if "DEMO:990104" not in drawdown["episodes"][0]["tradeKeys"]:
+                raise AssertionError("displayed drawdown episode lost its active position link")
             class_values = {item["tradeClass"]: item for item in analytics["tradeClasses"]}
             for trade_class, expected_return in expected["classAveragePreleverageReturnPercent"].items():
                 assert_close(
