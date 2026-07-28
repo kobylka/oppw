@@ -18,6 +18,19 @@ Before planning or editing, read in this order:
 
 Repeat this protocol after context compaction, after inheriting work from another task, or whenever remembered details conflict with repository evidence. The repository is authoritative; chat history and release archives are not.
 
+## Primary workstation toolchain reference
+
+These paths are host-local references for agents working in `D:\oppw`; they are not portable repository requirements and do not belong in the project README or release configuration.
+
+- Python 3.13.7 executable: `C:\Users\kobyl\AppData\Local\Programs\Python\Python313\python.exe`
+- Python system packages: `C:\Users\kobyl\AppData\Local\Programs\Python\Python313\Lib\site-packages`
+- Python user base: `C:\Users\kobyl\AppData\Roaming\Python` (not currently created)
+- Python user packages: `C:\Users\kobyl\AppData\Roaming\Python\Python313\site-packages` (not currently created)
+- Python user-site support: enabled
+- PHP 8.5.8 CLI executable: `C:\Users\kobyl\AppData\Local\Programs\PHP\current\php.exe`
+
+Recheck runtime resolution after upgrades with `python -m site`, `(Get-Command python).Source`, and `(Get-Command php).Source`.
+
 ## Canonical source rules
 
 - The product/MT5/backend/service release version exists only in root `VERSION` and uses `MAJOR.MINOR.PATCH`.

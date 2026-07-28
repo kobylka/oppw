@@ -882,7 +882,7 @@ if __name__ == "__main__":
     
     tpps = [0.007,0.02,0.05,0.05,0.05]
     print(tpps)
-    result = sim.process(sim_i.quotes, "QQQ","20180413", "20260720", LEVERAGE, tpps, SL, BE, 0.004,0.004, 8000, False,True,True,True)
+    result = sim.process(sim_i.quotes, "QQQ","20250106", "20260720", LEVERAGE, tpps, SL, BE, 0.004,0.004, 8000, False,True,True,True)
     print(result)
     
     #1,79216 125
