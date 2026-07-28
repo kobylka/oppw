@@ -41,6 +41,7 @@ CREATE TABLE strategy_events (
     INDEX idx_event_strategy_time (strategy_key, event_time, id),
     INDEX idx_event_strategy_id (strategy_key, id),
     INDEX idx_event_strategy_name (strategy_key, name, id),
+    INDEX idx_event_retention_time (event_time, id),
     CONSTRAINT fk_event_account FOREIGN KEY (strategy_key) REFERENCES monitor_accounts(account_key)
 ) ENGINE=InnoDB;
 
@@ -122,6 +123,7 @@ CREATE TABLE IF NOT EXISTS strategy_equity_points (
     position_ticket BIGINT UNSIGNED NULL,
     PRIMARY KEY (strategy_key, captured_minute),
     INDEX idx_equity_strategy_time (strategy_key, captured_minute),
+    INDEX idx_equity_retention_time (captured_minute, strategy_key),
     CONSTRAINT fk_equity_account FOREIGN KEY (strategy_key) REFERENCES monitor_accounts(account_key) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
@@ -138,7 +140,7 @@ CREATE TABLE IF NOT EXISTS strategy_market_points (
     phase VARCHAR(64) NOT NULL DEFAULT '',
     PRIMARY KEY (strategy_key, captured_minute),
     INDEX idx_market_strategy_time (strategy_key, captured_minute),
-    CONSTRAINT fk_market_account FOREIGN KEY (strategy_key) REFERENCES monitor_accounts(account_key) ON DELETE CASCADE
+    CONSTRAINT fk_market_account FOREIGN KEY (strategy_key) REFERENCES monitor_accounts(account_key) ON DELETE RESTRICT
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS strategy_trades (
@@ -336,3 +338,51 @@ SELECT a.account_key, roles.role_name, TRUE
  CROSS JOIN (SELECT 'EXECUTOR' AS role_name UNION ALL SELECT 'PUBLISHER') roles
  WHERE a.enabled = TRUE
 ON DUPLICATE KEY UPDATE strategy_key = VALUES(strategy_key);
+
+-- Verified operational retention and indefinite market-minute history.
+CREATE TABLE IF NOT EXISTS strategy_equity_daily (
+    strategy_key VARCHAR(64) NOT NULL,
+    equity_day DATE NOT NULL,
+    first_captured_at DATETIME NOT NULL,
+    last_captured_at DATETIME NOT NULL,
+    open_balance DECIMAL(20,4) NOT NULL,
+    open_equity DECIMAL(20,4) NOT NULL,
+    close_balance DECIMAL(20,4) NOT NULL,
+    close_equity DECIMAL(20,4) NOT NULL,
+    minimum_equity DECIMAL(20,4) NOT NULL,
+    maximum_equity DECIMAL(20,4) NOT NULL,
+    sample_count BIGINT UNSIGNED NOT NULL,
+    created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (strategy_key, equity_day),
+    INDEX idx_equity_daily_day (equity_day, strategy_key),
+    CONSTRAINT fk_equity_daily_account FOREIGN KEY (strategy_key) REFERENCES monitor_accounts(account_key) ON DELETE RESTRICT
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS strategy_retention_runs (
+    run_id CHAR(32) NOT NULL,
+    dataset_name VARCHAR(64) NOT NULL,
+    cutoff_at DATETIME(3) NOT NULL,
+    first_source_key VARCHAR(160) NOT NULL,
+    last_source_key VARCHAR(160) NOT NULL,
+    row_count BIGINT UNSIGNED NOT NULL,
+    archive_name VARCHAR(255) NOT NULL,
+    archive_sha256 CHAR(64) NOT NULL,
+    status VARCHAR(16) NOT NULL,
+    started_at DATETIME(3) NOT NULL,
+    completed_at DATETIME(3) NULL,
+    error_text VARCHAR(1000) NOT NULL DEFAULT '',
+    PRIMARY KEY (run_id),
+    UNIQUE KEY uq_retention_archive (dataset_name, archive_sha256),
+    INDEX idx_retention_dataset_time (dataset_name, completed_at, run_id),
+    CHECK (status IN ('STARTED', 'COMPLETED', 'FAILED'))
+) ENGINE=InnoDB;
+
+DROP TRIGGER IF EXISTS strategy_market_points_no_delete;
+DELIMITER $$
+CREATE TRIGGER strategy_market_points_no_delete
+BEFORE DELETE ON strategy_market_points FOR EACH ROW
+BEGIN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'strategy_market_points minute OHLC history is retained indefinitely';
+END$$
+DELIMITER ;

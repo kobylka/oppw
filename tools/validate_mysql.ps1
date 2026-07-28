@@ -73,6 +73,11 @@ try {
         mysql -N -uroot --database=oppw_monitor -e $serviceTableQuery).Trim()
     if ($LASTEXITCODE -ne 0 -or [int]$serviceTableCount -ne 3) { throw "Service-supervision table validation failed: $serviceTableCount/3" }
 
+    $lifecycleTableQuery = "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='oppw_monitor' AND TABLE_NAME IN ('strategy_equity_daily','strategy_retention_runs');"
+    $lifecycleTableCount = (& $docker.Source exec $container `
+        mysql -N -uroot --database=oppw_monitor -e $lifecycleTableQuery).Trim()
+    if ($LASTEXITCODE -ne 0 -or [int]$lifecycleTableCount -ne 2) { throw "Data-lifecycle table validation failed: $lifecycleTableCount/2" }
+
     $tradeClassColumnQuery = "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='oppw_monitor' AND TABLE_NAME='strategy_trades' AND COLUMN_NAME IN ('preleverage_return_percent','trade_class');"
     $tradeClassColumnCount = (& $docker.Source exec $container `
         mysql -N -uroot --database=oppw_monitor -e $tradeClassColumnQuery).Trim()
@@ -91,9 +96,24 @@ try {
     $triggerQuery = "SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA='oppw_monitor' AND TRIGGER_NAME REGEXP '_no_(update|delete)$';"
     $triggerCount = (& $docker.Source exec $container `
         mysql -N -uroot --database=oppw_monitor -e $triggerQuery).Trim()
-    if ($LASTEXITCODE -ne 0 -or [int]$triggerCount -ne 18) { throw "Immutability-trigger validation failed: $triggerCount/18" }
+    if ($LASTEXITCODE -ne 0 -or [int]$triggerCount -ne 19) { throw "Immutability-trigger validation failed: $triggerCount/19" }
 
-    Write-Host "MYSQL VALIDATION PASSED authority_tables=$tableCount service_tables=$serviceTableCount trade_class_columns=$tradeClassColumnCount trade_class_triggers=$tradeClassTriggerCount snapshot_unique=$snapshotUniqueCount immutable_triggers=$triggerCount image=$Image"
+    $marketRetentionTriggerQuery = "SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA='oppw_monitor' AND TRIGGER_NAME='strategy_market_points_no_delete' AND EVENT_MANIPULATION='DELETE';"
+    $marketRetentionTriggerCount = (& $docker.Source exec $container `
+        mysql -N -uroot --database=oppw_monitor -e $marketRetentionTriggerQuery).Trim()
+    if ($LASTEXITCODE -ne 0 -or [int]$marketRetentionTriggerCount -ne 1) { throw "Market-minute retention trigger validation failed: $marketRetentionTriggerCount/1" }
+
+    $retentionIndexQuery = "SELECT COUNT(DISTINCT INDEX_NAME) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA='oppw_monitor' AND INDEX_NAME IN ('idx_event_retention_time','idx_equity_retention_time');"
+    $retentionIndexCount = (& $docker.Source exec $container `
+        mysql -N -uroot --database=oppw_monitor -e $retentionIndexQuery).Trim()
+    if ($LASTEXITCODE -ne 0 -or [int]$retentionIndexCount -ne 2) { throw "Retention-index validation failed: $retentionIndexCount/2" }
+
+    $marketForeignKeyQuery = "SELECT COUNT(*) FROM information_schema.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA='oppw_monitor' AND TABLE_NAME='strategy_market_points' AND CONSTRAINT_NAME='fk_market_account' AND DELETE_RULE='RESTRICT';"
+    $marketForeignKeyCount = (& $docker.Source exec $container `
+        mysql -N -uroot --database=oppw_monitor -e $marketForeignKeyQuery).Trim()
+    if ($LASTEXITCODE -ne 0 -or [int]$marketForeignKeyCount -ne 1) { throw "Market-minute cascade protection validation failed: $marketForeignKeyCount/1" }
+
+    Write-Host "MYSQL VALIDATION PASSED authority_tables=$tableCount service_tables=$serviceTableCount lifecycle_tables=$lifecycleTableCount trade_class_columns=$tradeClassColumnCount trade_class_triggers=$tradeClassTriggerCount snapshot_unique=$snapshotUniqueCount immutable_triggers=$triggerCount market_retention_trigger=$marketRetentionTriggerCount retention_indexes=$retentionIndexCount market_fk_restrict=$marketForeignKeyCount image=$Image"
 } finally {
     if ($containerStarted) {
         try {

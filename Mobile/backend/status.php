@@ -257,6 +257,16 @@ function oppw_selected_equity_periods(
 
 function all_time_equity_points(PDO $db, string $accountKey): array
 {
+    $dailyStmt = $db->prepare(
+        'SELECT equity_day, last_captured_at AS captured_minute, close_balance AS balance, close_equity AS equity
+           FROM strategy_equity_daily
+          WHERE strategy_key = ?
+          ORDER BY equity_day'
+    );
+    $dailyStmt->execute([$accountKey]);
+    $equityByDay = [];
+    foreach ($dailyStmt->fetchAll() as $row) $equityByDay[(string)$row['equity_day']] = $row;
+
     $equitySql =
         'SELECT p.captured_minute, p.balance, p.equity
            FROM strategy_equity_points p
@@ -270,8 +280,14 @@ function all_time_equity_points(PDO $db, string $accountKey): array
           ORDER BY p.captured_minute';
     $equityStmt = $db->prepare($equitySql);
     $equityStmt->execute([$accountKey, $accountKey]);
-    $equityByDay = [];
-    foreach ($equityStmt->fetchAll() as $row) $equityByDay[substr((string)$row['captured_minute'], 0, 10)] = $row;
+    foreach ($equityStmt->fetchAll() as $row) {
+        $day = substr((string)$row['captured_minute'], 0, 10);
+        if (!isset($equityByDay[$day])
+            || strcmp((string)$row['captured_minute'], (string)$equityByDay[$day]['captured_minute']) > 0) {
+            $equityByDay[$day] = $row;
+        }
+    }
+    ksort($equityByDay, SORT_STRING);
 
     $flowStmt = $db->prepare('SELECT occurred_at, flow_type, amount, balance_after FROM account_cash_flows WHERE strategy_key = ? ORDER BY occurred_at, id');
     $flowStmt->execute([$accountKey]);

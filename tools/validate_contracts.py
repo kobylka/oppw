@@ -266,6 +266,39 @@ def seed_analytics_fixture(
     )
 
 
+def seed_retention_fixture(
+    docker: str,
+    container: str,
+    account_key: str,
+    docker_env: dict[str, str],
+) -> dict[str, str]:
+    old_day = (datetime.now(timezone.utc) - timedelta(days=500)).replace(
+        hour=0, minute=0, second=0, microsecond=0,
+    )
+    first_equity = old_day + timedelta(minutes=1)
+    last_equity = old_day + timedelta(hours=23, minutes=59)
+    ordinary_hash = hashlib.sha256(b"oppw-retention-ordinary-event").hexdigest()
+    execution_hash = hashlib.sha256(b"oppw-retention-execution-stage").hexdigest()
+    docker_sql(docker, container, f"""
+        INSERT INTO strategy_events(strategy_key,event_time,level,name,result,message,details,event_hash)
+        VALUES
+          ({sql_text(account_key)},{sql_text(first_equity.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3])},'INFO','RETENTION_FIXTURE',TRUE,'archive me','{{\"fixture\":true}}',{sql_text(ordinary_hash)}),
+          ({sql_text(account_key)},{sql_text((first_equity + timedelta(seconds=1)).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3])},'INFO','EXECUTION_STAGE',TRUE,'keep me','{{\"fixture\":true}}',{sql_text(execution_hash)});
+        INSERT INTO strategy_equity_points(strategy_key,captured_minute,balance,equity,deposit,current_profit,position_ticket)
+        VALUES
+          ({sql_text(account_key)},{sql_text(first_equity.strftime('%Y-%m-%d %H:%M:%S'))},9000,8990,9000,-10,NULL),
+          ({sql_text(account_key)},{sql_text(last_equity.strftime('%Y-%m-%d %H:%M:%S'))},9000,9010,9000,10,NULL);
+        INSERT INTO strategy_market_points(strategy_key,captured_minute,current_price,bid,ask,m1_open,m1_high,m1_low,m1_close,phase)
+        VALUES ({sql_text(account_key)},{sql_text(first_equity.strftime('%Y-%m-%d %H:%M:%S'))},19000,18999,19001,18995,19005,18990,19000,'RECOVERY_FIXTURE');
+    """, docker_env)
+    return {
+        "day": old_day.strftime("%Y-%m-%d"),
+        "ordinaryHash": ordinary_hash,
+        "executionHash": execution_hash,
+        "marketMinute": first_equity.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
@@ -500,7 +533,11 @@ return [
                             captured_utc, close, close, close + 0.1, open_price, high, low, close, phase,
                         )
                     )
-            docker_sql(docker, container, "DELETE FROM strategy_market_points WHERE strategy_key='DEMO';", docker_env)
+            docker_sql(
+                docker, container,
+                "UPDATE strategy_market_points SET current_price=100,bid=100,ask=100.1,m1_open=100,m1_high=100,m1_low=100,m1_close=100,phase='CONTRACT_BASELINE' WHERE strategy_key='DEMO'",
+                docker_env,
+            )
             docker_sql(
                 docker,
                 container,
@@ -663,6 +700,76 @@ return [
                 docker, container, fixture["accountKey"], fixture["analytics"],
                 current_monday, docker_env,
             )
+            retention_fixture = seed_retention_fixture(
+                docker, container, fixture["accountKey"], docker_env,
+            )
+            retention_archive = temp / "retention-archives"
+            retention_result = run([
+                php, str(root / "Mobile/backend/admin/retention.php"), "--apply",
+                "--archive-dir=" + str(retention_archive), "--max-batches=10",
+            ], env=php_env, capture_output=True)
+            retention_report = json.loads(retention_result.stdout)
+            if retention_report.get("mode") != "apply":
+                raise AssertionError("retention CLI did not report apply mode")
+            if int(docker_sql(
+                docker, container,
+                "SELECT COUNT(*) FROM strategy_events WHERE event_hash=" + sql_text(retention_fixture["ordinaryHash"]),
+                docker_env,
+            )) != 0:
+                raise AssertionError("retention did not remove the archived ordinary event")
+            if int(docker_sql(
+                docker, container,
+                "SELECT COUNT(*) FROM strategy_events WHERE event_hash=" + sql_text(retention_fixture["executionHash"]),
+                docker_env,
+            )) != 1:
+                raise AssertionError("retention removed an EXECUTION_STAGE compatibility event")
+            if int(docker_sql(
+                docker, container,
+                "SELECT COUNT(*) FROM strategy_equity_points WHERE strategy_key='DEMO' AND DATE(captured_minute)="
+                + sql_text(retention_fixture["day"]), docker_env,
+            )) != 0:
+                raise AssertionError("retention did not remove archived equity minutes")
+            daily_projection = docker_sql(
+                docker, container,
+                "SELECT CONCAT(close_equity,'|',minimum_equity,'|',maximum_equity,'|',sample_count) "
+                "FROM strategy_equity_daily WHERE strategy_key='DEMO' AND equity_day="
+                + sql_text(retention_fixture["day"]), docker_env,
+            ).split("|")
+            if len(daily_projection) != 4:
+                raise AssertionError("retention did not create the indefinite daily equity projection")
+            assert_close(daily_projection[0], 9010.0, "retained daily close equity")
+            assert_close(daily_projection[1], 8990.0, "retained daily minimum equity")
+            assert_close(daily_projection[2], 9010.0, "retained daily maximum equity")
+            if int(daily_projection[3]) != 2:
+                raise AssertionError("retained daily equity sample count is incorrect")
+            if int(docker_sql(
+                docker, container,
+                "SELECT COUNT(*) FROM strategy_market_points WHERE strategy_key='DEMO' AND captured_minute="
+                + sql_text(retention_fixture["marketMinute"]), docker_env,
+            )) != 1:
+                raise AssertionError("retention removed an indefinite minute market OHLC point")
+            if int(docker_sql(
+                docker, container,
+                "SELECT COUNT(*) FROM strategy_service_control_events WHERE request_id='" + request_id + "'",
+                docker_env,
+            )) != 1:
+                raise AssertionError("retention removed immutable service-control audit history")
+            if int(docker_sql(
+                docker, container,
+                "SELECT COUNT(*) FROM strategy_retention_runs WHERE status='COMPLETED'",
+                docker_env,
+            )) != 2:
+                raise AssertionError("retention did not record both completed archive batches")
+            if len(list(retention_archive.glob("*.ndjson.gz"))) != 2:
+                raise AssertionError("retention did not produce two verified archives")
+            _, retained_status, _ = http_json(
+                "GET", base_url + "status.php?account=DEMO", token=access_token,
+            )
+            if not any(
+                str(point.get("time", "")).startswith(retention_fixture["day"])
+                for point in retained_status["snapshot"]["equityCurves"]["allTime"]
+            ):
+                raise AssertionError("status all-time equity omitted retained daily history")
             _, analytics, analytics_raw = http_json(
                 "GET", base_url + "analytics.php?account=DEMO&rolling_weeks=2", token=access_token,
             )

@@ -277,6 +277,7 @@ class Sim:
                 SL =  (100-50/LEVERAGE)/100
                 
                 granular = int((self.balance/(20/LEVERAGE)/2240))*2240
+                granular = int((self.balance/1.765/2240))*2240
                 if(LEVERAGE == 10):
                     granular = int((self.balance/1.765/2240))*2240
                     
@@ -872,7 +873,7 @@ if __name__ == "__main__":
     
     tpps = [0.007,0.02,0.05,0.05,0.05]
     print(tpps)
-    result = sim.process(sim_i.quotes, "QQQ","20220103", "20260724", LEVERAGE, tpps, SL, BE, 0.004,0.004, 30000, False,True,True,True)
+    result = sim.process(sim_i.quotes, "QQQ","20210103", "20260720", LEVERAGE, tpps, SL, BE, 0.004,0.004, 8000, False,True,True,True)
     print(result)
     
     #1,79216 125

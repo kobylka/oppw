@@ -30,10 +30,11 @@ The release stops on any failure:
 3. Python compilation, MT5/supervisor regression tests, or Windows service-host compilation fail;
 4. a PHP file fails linting;
 5. the ordered SQL chain fails against temporary MySQL or immutable tables/triggers are missing;
-6. the executable publisher/PHP/MySQL/read-API/Android contract fails;
-7. Android unit tests or APK build fail.
+6. the transactionally consistent backup cannot be restored into a second disposable MySQL instance with matching authority/operational digests and restored immutability guarantees;
+7. the executable publisher/PHP/MySQL/read-API/Android contract fails, including retained-equity behavior and the protected market-minute history;
+8. Android unit tests or APK build fail.
 
-On success, `dist/OPPW-<VERSION>.zip` and its SHA-256 file are created, where `<VERSION>` is root `VERSION`. The archive contains both canonical version files, the Android APK, compiled Windows service host, installer/supervisor sources, and a per-file SHA-256 manifest. `dist/` remains ignored because releases are reproducible outputs, not source.
+On success, `dist/OPPW-<VERSION>.zip` and its SHA-256 file are created, where `<VERSION>` is root `VERSION`. The archive contains both canonical version files, the Android APK, compiled Windows service host, installer/supervisor sources, production backup/task-installation tools, and a per-file SHA-256 manifest. `dist/` remains ignored because releases are reproducible outputs, not source.
 
 ## Version change
 

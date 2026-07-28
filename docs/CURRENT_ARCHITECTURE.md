@@ -21,8 +21,13 @@ This document describes the present repository. It is deliberately not a changel
 | Release orchestration | `tools/release.ps1` |
 | Repository invariants | `tools/validate_source.py` |
 | Disposable MySQL validation | `tools/validate_mysql.ps1` |
+| Disposable backup/restore validation | `tools/validate_backup_restore.ps1` |
+| Production MySQL backup and restore verification | `tools/backup_mysql.ps1` |
+| Production backup task installation | `tools/install_mysql_backup_task.ps1` |
 | Executable cross-component contracts | `contracts/` and `tools/validate_contracts.py` |
 | Windows service supervision | `service/` |
+| Operational retention command | `Mobile/backend/admin/retention.php` |
+| Data lifecycle runbook | `docs/DATA_LIFECYCLE.md` |
 
 ## Runtime topology
 
@@ -85,10 +90,22 @@ Authentication endpoints live under `Mobile/backend/auth/`; push endpoints live 
 | Current mobile snapshot | `strategy_snapshots`, exactly one mutable projection row per account |
 | Mobile analytics trade projection | `strategy_trades`, with protective-close price/reason recovered from `strategy_protection_changes` when event and flat snapshot delivery are separated |
 | Diagnostics and low-volume operational messages | `strategy_events` |
+| Minute equity history and indefinite daily projection | `strategy_equity_points` and `strategy_equity_daily` |
+| Minute market OHLC history | `strategy_market_points`, retained online indefinitely |
 | Desired process state and supervisor heartbeat | `strategy_service_desired_state` and `strategy_supervisor_nodes` |
 | Service-control audit | `strategy_service_control_events` |
 
 Immutable authority records use deterministic identifiers and reject mutation. Projections may be rebuilt or enriched; diagnostics must not become the only record of a business event.
+
+## Data lifecycle and recovery
+
+`Mobile/backend/admin/retention.php` is the sole operational-history retention command. It is CLI-only, dry-run by default, takes a database advisory lock, writes and verifies bounded gzip NDJSON archives, and can delete only ordinary diagnostic events older than 180 days and complete UTC account-days of minute equity older than 400 days. Equity deletion and its indefinite daily rollup commit atomically. Legacy `EXECUTION_STAGE` diagnostics remain available to the compatibility fallback.
+
+Strategy authority, cash flows, service-control audits, and every `strategy_market_points` minute OHLC record stay online indefinitely. The database rejects market-minute deletion independently of the retention command. Index changes require production-shaped measurement; existing event, equity, market, and service-control access indexes remain canonical until evidence supports a forward migration.
+
+`tools/validate_backup_restore.ps1` creates a consistent synthetic backup in one disposable MySQL instance, restores it into a second instance, compares authoritative and operational table digests, and retests immutable and market-retention triggers. The release gate runs this recovery drill after ordered migration validation. Deployment-owned encrypted archive and backup storage requirements are defined in `docs/DATA_LIFECYCLE.md` and ADR 0013.
+
+The primary Windows machine also runs the `OPPW MySQL Production Backup` scheduled task daily at 02:15 local Warsaw time. It runs under the current user's interactive token so Docker Desktop and that user's EFS key are available; a missed logged-out start runs after the next logon. Its protected runtime copy reads credentials from ignored `Mobile/backend/config.php`, overrides only the Docker-internal host with the machine-reachable production host, requires TLS, writes compressed backups to the EFS-encrypted `D:\OPPW-Backups\mysql`, and publishes an artifact only after a disposable MySQL restore passes. It keeps 35 days of successful backups, the latest backup per UTC month for 12 months, and 180 days of encrypted run logs. This local destination requires separate encrypted off-machine replication to cover loss of the computer or `D:` drive.
 
 ## Android contract
 
@@ -100,7 +117,7 @@ Any payload change must follow `docs/CONTRACT_POLICY.md`.
 
 MT5 build identity, strategy specification version, release archive, and manifest derive from root `VERSION`. Android `versionName` derives from `Mobile/VERSION`; its monotonically increasing `versionCode` uses the epoch formula documented in ADR 0007. The two release lines advance independently. Releases are reproducible outputs in ignored `dist/`; they are never alternative source trees.
 
-The release gate requires a clean Git commit, canonical-source validation, Python compilation/tests, PHP lint, complete SQL migration validation in disposable MySQL, an actual PHP/MySQL/API-to-Android contract run, and Android tests/build.
+The release gate requires a clean Git commit, canonical-source validation, Python compilation/tests, PHP lint, complete SQL migration validation in disposable MySQL, a disposable backup-and-restore drill, an actual PHP/MySQL/API-to-Android contract run, and Android tests/build.
 
 ## Runtime/private material
 

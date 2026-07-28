@@ -33,10 +33,12 @@ Run the only supported release command from a clean commit:
 powershell -ExecutionPolicy Bypass -File .\tools\release.ps1 -RepoRoot D:\oppw
 ```
 
-The command refuses a dirty repository, validates source-layout invariants, compiles and tests the MT5 loop, lints PHP, applies the complete SQL migration chain to temporary MySQL, runs the executable PHP/MySQL/API-to-Android contract, builds and tests Android, and creates a checksummed archive in `dist/`.
+The command refuses a dirty repository, validates source-layout invariants, compiles and tests the MT5 loop, lints PHP, applies the complete SQL migration chain to temporary MySQL, proves a synthetic backup can be restored into a second disposable MySQL instance, runs the executable PHP/MySQL/API-to-Android contract, builds and tests Android, and creates a checksummed archive in `dist/`.
 
 Generated archives, IDE files, runtime state, local credentials, account logs, and historical source copies are not committed.
 
 Every change begins with [AGENTS.md](AGENTS.md). Current system ownership and boundaries are documented in [docs/CURRENT_ARCHITECTURE.md](docs/CURRENT_ARCHITECTURE.md), with contract rules in [docs/CONTRACT_POLICY.md](docs/CONTRACT_POLICY.md) and the required checklist in [docs/CHANGE_CHECKLIST.md](docs/CHANGE_CHECKLIST.md).
 
-Release details are in [docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md), and strategy authority is described in [docs/STRATEGY_SPECIFICATION.md](docs/STRATEGY_SPECIFICATION.md).
+Release details are in [docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md), data recovery and retention are in [docs/DATA_LIFECYCLE.md](docs/DATA_LIFECYCLE.md), and strategy authority is described in [docs/STRATEGY_SPECIFICATION.md](docs/STRATEGY_SPECIFICATION.md).
+
+On the primary Windows machine, `tools/install_mysql_backup_task.ps1` installs the daily production MySQL backup. The canonical runner requires TLS, writes only to an EFS-encrypted destination, and publishes a backup only after a disposable restore succeeds.

@@ -32,6 +32,12 @@ For a fresh database, apply every non-comment entry in `sql/migration-order.txt`
 
 For an existing database, apply only the listed migrations that have not already been applied, preserving their order. Never replay `schema.sql` or an already-applied migration. In particular, `migrate_v12_trade_classes.sql` must precede the v46 and later migrations because current analytics and trade projections require its persistent return/classification columns and triggers.
 
+## Retention and recovery
+
+Run `php admin/retention.php` for a dry-run report. Apply bounded archival and cleanup with `php admin/retention.php --apply --archive-dir=<encrypted-path-outside-web-root>`. Ordinary events are hot for 180 days and minute equity is hot for 400 days; exact gzip NDJSON archives are verified before deletion, and equity is rolled into `strategy_equity_daily` first. `EXECUTION_STAGE` events, authority ledgers, service-control audits, and all `strategy_market_points` minute OHLC rows remain online indefinitely.
+
+The full policy, scheduling guidance, archive requirements, and recovery drill are in `docs/DATA_LIFECYCLE.md`. `tools/validate_backup_restore.ps1` uses only synthetic data and two disposable MySQL containers; production restore procedures must always target a new database.
+
 ## Manual browser administration
 
 CLI pairing grants must state service-control authority explicitly:

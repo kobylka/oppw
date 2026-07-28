@@ -54,6 +54,14 @@ def main() -> int:
         "docs/decisions/0010-cohesive-mt5-runtime-modules.md": ("Status: Accepted", "behavior-preserving", "oppw_core"),
         "docs/decisions/0011-single-source-mt5-configuration.md": ("Status: Accepted", "override-only", "exact equality"),
         "docs/decisions/0012-bounded-current-snapshot-projection.md": ("Status: Accepted", "one row per", "upserts"),
+        "docs/decisions/0013-disposable-recovery-and-data-retention.md": (
+            "Status: Accepted", "strategy_market_points", "online indefinitely", "backup-and-restore",
+            "D:\\OPPW-Backups\\mysql", "02:15",
+        ),
+        "docs/DATA_LIFECYCLE.md": (
+            "Market minute OHLC", "Indefinite", "retention.php", "validate_backup_restore.ps1",
+            "OPPW MySQL Production Backup", "D:\\OPPW-Backups\\mysql", "02:15",
+        ),
         ".github/pull_request_template.md": ("Contract impact", "Architecture and safety", "Validation"),
     }
     for relative, markers in required_governance.items():
@@ -327,6 +335,77 @@ def main() -> int:
             if marker not in content:
                 fail(errors, f"bounded current-snapshot marker missing from {relative}: {marker}")
 
+    lifecycle_files = {
+        "Mobile/backend/sql/schema.sql": (
+            "strategy_equity_daily", "strategy_retention_runs", "strategy_market_points_no_delete",
+        ),
+        "Mobile/backend/sql/migrate_data_lifecycle.sql": (
+            "strategy_equity_daily", "strategy_retention_runs", "strategy_market_points_no_delete",
+            "idx_event_retention_time", "idx_equity_retention_time", "ON DELETE RESTRICT",
+        ),
+        "Mobile/backend/sql/migration-order.txt": ("migrate_data_lifecycle.sql",),
+        "Mobile/backend/admin/retention.php": (
+            "OPPW_EVENT_RETENTION_DAYS = 180", "OPPW_EQUITY_RETENTION_DAYS = 400",
+            "name <> 'EXECUTION_STAGE'", "GET_LOCK", "oppw-retention-ndjson-v1",
+        ),
+        "Mobile/backend/status.php": ("strategy_equity_daily", "close_equity AS equity"),
+        "Mobile/backend/analytics.php": ("strategy_equity_daily", "minuteEquitySql"),
+        "tools/validate_backup_restore.ps1": (
+            "--single-transaction", "--routines", "--triggers", "sourceContainer",
+            "restoreContainer", "strategy_market_points", "strategy_service_control_events",
+        ),
+        "tools/backup_mysql.ps1": (
+            "--single-transaction", "--routines", "--triggers", "TLS_REQUIRED", "tls=required",
+            "WINDOWS_EFS", "Restore-And-Verify", "Start-Transcript", "KeepDaily = 35",
+            "KeepMonthly = 12", "KeepLogDays = 180",
+        ),
+        "tools/install_mysql_backup_task.ps1": (
+            "OPPW MySQL Production Backup", "D:\\OPPW-Backups\\mysql", "02:15",
+            "New-ScheduledTaskTrigger -Daily", "LogonType Interactive", "RunOnlyIfNetworkAvailable",
+        ),
+        "tools/write_mysql_client_config.php": (
+            "PHP_SAPI !== 'cli'", "ssl-mode=REQUIRED", "file_put_contents", "LOCK_EX",
+        ),
+    }
+    for relative, markers in lifecycle_files.items():
+        path = root / relative
+        if not path.is_file():
+            fail(errors, f"required data-lifecycle file is missing: {relative}")
+            continue
+        content = path.read_text(encoding="utf-8")
+        for marker in markers:
+            if marker not in content:
+                fail(errors, f"data-lifecycle marker missing from {relative}: {marker}")
+
+    migration_order = root / "Mobile" / "backend" / "sql" / "migration-order.txt"
+    migration_names = (
+        [
+            line.strip()
+            for line in migration_order.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+        if migration_order.is_file()
+        else []
+    )
+    if not migration_names or migration_names[-1] != "migrate_data_lifecycle.sql":
+        fail(errors, "migrate_data_lifecycle.sql must be the last ordered forward migration")
+
+    retention_path = root / "Mobile" / "backend" / "admin" / "retention.php"
+    retention_text = retention_path.read_text(encoding="utf-8") if retention_path.is_file() else ""
+    protected_retention_tables = (
+        "strategy_market_points", "strategy_service_control_events", "strategy_specifications",
+        "strategy_account_spec_assignments", "strategy_decisions", "strategy_execution_stages",
+        "strategy_fills", "strategy_protection_changes", "strategy_trade_ledger", "account_cash_flows",
+    )
+    for table in protected_retention_tables:
+        if re.search(rf"DELETE\s+FROM\s+`?{re.escape(table)}\b", retention_text, re.IGNORECASE):
+            fail(errors, f"retention command contains a forbidden deletion path: {table}")
+
+    production_backup = root / "tools" / "backup_mysql.ps1"
+    production_backup_text = production_backup.read_text(encoding="utf-8") if production_backup.is_file() else ""
+    if "--password=" in production_backup_text or "-p$" in production_backup_text:
+        fail(errors, "production backup must not pass the database password on a process command line")
+
     release_script = root / "tools" / "release.ps1"
     release_text = release_script.read_text(encoding="utf-8") if release_script.is_file() else ""
     release_gates = (
@@ -334,6 +413,10 @@ def main() -> int:
         "-m unittest discover",
         "Get-Command php",
         "validate_mysql.ps1",
+        "validate_backup_restore.ps1",
+        "backup_mysql.ps1",
+        "install_mysql_backup_task.ps1",
+        "write_mysql_client_config.php",
         "validate_contracts.py",
         "testDebugUnitTest assembleDebug",
         "git diff --cached --quiet",

@@ -66,7 +66,7 @@ try {
 
     $php = Get-Command php -ErrorAction SilentlyContinue
     if (-not $php) { throw 'PHP CLI is required for release linting.' }
-    $trackedPhp = @(& git ls-files 'Mobile/backend/*.php' 'Mobile/backend/**/*.php' | Sort-Object -Unique)
+    $trackedPhp = @(& git ls-files 'Mobile/backend/*.php' 'Mobile/backend/**/*.php' 'tools/write_mysql_client_config.php' | Sort-Object -Unique)
     foreach ($relative in $trackedPhp) {
         & $php.Source -l (Join-Path $root $relative) | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "PHP lint failed: $relative" }
@@ -75,6 +75,9 @@ try {
 
     & (Join-Path $root 'tools\validate_mysql.ps1') -RepoRoot $root
     if ($LASTEXITCODE -ne 0) { throw 'Temporary-MySQL migration validation failed.' }
+
+    & (Join-Path $root 'tools\validate_backup_restore.ps1') -RepoRoot $root
+    if ($LASTEXITCODE -ne 0) { throw 'Disposable backup-and-restore validation failed.' }
 
     & $PythonPath (Join-Path $root 'tools\validate_contracts.py') --root $root --php $php.Source
     if ($LASTEXITCODE -ne 0) { throw 'Cross-component contract validation failed.' }
@@ -118,7 +121,8 @@ try {
                 'Mobile/gradlew','Mobile/gradlew.bat','Mobile/local.properties.example','Mobile/README.md'
             ) -or
             $_ -in @(
-                'tools/release.ps1','tools/validate_source.py','tools/validate_mysql.ps1',
+                'tools/release.ps1','tools/validate_source.py','tools/validate_mysql.ps1','tools/validate_backup_restore.ps1',
+                'tools/backup_mysql.ps1','tools/install_mysql_backup_task.ps1','tools/write_mysql_client_config.php',
                 'tools/validate_contracts.py','tools/migrate_mt5_config.py'
             )
         }

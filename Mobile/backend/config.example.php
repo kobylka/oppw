@@ -40,4 +40,7 @@ return [
     'push_enabled' => false,
     'firebase_project_id' => '',
     'firebase_service_account_file' => '/etc/oppw-firebase-service-account.json',
+
+    // Required only for retention --apply. Keep this encrypted location outside the web root.
+    'retention_archive_dir' => '',
 ];
