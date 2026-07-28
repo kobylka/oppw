@@ -243,7 +243,7 @@ private fun AnalyticsContent(state: UiState, analytics: AnalyticsResponse, onFil
                 SectionTitle("Minute-equity drawdowns", "${drawdowns.episodes.size} episodes · ${drawdownSourceLabel(analytics.drawdown.sourceGranularity)}")
                 DrawdownChart(analytics, Modifier.fillMaxWidth().height(190.dp))
                 MetricLink("Maximum drawdown", percent(-abs(analytics.drawdown.maxDrawdownPercent)), analytics.drawdown.tradeKeys, openDrillDown)
-                MetricLink("Maximum drawdown · currency", money(-abs(analytics.drawdown.maxDrawdownCurrency), currency), analytics.drawdown.tradeKeys, openDrillDown)
+                MetricLink("Maximum drawdown · currency", money(drawdownCurrencyValue(analytics.drawdown.maxDrawdownCurrency), currency), analytics.drawdown.tradeKeys, openDrillDown)
                 MetricLink("Recovery factor", ratioValue(summary.recoveryFactor), analytics.drawdown.tradeKeys, openDrillDown)
                 MetricLink("Average drawdown depth", percent(-drawdowns.averageDepthPercent), drawdownTradeKeys(drawdowns.episodes), openDrillDown)
                 MetricLink("Average drawdown length", duration(drawdowns.averageLengthSeconds.toLong()), drawdownTradeKeys(drawdowns.episodes), openDrillDown)
@@ -637,6 +637,7 @@ private fun ratioText(value: Double, available: Boolean): String = if (available
 private fun nullableRatio(value: Double?): String = if (value != null && value.isFinite()) String.format("%.2f", value) else "N/A"
 private fun ratioValue(value: Double): String = if (value.isFinite()) String.format("%.2f", value) else "∞"
 private fun riskLossMagnitude(value: Double): String = unsignedPercent(max(0.0, -value))
+private fun drawdownCurrencyValue(value: Double): Double = if (value.isFinite() && value != 0.0) -abs(value) else 0.0
 private fun formatNumber(value: Double): String = String.format("%.2f", value)
 private fun milliseconds(value: Double?): String = when {
     value == null || !value.isFinite() -> "N/A"

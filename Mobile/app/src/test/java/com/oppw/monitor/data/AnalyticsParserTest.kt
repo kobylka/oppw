@@ -105,11 +105,34 @@ class AnalyticsParserTest {
 
     @Test
     fun defaultsNewAdditiveMetricsForOlderAnalyticsPayloads() {
-        val summary = JsonParser.parseAnalytics("""{"ok":true,"summary":{}}""").summary
+        val analytics = JsonParser.parseAnalytics("""
+            {
+              "ok": true,
+              "summary": {},
+              "drawdown": {
+                "maxDrawdownPercent": 4.5,
+                "averageMaePercent": -1.2,
+                "series": [{
+                  "index": 1,
+                  "tradeKey": "DEMO:42",
+                  "closedAt": "2026-07-27T10:00:00Z",
+                  "equityIndex": 95.5,
+                  "drawdownPercent": -4.5,
+                  "maePercent": -1.2
+                }]
+              }
+            }
+        """.trimIndent())
+        val summary = analytics.summary
 
         assertEquals(0.0, summary.averageWeeklyPreleverageReturnPercent, 0.0)
         assertEquals(0.0, summary.averageWeeklyLeveragedReturnPercent, 0.0)
         assertEquals(0.0, summary.averageWinPreleverageReturnPercent, 0.0)
         assertEquals(0.0, summary.averageLossLeveragedReturnPercent, 0.0)
+        assertEquals(4.5, analytics.drawdown.maxDrawdownPercent, 0.0)
+        assertEquals(0.0, analytics.drawdown.maxDrawdownCurrency, 0.0)
+        assertEquals(0.0, analytics.drawdown.averageDepthPercent, 0.0)
+        assertEquals(0.0, analytics.drawdown.series.single().equity, 0.0)
+        assertEquals(0.0, analytics.drawdown.series.single().drawdownCurrency, 0.0)
     }
 }

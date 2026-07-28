@@ -463,6 +463,8 @@ class Sim:
         # Wednesday tpps[1], and subsequent sessions advance from there.
         trading_day_indices = weekly_trading_day_indices(self.quotes.keys())
         
+        z = 0
+        
         for date in sorted(self.quotes):
             if date < start_date: continue
             if date >= end_date: break
@@ -638,12 +640,13 @@ class Sim:
                 qqq_open_price = qqq_open
                 self.trade_no += 1
                 
-                if(self.deposited < 200000):
+                if(self.deposited < 200000 and z%4==0):
                     granular = int((self.balance/1.765/2240))
                     plus_one = int(2240*(granular+1)*1.765-self.balance+100)
                     self.deposited += plus_one
                     self.balance += plus_one
-
+                    
+                z += 1
             # --------------------------------------------------------
             # Cash-open exits.
             # --------------------------------------------------------
@@ -879,7 +882,7 @@ if __name__ == "__main__":
     
     tpps = [0.007,0.02,0.05,0.05,0.05]
     print(tpps)
-    result = sim.process(sim_i.quotes, "QQQ","20210103", "20260720", LEVERAGE, tpps, SL, BE, 0.004,0.004, 8000, False,True,True,True)
+    result = sim.process(sim_i.quotes, "QQQ","20180413", "20260720", LEVERAGE, tpps, SL, BE, 0.004,0.004, 8000, False,True,True,True)
     print(result)
     
     #1,79216 125
