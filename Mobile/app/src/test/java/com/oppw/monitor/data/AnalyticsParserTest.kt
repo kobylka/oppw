@@ -12,6 +12,10 @@ class AnalyticsParserTest {
               "filters": {"rollingWeeks": 4, "allHistory": true},
               "filterOptions": {"availableWeeks": 82, "effectiveRollingWeeks": 82},
               "summary": {
+                "windowCompoundedPreleverageReturnPercent": 0.2889701,
+                "windowCompoundedLeveragedReturnPercent": 1.871,
+                "weeklyGeometricPreleverageReturnPercent": 0.0035193,
+                "weeklyGeometricLeveragedReturnPercent": 0.0225829,
                 "averageWeeklyPreleverageReturnPercent": 0.1465,
                 "averageWeeklyLeveragedReturnPercent": 1.15,
                 "averageWinPreleverageReturnPercent": 0.75,
@@ -79,6 +83,10 @@ class AnalyticsParserTest {
         """.trimIndent())
 
         with(analytics.summary) {
+            assertEquals(0.2889701, windowCompoundedPreleverageReturnPercent, 0.000001)
+            assertEquals(1.871, windowCompoundedLeveragedReturnPercent, 0.000001)
+            assertEquals(0.0035193, weeklyGeometricPreleverageReturnPercent, 0.000001)
+            assertEquals(0.0225829, weeklyGeometricLeveragedReturnPercent, 0.000001)
             assertEquals(0.1465, averageWeeklyPreleverageReturnPercent, 0.000001)
             assertEquals(1.15, averageWeeklyLeveragedReturnPercent, 0.000001)
             assertEquals(0.75, averageWinPreleverageReturnPercent, 0.000001)
@@ -137,6 +145,10 @@ class AnalyticsParserTest {
         """.trimIndent())
         val summary = analytics.summary
 
+        assertEquals(0.0, summary.windowCompoundedPreleverageReturnPercent, 0.0)
+        assertEquals(0.0, summary.windowCompoundedLeveragedReturnPercent, 0.0)
+        assertEquals(0.0, summary.weeklyGeometricPreleverageReturnPercent, 0.0)
+        assertEquals(0.0, summary.weeklyGeometricLeveragedReturnPercent, 0.0)
         assertEquals(0.0, summary.averageWeeklyPreleverageReturnPercent, 0.0)
         assertEquals(0.0, summary.averageWeeklyLeveragedReturnPercent, 0.0)
         assertEquals(0.0, summary.averageWinPreleverageReturnPercent, 0.0)

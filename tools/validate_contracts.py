@@ -785,6 +785,8 @@ return [
                 raise AssertionError("all-history analytics did not include every available week")
             summary = analytics["summary"]
             for key in (
+                "windowCompoundedPreleverageReturnPercent", "windowCompoundedLeveragedReturnPercent",
+                "weeklyGeometricPreleverageReturnPercent", "weeklyGeometricLeveragedReturnPercent",
                 "averageWeeklyPreleverageReturnPercent", "averageWeeklyLeveragedReturnPercent",
                 "averageWinPreleverageReturnPercent", "averageWinLeveragedReturnPercent",
                 "averageLossPreleverageReturnPercent", "averageLossLeveragedReturnPercent",

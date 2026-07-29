@@ -99,9 +99,13 @@ private fun AnalyticsContent(state: UiState, analytics: AnalyticsResponse, onFil
                 MetricLink("Win rate", unsignedPercent(summary.winRate), sample(analytics, "winRate", allTradeKeys), openDrillDown)
                 MetricLink("Profit factor", ratioValue(summary.profitFactor), sample(analytics, "profitFactor", allTradeKeys), openDrillDown)
                 MetricLink("Expectancy", money(summary.expectancy, currency), sample(analytics, "expectancy", allTradeKeys), openDrillDown)
+                MetricLink("Window compounded · pre-leverage", percent(summary.windowCompoundedPreleverageReturnPercent), sample(analytics, "windowCompoundedPreleverageReturn", allTradeKeys), openDrillDown)
+                MetricLink("Window compounded · leveraged", percent(summary.windowCompoundedLeveragedReturnPercent), sample(analytics, "windowCompoundedLeveragedReturn", allTradeKeys), openDrillDown)
+                MetricLink("Weekly geometric · pre-leverage", percent(summary.weeklyGeometricPreleverageReturnPercent), sample(analytics, "weeklyGeometricPreleverageReturn", allTradeKeys), openDrillDown)
+                MetricLink("Weekly geometric · leveraged", percent(summary.weeklyGeometricLeveragedReturnPercent), sample(analytics, "weeklyGeometricLeveragedReturn", allTradeKeys), openDrillDown)
                 MetricLink("Sharpe · annualized", ratioText(summary.sharpeRatio, summary.sharpeAvailable), sample(analytics, "sharpeRatio", allTradeKeys), openDrillDown)
                 MetricLink("Sortino · annualized", if (summary.sortinoInfinite) "∞" else ratioText(summary.sortinoRatio, summary.sortinoAvailable), sample(analytics, "sortinoRatio", allTradeKeys), openDrillDown)
-                Text("Each row opens the exact filtered trades used in the calculation. Ratios use closed-trade account returns and √${summary.periodsPerYear} annualization.", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                Text("Window returns compound every filtered closed trade. Weekly geometric returns use the full ${analytics.filterOptions.effectiveRollingWeeks}-week window, including weeks without a close. Each row opens the exact filtered trades used in the calculation. Ratios use closed-trade account returns and √${summary.periodsPerYear} annualization.", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
             }
         }
         item {
