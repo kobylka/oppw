@@ -389,7 +389,8 @@ return [
   'pairing_code_ttl_minutes' => 10, 'default_account_key' => 'DEMO',
   'event_limit' => 50, 'monitor_heartbeat_stale_seconds' => 180,
   'monitor_price_warning_seconds' => 60, 'service_supervisor_stale_seconds' => 20, 'require_https' => false,
-  'analytics_cache_ttl_seconds' => 30, 'analytics_cache_dir' => '{analytics_cache_dir}',
+  'analytics_cache_ttl_seconds' => 30, 'analytics_segment_cache_ttl_seconds' => 86400,
+  'analytics_cache_dir' => '{analytics_cache_dir}',
   'trust_forwarded_proto' => false, 'push_enabled' => false,
   'firebase_project_id' => '', 'firebase_service_account_file' => ''
 ];
@@ -786,6 +787,12 @@ return [
             )
             if analytics_headers.get("x-oppw-analytics-cache") != "MISS":
                 raise AssertionError("first analytics response was not an explicit cache miss")
+            first_segment_header = analytics_headers.get("x-oppw-analytics-segments", "")
+            first_segment_counts = dict(
+                part.strip().split("=", 1) for part in first_segment_header.split(";") if "=" in part
+            )
+            if int(first_segment_counts.get("misses", "0")) < 1 or int(first_segment_counts.get("live", "0")) < 1:
+                raise AssertionError("cold analytics request did not populate historical segments and query the live tail")
             cached_headers: dict[str, str] = {}
             _, cached_analytics, cached_analytics_raw = http_json(
                 "GET", analytics_url, token=access_token, response_headers=cached_headers,
@@ -794,13 +801,21 @@ return [
                 raise AssertionError("identical analytics request did not reuse the completed response")
             if cached_analytics_raw != analytics_raw or cached_analytics != analytics:
                 raise AssertionError("cached and uncached analytics responses are not identical")
+            all_history_headers: dict[str, str] = {}
             _, all_history_analytics, all_history_analytics_raw = http_json(
                 "GET", base_url + "analytics.php?account=DEMO&all_history=1", token=access_token,
+                response_headers=all_history_headers,
             )
             if not all_history_analytics["filters"].get("allHistory"):
                 raise AssertionError("analytics did not honor the explicit all-history request")
             if int(all_history_analytics["filterOptions"]["effectiveRollingWeeks"]) != int(all_history_analytics["filterOptions"]["availableWeeks"]):
                 raise AssertionError("all-history analytics did not include every available week")
+            all_history_segment_header = all_history_headers.get("x-oppw-analytics-segments", "")
+            all_history_segment_counts = dict(
+                part.strip().split("=", 1) for part in all_history_segment_header.split(";") if "=" in part
+            )
+            if int(all_history_segment_counts.get("hits", "0")) < 1:
+                raise AssertionError("overlapping all-history analytics did not reuse a completed weekly segment")
             summary = analytics["summary"]
             for key in (
                 "windowCompoundedPreleverageReturnPercent", "windowCompoundedLeveragedReturnPercent",
@@ -918,12 +933,23 @@ return [
             docker_sql(docker, container, """
                 INSERT INTO strategy_equity_points(
                     strategy_key,captured_minute,balance,equity,deposit,current_profit,position_ticket
-                ) VALUES ('DEMO','2099-01-05 15:30:00',10000,10000,10000,0,NULL)
+                )
+                SELECT strategy_key,captured_minute + INTERVAL 1 MINUTE,balance,equity,deposit,current_profit,position_ticket
+                  FROM strategy_equity_points
+                 WHERE strategy_key='DEMO'
+                 ORDER BY captured_minute DESC
+                 LIMIT 1
             """, docker_env)
             equity_headers: dict[str, str] = {}
             http_json("GET", analytics_url, token=access_token, response_headers=equity_headers)
             if equity_headers.get("x-oppw-analytics-cache") != "MISS":
                 raise AssertionError("new equity data did not invalidate the analytics response cache")
+            equity_segment_header = equity_headers.get("x-oppw-analytics-segments", "")
+            equity_segment_counts = dict(
+                part.strip().split("=", 1) for part in equity_segment_header.split(";") if "=" in part
+            )
+            if int(equity_segment_counts.get("hits", "0")) < 1:
+                raise AssertionError("live equity invalidation rescanned every completed historical segment")
 
             docker_sql(docker, container, """
                 UPDATE strategy_trades

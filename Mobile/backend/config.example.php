@@ -33,8 +33,10 @@ return [
     'service_supervisor_stale_seconds' => 20,
 
     // Authenticated analytics responses are reused briefly when their account data watermark is unchanged.
+    // Completed Warsaw-week input segments are reused longer; the latest requested week is always queried live.
     // Leave the directory empty to use PHP's system temp directory, or set a protected path outside the web root.
     'analytics_cache_ttl_seconds' => 30,
+    'analytics_segment_cache_ttl_seconds' => 86400,
     'analytics_cache_dir' => '',
 
     // Leave true in production. Enable forwarded proto only behind a trusted proxy

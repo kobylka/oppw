@@ -94,14 +94,37 @@ if($latestWeek instanceof DateTimeImmutable&&$effectiveRollingWeeks>0){$windowSt
 $activeOptionRows=[];
 if($windowStartUtc!==null&&$windowEndUtc!==null){$optionSql="SELECT DISTINCT ROUND(COALESCE(entry_leverage,0),3) AS entry_leverage,exit_reason FROM strategy_trades WHERE strategy_key IN ($placeholders) AND COALESCE(closed_at,opened_at)>=? AND COALESCE(closed_at,opened_at)<? LIMIT 501";$optionStmt=$db->prepare($optionSql);$optionStmt->execute(array_merge($accountKeys,[mysql_datetime($windowStartUtc),mysql_datetime($windowEndUtc)]));$activeOptionRows=$optionStmt->fetchAll();if(count($activeOptionRows)>500)json_response(['ok'=>false,'error'=>'Analytics filter cardinality exceeds the safe limit'],503);}
 $queryWindowEndUtc=$windowEndUtc??utc_now()->modify('+1 second');$queryWindowStartUtc=$windowStartUtc??$queryWindowEndUtc->modify('-80 weeks');
-$baseSql="SELECT t.*,a.account_type FROM strategy_trades t JOIN monitor_accounts a ON a.account_key=t.strategy_key WHERE t.strategy_key IN ($placeholders)";
-$params=$accountKeys;
-if($windowStartUtc!==null&&$windowEndUtc!==null){$baseSql.=' AND COALESCE(t.closed_at,t.opened_at)>=? AND COALESCE(t.closed_at,t.opened_at)<?';$params[]=mysql_datetime($windowStartUtc);$params[]=mysql_datetime($windowEndUtc);}
-if($leverage!==''&&is_numeric($leverage)){ $baseSql.=' AND ROUND(COALESCE(t.entry_leverage,0),3)=?'; $params[]=(float)$leverage; }
-if($exitReason!==''){ $baseSql.=' AND t.exit_reason=?'; $params[]=$exitReason; }
-if(in_array($class,['A','B','C','D'],true)){ $baseSql.=' AND t.trade_class=?'; $params[]=$class; }
-$baseSql.=' ORDER BY COALESCE(t.closed_at,t.opened_at),t.id LIMIT 5001';
-$tradeStmt=$db->prepare($baseSql); $tradeStmt->execute($params); $rows=$tradeStmt->fetchAll();
+$segmentStats=oppw_analytics_segment_stats();
+$segmentContext=[
+    'implementation'=>'analytics-input-v1',
+    'database'=>hash('sha256',(string)$cacheConfig['dsn']),
+    'accountKeys'=>array_values($accountKeys),
+];
+$tradeLoader=static function(DateTimeImmutable $segmentStartUtc,DateTimeImmutable $segmentEndUtc,int $limit)use($db,$placeholders,$accountKeys,$leverage,$exitReason,$class):iterable{
+    $sql="SELECT t.*,a.account_type FROM strategy_trades t JOIN monitor_accounts a ON a.account_key=t.strategy_key WHERE t.strategy_key IN ($placeholders) AND COALESCE(t.closed_at,t.opened_at)>=? AND COALESCE(t.closed_at,t.opened_at)<?";
+    $params=array_merge($accountKeys,[mysql_datetime($segmentStartUtc),mysql_datetime($segmentEndUtc)]);
+    if($leverage!==''&&is_numeric($leverage)){$sql.=' AND ROUND(COALESCE(t.entry_leverage,0),3)=?';$params[]=(float)$leverage;}
+    if($exitReason!==''){$sql.=' AND t.exit_reason=?';$params[]=$exitReason;}
+    if(in_array($class,['A','B','C','D'],true)){$sql.=' AND t.trade_class=?';$params[]=$class;}
+    $sql.=' ORDER BY COALESCE(t.closed_at,t.opened_at),t.id LIMIT '.max(1,$limit);
+    $stmt=$db->prepare($sql);$stmt->execute($params);
+    return $stmt->fetchAll();
+};
+try{
+    $rows=iterator_to_array(oppw_analytics_segmented_rows(
+        $cacheConfig,
+        $segmentContext+['dataset'=>'filtered-trades-v1','leverage'=>$leverage,'exitReason'=>$exitReason,'tradeClass'=>$class],
+        $queryWindowStartUtc,
+        $queryWindowEndUtc,
+        $tradeLoader,
+        $segmentStats,
+        5000,
+        null,
+        5000
+    ),false);
+}catch(OppwAnalyticsSegmentLimitException){
+    json_response(['ok'=>false,'error'=>'Analytics trade sample exceeds the safe limit'],503);
+}
 if(count($rows)>5000)json_response(['ok'=>false,'error'=>'Analytics trade sample exceeds the safe limit'],503);
 $trades=[];
 foreach($rows as $row){
@@ -186,15 +209,27 @@ $filteredDecisionSet=[];$filteredTicketSet=[];$tradeKeyByDecision=[];$tradeKeyBy
 foreach($trades as $trade){$tradeKey=trade_key($trade);if($trade['decisionId']!==''){$compound=$trade['strategyKey'].'|'.$trade['decisionId'];$filteredDecisionSet[$compound]=true;$tradeKeyByDecision[$compound]=$tradeKey;}if($trade['ticket']>0){$compound=$trade['strategyKey'].'|'.$trade['ticket'];$filteredTicketSet[$compound]=true;$tradeKeyByTicket[$compound]=$tradeKey;}}
 $lifecycleGroups=[];
 $appendLifecycle=function(array $row)use(&$lifecycleGroups,$hasTradeSpecificFilter,$filteredDecisionSet,$filteredTicketSet):void{$executionId=trim((string)($row['execution_id']??''));if($executionId==='')return;$stage=strtoupper((string)($row['stage']??''));if($stage==='')return;$eventStrategyKey=(string)$row['strategy_key'];$eventDecisionId=(string)($row['decision_id']??'');$eventTicket=(int)($row['position_ticket']??0);if($hasTradeSpecificFilter&&!isset($filteredDecisionSet[$eventStrategyKey.'|'.$eventDecisionId])&&!isset($filteredTicketSet[$eventStrategyKey.'|'.$eventTicket]))return;$entry=['stage'=>$stage,'eventAt'=>iso_value((string)$row['event_time']),'result'=>$row['result']===null?null:(bool)$row['result'],'retcode'=>$row['retcode']??null,'fillingMode'=>(string)($row['filling_mode']??''),'referencePrice'=>n($row['reference_price']??0),'actualPrice'=>n($row['actual_price']??0),'latencyMs'=>isset($row['latency_ms'])&&is_numeric($row['latency_ms'])?(float)$row['latency_ms']:null,'reason'=>(string)($row['reason']??'')];if(!isset($lifecycleGroups[$executionId]))$lifecycleGroups[$executionId]=['executionId'=>$executionId,'strategyKey'=>$eventStrategyKey,'decisionId'=>$eventDecisionId,'positionTicket'=>$eventTicket,'stages'=>[]];if($eventDecisionId!=='')$lifecycleGroups[$executionId]['decisionId']=$eventDecisionId;if($eventTicket>0)$lifecycleGroups[$executionId]['positionTicket']=$eventTicket;$lifecycleGroups[$executionId]['stages'][]=$entry;};
-$stageSql="SELECT strategy_key,execution_id,decision_id,position_ticket,stage,occurred_at AS event_time,result,retcode,filling_mode,reference_price,actual_price,latency_ms,reason FROM strategy_execution_stages WHERE strategy_key IN ($placeholders) AND occurred_at>=? AND occurred_at<? ORDER BY occurred_at,id LIMIT 20001";
-$stageStmt=$db->prepare($stageSql);$stageStmt->execute(array_merge($accountKeys,[mysql_datetime($queryWindowStartUtc),mysql_datetime($queryWindowEndUtc)]));$stageRows=$stageStmt->fetchAll();if(count($stageRows)>20000)json_response(['ok'=>false,'error'=>'Analytics lifecycle sample exceeds the safe limit'],503);foreach($stageRows as $row)$appendLifecycle($row);
+$stageLoader=static function(DateTimeImmutable $segmentStartUtc,DateTimeImmutable $segmentEndUtc,int $limit)use($db,$placeholders,$accountKeys):iterable{
+    $sql="SELECT strategy_key,execution_id,decision_id,position_ticket,stage,occurred_at AS event_time,result,retcode,filling_mode,reference_price,actual_price,latency_ms,reason FROM strategy_execution_stages WHERE strategy_key IN ($placeholders) AND occurred_at>=? AND occurred_at<? ORDER BY occurred_at,id LIMIT ".max(1,$limit);
+    $stmt=$db->prepare($sql);$stmt->execute(array_merge($accountKeys,[mysql_datetime($segmentStartUtc),mysql_datetime($segmentEndUtc)]));return $stmt->fetchAll();
+};
+try{$stageRows=iterator_to_array(oppw_analytics_segmented_rows($cacheConfig,$segmentContext+['dataset'=>'execution-stages-v1'],$queryWindowStartUtc,$queryWindowEndUtc,$stageLoader,$segmentStats,20000,null,20000),false);}catch(OppwAnalyticsSegmentLimitException){json_response(['ok'=>false,'error'=>'Analytics lifecycle sample exceeds the safe limit'],503);}
+if(count($stageRows)>20000)json_response(['ok'=>false,'error'=>'Analytics lifecycle sample exceeds the safe limit'],503);foreach($stageRows as $row)$appendLifecycle($row);
 // Historical records created before v51 remain available from the diagnostic stream.
-$eventSql="SELECT e.strategy_key,e.event_time,e.result,e.details FROM strategy_events e WHERE e.strategy_key IN ($placeholders) AND e.name='EXECUTION_STAGE' AND e.event_time>=? AND e.event_time<? AND NOT EXISTS(SELECT 1 FROM strategy_execution_stages s WHERE s.strategy_key=e.strategy_key AND s.stage_record_id=e.event_hash) ORDER BY e.event_time,e.id LIMIT 20001";
-$eventStmt=$db->prepare($eventSql);$eventStmt->execute(array_merge($accountKeys,[mysql_datetime($queryWindowStartUtc),mysql_datetime($queryWindowEndUtc)]));$eventRows=$eventStmt->fetchAll();if(count($eventRows)>20000)json_response(['ok'=>false,'error'=>'Analytics legacy lifecycle sample exceeds the safe limit'],503);foreach($eventRows as $row){$details=[];try{$details=json_decode((string)$row['details'],true,512,JSON_THROW_ON_ERROR);}catch(Throwable){}if(!is_array($details))continue;$appendLifecycle(['strategy_key'=>$row['strategy_key'],'execution_id'=>$details['execution_id']??'','decision_id'=>$details['decision_id']??'','position_ticket'=>$details['position_ticket']??0,'stage'=>$details['stage']??'','event_time'=>$details['event_at']??$row['event_time'],'result'=>$row['result'],'retcode'=>$details['retcode']??null,'filling_mode'=>$details['filling_mode']??'','reference_price'=>$details['reference_price']??0,'actual_price'=>$details['actual_price']??0,'latency_ms'=>$details['latency_ms']??null,'reason'=>$details['reason']??'']);}
+$eventLoader=static function(DateTimeImmutable $segmentStartUtc,DateTimeImmutable $segmentEndUtc,int $limit)use($db,$placeholders,$accountKeys):iterable{
+    $sql="SELECT e.strategy_key,e.event_time,e.result,e.details FROM strategy_events e WHERE e.strategy_key IN ($placeholders) AND e.name='EXECUTION_STAGE' AND e.event_time>=? AND e.event_time<? AND NOT EXISTS(SELECT 1 FROM strategy_execution_stages s WHERE s.strategy_key=e.strategy_key AND s.stage_record_id=e.event_hash) ORDER BY e.event_time,e.id LIMIT ".max(1,$limit);
+    $stmt=$db->prepare($sql);$stmt->execute(array_merge($accountKeys,[mysql_datetime($segmentStartUtc),mysql_datetime($segmentEndUtc)]));return $stmt->fetchAll();
+};
+try{$eventRows=iterator_to_array(oppw_analytics_segmented_rows($cacheConfig,$segmentContext+['dataset'=>'legacy-execution-events-v1'],$queryWindowStartUtc,$queryWindowEndUtc,$eventLoader,$segmentStats,20000,null,20000),false);}catch(OppwAnalyticsSegmentLimitException){json_response(['ok'=>false,'error'=>'Analytics legacy lifecycle sample exceeds the safe limit'],503);}
+if(count($eventRows)>20000)json_response(['ok'=>false,'error'=>'Analytics legacy lifecycle sample exceeds the safe limit'],503);foreach($eventRows as $row){$details=[];try{$details=json_decode((string)$row['details'],true,512,JSON_THROW_ON_ERROR);}catch(Throwable){}if(!is_array($details))continue;$appendLifecycle(['strategy_key'=>$row['strategy_key'],'execution_id'=>$details['execution_id']??'','decision_id'=>$details['decision_id']??'','position_ticket'=>$details['position_ticket']??0,'stage'=>$details['stage']??'','event_time'=>$details['event_at']??$row['event_time'],'result'=>$row['result'],'retcode'=>$details['retcode']??null,'filling_mode'=>$details['filling_mode']??'','reference_price'=>$details['reference_price']??0,'actual_price'=>$details['actual_price']??0,'latency_ms'=>$details['latency_ms']??null,'reason'=>$details['reason']??'']);}
 // A paired device may attest only that it received a snapshot. Receipts remain
 // diagnostic and are merged into the presentation without entering execution authority.
-$receiptSql="SELECT strategy_key,event_time,result,details FROM strategy_events WHERE strategy_key IN ($placeholders) AND name='MOBILE_RECEIPT' AND event_time>=? AND event_time<? ORDER BY event_time,id LIMIT 20001";
-$receiptStmt=$db->prepare($receiptSql);$receiptStmt->execute(array_merge($accountKeys,[mysql_datetime($queryWindowStartUtc),mysql_datetime($queryWindowEndUtc)]));$receiptRows=$receiptStmt->fetchAll();if(count($receiptRows)>20000)json_response(['ok'=>false,'error'=>'Analytics receipt sample exceeds the safe limit'],503);foreach($receiptRows as $row){$details=[];try{$details=json_decode((string)$row['details'],true,512,JSON_THROW_ON_ERROR);}catch(Throwable){}if(!is_array($details))continue;$appendLifecycle(['strategy_key'=>$row['strategy_key'],'execution_id'=>$details['execution_id']??'','decision_id'=>$details['decision_id']??'','position_ticket'=>$details['position_ticket']??0,'stage'=>'MOBILE_RECEIPT','event_time'=>$details['event_at']??$row['event_time'],'result'=>$row['result'],'retcode'=>null,'filling_mode'=>'','reference_price'=>0,'actual_price'=>0,'latency_ms'=>$details['latency_ms']??null,'reason'=>'PAIRED_DEVICE_DIAGNOSTIC']);}
+$receiptLoader=static function(DateTimeImmutable $segmentStartUtc,DateTimeImmutable $segmentEndUtc,int $limit)use($db,$placeholders,$accountKeys):iterable{
+    $sql="SELECT strategy_key,event_time,result,details FROM strategy_events WHERE strategy_key IN ($placeholders) AND name='MOBILE_RECEIPT' AND event_time>=? AND event_time<? ORDER BY event_time,id LIMIT ".max(1,$limit);
+    $stmt=$db->prepare($sql);$stmt->execute(array_merge($accountKeys,[mysql_datetime($segmentStartUtc),mysql_datetime($segmentEndUtc)]));return $stmt->fetchAll();
+};
+try{$receiptRows=iterator_to_array(oppw_analytics_segmented_rows($cacheConfig,$segmentContext+['dataset'=>'mobile-receipts-v1'],$queryWindowStartUtc,$queryWindowEndUtc,$receiptLoader,$segmentStats,20000,null,20000),false);}catch(OppwAnalyticsSegmentLimitException){json_response(['ok'=>false,'error'=>'Analytics receipt sample exceeds the safe limit'],503);}
+if(count($receiptRows)>20000)json_response(['ok'=>false,'error'=>'Analytics receipt sample exceeds the safe limit'],503);foreach($receiptRows as $row){$details=[];try{$details=json_decode((string)$row['details'],true,512,JSON_THROW_ON_ERROR);}catch(Throwable){}if(!is_array($details))continue;$appendLifecycle(['strategy_key'=>$row['strategy_key'],'execution_id'=>$details['execution_id']??'','decision_id'=>$details['decision_id']??'','position_ticket'=>$details['position_ticket']??0,'stage'=>'MOBILE_RECEIPT','event_time'=>$details['event_at']??$row['event_time'],'result'=>$row['result'],'retcode'=>null,'filling_mode'=>'','reference_price'=>0,'actual_price'=>0,'latency_ms'=>$details['latency_ms']??null,'reason'=>'PAIRED_DEVICE_DIAGNOSTIC']);}
 $lifecycles=[];$decisionLatencies=[];$decisionLatencyKeys=[];$ackLatencies=[];$ackLatencyKeys=[];$fillLatencies=[];$fillLatencyKeys=[];$protectionLatencies=[];$protectionLatencyKeys=[];$publicationLatencies=[];$publicationLatencyKeys=[];$mobileLatencies=[];$mobileLatencyKeys=[];$rejections=0;$attemptCount=0;$sentCount=0;$missed=0;$retcodes=[];$filling=[];$executionTradeKeys=[];$rejectionTradeKeys=[];$sentTradeKeys=[];$missedTradeKeys=[];$retcodeTradeKeys=[];$fillingTradeKeys=[];
 foreach($lifecycleGroups as $lifecycle){
     $stageMap=[];foreach($lifecycle['stages'] as $stage){$stageName=$stage['stage'];if(!isset($stageMap[$stageName])){$stageMap[$stageName]=$stage;continue;}if($stageName==='MODIFIED'||($stageMap[$stageName]['result']===false&&$stage['result']!==false))$stageMap[$stageName]=$stage;}
@@ -217,14 +252,34 @@ foreach($retcodeTradeKeys as $key=>$keys)$retcodeTradeKeys[$key]=$uniqueKeys($ke
 $latencySummary=function(array $values,array $keys)use($uniqueKeys):array{return ['sampleCount'=>count($values),'medianMs'=>percentile_values($values,50),'p95Ms'=>percentile_values($values,95),'tradeKeys'=>$uniqueKeys($keys)];};
 $executionQuality=['lifecycles'=>array_reverse(array_slice($lifecycles,-100)),'decisionToSend'=>$latencySummary($decisionLatencies,$decisionLatencyKeys),'brokerAcknowledgement'=>$latencySummary($ackLatencies,$ackLatencyKeys),'fill'=>$latencySummary($fillLatencies,$fillLatencyKeys),'protectionAttachment'=>$latencySummary($protectionLatencies,$protectionLatencyKeys),'backendPublication'=>$latencySummary($publicationLatencies,$publicationLatencyKeys),'executorToMobile'=>$latencySummary($mobileLatencies,$mobileLatencyKeys),'rejectionRatePercent'=>$attemptCount>0?$rejections/$attemptCount*100:0,'rejections'=>$rejections,'orderAttempts'=>$attemptCount,'sentOrders'=>$sentCount,'missedExecutionWindows'=>$missed,'retcodes'=>$retcodes,'fillingModes'=>$filling,'tradeKeys'=>$uniqueKeys($executionTradeKeys),'rejectionTradeKeys'=>$uniqueKeys($rejectionTradeKeys),'sentTradeKeys'=>$uniqueKeys($sentTradeKeys),'missedWindowTradeKeys'=>$uniqueKeys($missedTradeKeys),'retcodeTradeKeys'=>$retcodeTradeKeys,'fillingModeTradeKeys'=>$fillingTradeKeys];
 
-$cashSql="SELECT strategy_key,flow_type,amount,occurred_at FROM account_cash_flows WHERE strategy_key IN ($placeholders)";$cashParams=$accountKeys;if($windowStartUtc!==null&&$windowEndUtc!==null){$cashSql.=' AND occurred_at>=? AND occurred_at<?';$cashParams[]=mysql_datetime($windowStartUtc);$cashParams[]=mysql_datetime($windowEndUtc);}$cashSql.=' ORDER BY occurred_at,id';
-$cashStmt=$db->prepare($cashSql);$cashStmt->execute($cashParams);$cashFlows=$cashStmt->fetchAll();$initialByAccount=[];$topUps=0.0;$withdrawals=0.0;$cashByDay=[];
+$cashLoader=static function(DateTimeImmutable $segmentStartUtc,DateTimeImmutable $segmentEndUtc,int $limit)use($db,$placeholders,$accountKeys):iterable{
+    $sql="SELECT strategy_key,flow_type,amount,occurred_at FROM account_cash_flows WHERE strategy_key IN ($placeholders) AND occurred_at>=? AND occurred_at<? ORDER BY occurred_at,id LIMIT ".max(1,$limit);
+    $stmt=$db->prepare($sql);$stmt->execute(array_merge($accountKeys,[mysql_datetime($segmentStartUtc),mysql_datetime($segmentEndUtc)]));return $stmt->fetchAll();
+};
+if($windowStartUtc!==null&&$windowEndUtc!==null){
+    try{$cashFlows=iterator_to_array(oppw_analytics_segmented_rows($cacheConfig,$segmentContext+['dataset'=>'cash-flows-v1'],$queryWindowStartUtc,$queryWindowEndUtc,$cashLoader,$segmentStats,100000),false);}catch(OppwAnalyticsSegmentLimitException){json_response(['ok'=>false,'error'=>'Analytics cash-flow sample exceeds the safe limit'],503);}
+}else{
+    $cashSql="SELECT strategy_key,flow_type,amount,occurred_at FROM account_cash_flows WHERE strategy_key IN ($placeholders) ORDER BY occurred_at,id";$cashStmt=$db->prepare($cashSql);$cashStmt->execute($accountKeys);$cashFlows=$cashStmt->fetchAll();
+}
+$initialByAccount=[];$topUps=0.0;$withdrawals=0.0;$cashByDay=[];
 foreach($cashFlows as $row){$key=(string)$row['strategy_key'];$type=strtoupper((string)$row['flow_type']);$amount=n($row['amount']);$day=warsaw_day((string)$row['occurred_at']);if($type==='INITIAL'&&!isset($initialByAccount[$key])){$initialByAccount[$key]=abs($amount);continue;}if($type==='TOP_UP'){$value=abs($amount);$topUps+=$value;$cashByDay[$day]=($cashByDay[$day]??0.0)+$value;}elseif($type==='WITHDRAWAL'){$value=abs($amount);$withdrawals+=$value;$cashByDay[$day]=($cashByDay[$day]??0.0)-$value;}elseif($type==='ADJUSTMENT'){$cashByDay[$day]=($cashByDay[$day]??0.0)+$amount;}}
 foreach($accountKeys as $key){if(isset($initialByAccount[$key]))continue;foreach($closed as $trade){if($trade['strategyKey']===$key&&$trade['balanceBefore']>0){$initialByAccount[$key]=$trade['balanceBefore'];break;}}}
 $initial=array_sum($initialByAccount);$netContributions=$initial+$topUps-$withdrawals;
-$minuteEquitySql="SELECT p.strategy_key,p.captured_minute,p.equity,p.position_ticket,'MINUTE' AS source_granularity FROM strategy_equity_points p WHERE p.strategy_key IN ($placeholders)";$minuteEquityParams=$accountKeys;if($windowStartUtc!==null&&$windowEndUtc!==null){$minuteEquitySql.=' AND p.captured_minute>=? AND p.captured_minute<?';$minuteEquityParams[]=mysql_datetime($windowStartUtc);$minuteEquityParams[]=mysql_datetime($windowEndUtc);}
-$dailyEquitySql="SELECT d.strategy_key,d.last_captured_at AS captured_minute,d.close_equity AS equity,NULL AS position_ticket,'DAILY_FALLBACK' AS source_granularity FROM strategy_equity_daily d WHERE d.strategy_key IN ($placeholders) AND NOT EXISTS (SELECT 1 FROM strategy_equity_points p WHERE p.strategy_key=d.strategy_key AND p.captured_minute>=d.equity_day AND p.captured_minute<d.equity_day+INTERVAL 1 DAY)";$dailyEquityParams=$accountKeys;if($windowStartUtc!==null&&$windowEndUtc!==null){$dailyEquitySql.=' AND d.last_captured_at>=? AND d.last_captured_at<?';$dailyEquityParams[]=mysql_datetime($windowStartUtc);$dailyEquityParams[]=mysql_datetime($windowEndUtc);}$equitySql="SELECT strategy_key,captured_minute,equity,position_ticket,source_granularity FROM (($minuteEquitySql) UNION ALL ($dailyEquitySql)) equity_history ORDER BY captured_minute,strategy_key";$equityParams=array_merge($minuteEquityParams,$dailyEquityParams);
-$equityStmt=$db->prepare($equitySql,[PDO::MYSQL_ATTR_USE_BUFFERED_QUERY=>false]);$equityStmt->execute($equityParams);$portfolioEquity=oppw_portfolio_equity_rows($equityStmt);$drawdown=oppw_daily_equity_drawdown_analyze($portfolioEquity,$cashFlows,$closed);$equityStmt->closeCursor();$drawdown['averageMaePercent']=avg_values(array_column($closed,'maePercent'));
+$equityLoader=static function(DateTimeImmutable $segmentStartUtc,DateTimeImmutable $segmentEndUtc,int $limit)use($db,$placeholders,$accountKeys):iterable{
+    $minuteSql="SELECT p.strategy_key,p.captured_minute,p.equity,p.position_ticket,'MINUTE' AS source_granularity FROM strategy_equity_points p WHERE p.strategy_key IN ($placeholders) AND p.captured_minute>=? AND p.captured_minute<?";
+    $dailySql="SELECT d.strategy_key,d.last_captured_at AS captured_minute,d.close_equity AS equity,NULL AS position_ticket,'DAILY_FALLBACK' AS source_granularity FROM strategy_equity_daily d WHERE d.strategy_key IN ($placeholders) AND d.last_captured_at>=? AND d.last_captured_at<? AND NOT EXISTS (SELECT 1 FROM strategy_equity_points p WHERE p.strategy_key=d.strategy_key AND p.captured_minute>=d.equity_day AND p.captured_minute<d.equity_day+INTERVAL 1 DAY)";
+    $sql="SELECT strategy_key,captured_minute,equity,position_ticket,source_granularity FROM (($minuteSql) UNION ALL ($dailySql)) equity_history ORDER BY captured_minute,strategy_key LIMIT ".max(1,$limit);
+    $params=array_merge($accountKeys,[mysql_datetime($segmentStartUtc),mysql_datetime($segmentEndUtc)],$accountKeys,[mysql_datetime($segmentStartUtc),mysql_datetime($segmentEndUtc)]);
+    $stmt=$db->prepare($sql,[PDO::MYSQL_ATTR_USE_BUFFERED_QUERY=>false]);$stmt->execute($params);
+    try{while($row=$stmt->fetch())yield $row;}finally{$stmt->closeCursor();}
+};
+try{
+    $equityRows=oppw_analytics_segmented_rows($cacheConfig,$segmentContext+['dataset'=>'equity-history-v1'],$queryWindowStartUtc,$queryWindowEndUtc,$equityLoader,$segmentStats,100000);
+    $portfolioEquity=oppw_portfolio_equity_rows($equityRows);$drawdown=oppw_daily_equity_drawdown_analyze($portfolioEquity,$cashFlows,$closed);
+}catch(OppwAnalyticsSegmentLimitException){
+    json_response(['ok'=>false,'error'=>'Analytics weekly equity sample exceeds the safe limit'],503);
+}
+$drawdown['averageMaePercent']=avg_values(array_column($closed,'maePercent'));
 $equityByDay=$drawdown['_dailyEquity'];foreach($drawdown['_portfolioEntryFlowsByDay'] as $day=>$value)$cashByDay[$day]=($cashByDay[$day]??0.0)+(float)$value;unset($drawdown['_dailyEquity'],$drawdown['_portfolioEntryFlowsByDay']);
 ksort($equityByDay);$daily=[];foreach($equityByDay as $day=>$value)$daily[]=['day'=>$day,'equity'=>$value];
 $dailyReturns=[];$adjustedIndex=1.0;for($index=0;$index<count($daily);$index++){if($index>0){$previous=(float)$daily[$index-1]['equity'];$flow=(float)($cashByDay[$daily[$index]['day']]??0.0);$return=$previous>0?(((float)$daily[$index]['equity']-$flow)/$previous-1.0):0.0;if(is_finite($return)){$dailyReturns[]=$return;$adjustedIndex*=max(0.0000001,1.0+$return);}}}
@@ -262,4 +317,5 @@ $response=['ok'=>true,'generatedAt'=>atom_datetime(new DateTimeImmutable('now',n
 $encodedResponse=json_encode($response,JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR);
 if($cacheIdentity!==null)oppw_analytics_cache_write($cacheConfig,$cacheIdentity['slot'],$cacheIdentity['key'],$encodedResponse);
 header('X-OPPW-Analytics-Cache: '.$cacheStatus);
+header('X-OPPW-Analytics-Segments: hits='.$segmentStats['hits'].'; misses='.$segmentStats['misses'].'; live='.$segmentStats['liveQueries'].'; cache-rows='.$segmentStats['cacheRows'].'; database-rows='.$segmentStats['databaseRows']);
 json_encoded_response($encodedResponse);

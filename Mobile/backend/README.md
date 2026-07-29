@@ -71,10 +71,13 @@ Analytics accepts any positive rolling-week request and an explicit `all_history
 
 Successful analytics responses also use a private, server-side, data-watermark-keyed cache. Authentication, authorization, rate limits, filter validation, and per-device single-flight protection still run for every request. The default TTL is 30 seconds (configuration accepts 1 through 120 seconds), and a new trade or latest equity observation changes the key immediately. A hit returns the exact JSON bytes produced by the original request; `X-OPPW-Analytics-Cache` reports `HIT`, `MISS`, or `BYPASS`, while `Cache-Control: no-store` continues to prohibit client/proxy storage.
 
+When the whole-response cache misses, analytics reuses raw input segments for completed Europe/Warsaw weeks. Only the latest requested week (including the actual current week when present) is queried live, so frequent minute-equity publication no longer forces a full historical MySQL scan. Completed segments are shared only across the same database, account scope, dataset, and applicable trade filters. Their default TTL is 24 hours (configuration accepts 5 minutes through 30 days), which bounds how long a late correction to an older completed week can remain cached. `X-OPPW-Analytics-Segments` reports historical hits/misses and live-query row counts for deployment diagnostics. The endpoint still runs the canonical calculation over the combined ordered inputs and preserves the existing response contract.
+
 Optional private config:
 
 ```php
 'analytics_cache_ttl_seconds' => 30,
+'analytics_segment_cache_ttl_seconds' => 86400,
 'analytics_cache_dir' => '', // Empty uses PHP's system temp directory.
 ```
 

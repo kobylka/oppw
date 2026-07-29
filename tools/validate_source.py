@@ -363,12 +363,13 @@ def main() -> int:
             "'MOBILE_RECEIPT'", "diagnostic write failed",
         ),
         "Mobile/backend/analytics.php": (
-            "requested_analytics_rolling_weeks", "$allHistory", "enforce_single_flight", "LIMIT 5001",
-            "oppw_analytics_data_watermark", "X-OPPW-Analytics-Cache: HIT", "LIMIT 20001",
+            "requested_analytics_rolling_weeks", "$allHistory", "enforce_single_flight", "oppw_analytics_segmented_rows",
+            "oppw_analytics_data_watermark", "X-OPPW-Analytics-Cache: HIT", "X-OPPW-Analytics-Segments",
             "name='MOBILE_RECEIPT'", "AND occurred_at>=? AND occurred_at<?",
         ),
         "Mobile/backend/analytics-cache.php": (
-            "OPPW_ANALYTICS_CACHE_MAX_BYTES", "analytics_cache_ttl_seconds", "hash_hmac(", "realpath(__DIR__)",
+            "OPPW_ANALYTICS_CACHE_MAX_BYTES", "OPPW_ANALYTICS_SEGMENT_MAX_BYTES", "analytics_cache_ttl_seconds",
+            "analytics_segment_cache_ttl_seconds", "oppw_analytics_week_segments", "hash_hmac(", "realpath(__DIR__)",
             "is_link($path)", "LOCK_SH", "LOCK_EX",
             "latestMinuteEquity", "latestDailyEquity", "strategy_execution_stages", "MOBILE_RECEIPT",
         ),
@@ -393,6 +394,10 @@ def main() -> int:
             "data watermark did not invalidate the cache key", "cache hit changed the encoded response",
             "expired cache entry was reused", "authorization context did not isolate cache entries",
         ),
+        "Mobile/backend/tests/analytics-segment-test.php": (
+            "completed Warsaw weeks were not split independently", "warm segmented read queried completed historical weeks again",
+            "current Warsaw week was cached as historical", "warm and cold segmented rows differ",
+        ),
         "Mobile/app/src/main/java/com/oppw/monitor/data/Models.kt": (
             "val allHistory: Boolean = false",
         ),
@@ -410,6 +415,10 @@ def main() -> int:
         ),
         "docs/decisions/0020-watermark-keyed-analytics-response-cache.md": (
             "Watermark-keyed analytics response cache", "Authorization and throttling are never cached or bypassed",
+            "No database migration or Android contract change is required",
+        ),
+        "docs/decisions/0021-completed-week-analytics-input-segments.md": (
+            "Completed-week analytics input segments", "latest requested week is always queried live",
             "No database migration or Android contract change is required",
         ),
     }
@@ -461,7 +470,7 @@ def main() -> int:
             "first-session daily", "holiday-first-session daily", "manual-preopen daily",
             "manual-after-open weekly", "following-day daily", "completed-week weekly",
         ),
-        "Mobile/backend/analytics.php": ("strategy_equity_daily", "minuteEquitySql"),
+        "Mobile/backend/analytics.php": ("strategy_equity_daily", "equity-history-v1", "DAILY_FALLBACK"),
         "Mobile/backend/analytics-drawdown.php": (
             "cashFlowAdjusted", "statisticsExact", "MINUTE_WITH_DAILY_FALLBACK",
             "oppw_downsample_drawdown_series",
