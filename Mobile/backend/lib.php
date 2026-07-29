@@ -38,13 +38,21 @@ function pdo(): PDO
 
 function json_response(array $payload, int $status = 200): never
 {
+    json_encoded_response(
+        json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR),
+        $status
+    );
+}
+
+function json_encoded_response(string $payload, int $status = 200): never
+{
     http_response_code($status);
     header('Content-Type: application/json; charset=utf-8');
     header('Cache-Control: no-store, max-age=0');
     header('Pragma: no-cache');
     header('X-Content-Type-Options: nosniff');
     header('Referrer-Policy: no-referrer');
-    echo json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+    echo $payload;
     exit;
 }
 

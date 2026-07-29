@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 require __DIR__ . '/lib.php';
+require __DIR__ . '/analytics-cache.php';
 require __DIR__ . '/analytics-drawdown.php';
 require_method('GET');
 $db = pdo();
@@ -47,6 +48,38 @@ else foreach($allowed as $row)if(strtoupper((string)$row['account_type'])===$sco
 if(!$accountKeys)json_response(['ok'=>false,'error'=>'No permitted account matches selected scope'],404);
 if(count($accountKeys)>8)json_response(['ok'=>false,'error'=>'Analytics scope exceeds the maximum of 8 accounts'],422);
 
+$requestedRollingWeeks=requested_analytics_rolling_weeks($_GET['rolling_weeks']??4);
+$allHistory=filter_var($_GET['all_history']??false,FILTER_VALIDATE_BOOLEAN,FILTER_NULL_ON_FAILURE);if($allHistory===null)json_response(['ok'=>false,'error'=>'Invalid all_history filter'],400);
+$leverage=trim((string)($_GET['leverage']??''));
+$exitReason=trim((string)($_GET['exit_reason']??''));
+$class=strtoupper(trim((string)($_GET['class']??'')));
+if(strlen($leverage)>32||strlen($exitReason)>100||strlen($class)>1)json_response(['ok'=>false,'error'=>'Invalid analytics filter'],400);
+
+$cacheConfig=config();$cacheIdentity=null;$cacheStatus='BYPASS';
+try{
+    $cacheContext=[
+        'implementation'=>'analytics-response-v1',
+        'database'=>hash('sha256',(string)$cacheConfig['dsn']),
+        'deviceId'=>(string)$session['device_id'],
+        'allowedAccounts'=>array_values(array_map(fn($row)=>['key'=>(string)$row['account_key'],'label'=>(string)$row['display_name'],'type'=>(string)$row['account_type']],$allowed)),
+        'accountKeys'=>$accountKeys,
+        'scope'=>$scope,
+        'account'=>$requested,
+        'rollingWeeks'=>$requestedRollingWeeks,
+        'allHistory'=>$allHistory,
+        'leverage'=>$leverage,
+        'exitReason'=>$exitReason,
+        'tradeClass'=>$class,
+    ];
+    $dataWatermark=oppw_analytics_data_watermark($db,$accountKeys);
+    $cacheIdentity=oppw_analytics_cache_identifiers($cacheContext,$dataWatermark);
+    $cachedResponse=oppw_analytics_cache_read($cacheConfig,$cacheIdentity['slot'],$cacheIdentity['key']);
+    if($cachedResponse!==null){header('X-OPPW-Analytics-Cache: HIT');json_encoded_response($cachedResponse);}
+    $cacheStatus='MISS';
+}catch(Throwable $cacheError){
+    error_log('OPPW analytics cache bypassed: '.$cacheError->getMessage());
+}
+
 $placeholders=implode(',',array_fill(0,count($accountKeys),'?'));
 $tradeBoundsSql="SELECT MIN(COALESCE(closed_at,opened_at)) AS first_activity_at,MAX(COALESCE(closed_at,opened_at)) AS latest_activity_at FROM strategy_trades WHERE strategy_key IN ($placeholders)";
 $tradeBoundsStmt=$db->prepare($tradeBoundsSql);$tradeBoundsStmt->execute($accountKeys);$tradeBounds=$tradeBoundsStmt->fetch()?:[];
@@ -56,8 +89,6 @@ $activityTimes=[];foreach([$tradeBounds,$equityBounds] as $bounds)foreach(['firs
 $weekStarts=[];foreach($activityTimes as $activityAt){$week=warsaw_week_start((string)$activityAt);if($week!==null)$weekStarts[$week->format('Y-m-d')]=$week;}ksort($weekStarts);
 $firstWeek=$weekStarts?reset($weekStarts):null;$latestWeek=$weekStarts?end($weekStarts):null;$availableWeeks=0;
 if($firstWeek instanceof DateTimeImmutable&&$latestWeek instanceof DateTimeImmutable){$firstDate=new DateTimeImmutable($firstWeek->format('Y-m-d'),new DateTimeZone('UTC'));$latestDate=new DateTimeImmutable($latestWeek->format('Y-m-d'),new DateTimeZone('UTC'));$availableWeeks=max(1,intdiv((int)$firstDate->diff($latestDate)->days,7)+1);}
-$requestedRollingWeeks=requested_analytics_rolling_weeks($_GET['rolling_weeks']??4);
-$allHistory=filter_var($_GET['all_history']??false,FILTER_VALIDATE_BOOLEAN,FILTER_NULL_ON_FAILURE);if($allHistory===null)json_response(['ok'=>false,'error'=>'Invalid all_history filter'],400);
 $effectiveRollingWeeks=$availableWeeks>0?($allHistory?$availableWeeks:min((int)$requestedRollingWeeks,$availableWeeks)):0;$windowStartUtc=null;$windowEndUtc=null;
 if($latestWeek instanceof DateTimeImmutable&&$effectiveRollingWeeks>0){$windowStartUtc=$latestWeek->modify('-'.($effectiveRollingWeeks-1).' weeks')->setTimezone(new DateTimeZone('UTC'));$windowEndUtc=$latestWeek->modify('+1 week')->setTimezone(new DateTimeZone('UTC'));}
 $activeOptionRows=[];
@@ -65,10 +96,6 @@ if($windowStartUtc!==null&&$windowEndUtc!==null){$optionSql="SELECT DISTINCT ROU
 $queryWindowEndUtc=$windowEndUtc??utc_now()->modify('+1 second');$queryWindowStartUtc=$windowStartUtc??$queryWindowEndUtc->modify('-80 weeks');
 $baseSql="SELECT t.*,a.account_type FROM strategy_trades t JOIN monitor_accounts a ON a.account_key=t.strategy_key WHERE t.strategy_key IN ($placeholders)";
 $params=$accountKeys;
-$leverage=trim((string)($_GET['leverage']??''));
-$exitReason=trim((string)($_GET['exit_reason']??''));
-$class=strtoupper(trim((string)($_GET['class']??'')));
-if(strlen($leverage)>32||strlen($exitReason)>100||strlen($class)>1)json_response(['ok'=>false,'error'=>'Invalid analytics filter'],400);
 if($windowStartUtc!==null&&$windowEndUtc!==null){$baseSql.=' AND COALESCE(t.closed_at,t.opened_at)>=? AND COALESCE(t.closed_at,t.opened_at)<?';$params[]=mysql_datetime($windowStartUtc);$params[]=mysql_datetime($windowEndUtc);}
 if($leverage!==''&&is_numeric($leverage)){ $baseSql.=' AND ROUND(COALESCE(t.entry_leverage,0),3)=?'; $params[]=(float)$leverage; }
 if($exitReason!==''){ $baseSql.=' AND t.exit_reason=?'; $params[]=$exitReason; }
@@ -231,4 +258,8 @@ $summary=[
 
 $filterOptions=['accounts'=>array_values(array_map(fn($row)=>['key'=>(string)$row['account_key'],'label'=>(string)$row['display_name'],'type'=>(string)$row['account_type']],$allowed)),'leverages'=>array_values(array_unique(array_filter(array_map(fn($row)=>n($row['entry_leverage']??0),$activeOptionRows),fn($value)=>$value>0))),'exitReasons'=>array_values(array_unique(array_filter(array_map(fn($row)=>(string)($row['exit_reason']??''),$activeOptionRows),fn($value)=>$value!==''))),'availableWeeks'=>$availableWeeks,'defaultRollingWeeks'=>min(4,$availableWeeks),'effectiveRollingWeeks'=>$effectiveRollingWeeks,'windowStart'=>$windowStartUtc?atom_datetime($windowStartUtc):'','windowEndExclusive'=>$windowEndUtc?atom_datetime($windowEndUtc):'','classes'=>['A','B','C','D']];
 sort($filterOptions['leverages']);sort($filterOptions['exitReasons']);
-json_response(['ok'=>true,'generatedAt'=>atom_datetime(new DateTimeImmutable('now',new DateTimeZone('UTC'))),'filters'=>['scope'=>$scope,'account'=>$requested,'leverage'=>$leverage,'exitReason'=>$exitReason,'rollingWeeks'=>(int)$requestedRollingWeeks,'allHistory'=>(bool)$allHistory,'tradeClass'=>$class],'filterOptions'=>$filterOptions,'summary'=>$summary,'exitReasons'=>$exitReasons,'weekly'=>$weekly,'recentTrades'=>$recent,'tradeClasses'=>$classGroups,'tradeDistribution'=>['sortOrder'=>'BEST_TO_WORST','meanReturnPercent'=>avg_values(array_column($closed,'preleverageReturnPercent')),'trades'=>$distributionPoints],'rolling20'=>$rolling,'confidenceIntervals'=>$confidence,'classProfitContribution'=>$classGroups,'classDistribution'=>$classDistribution,'drawdown'=>$drawdown,'parameterComparison'=>$buildComparison,'benchmark'=>$benchmark,'executionQuality'=>$executionQuality,'metricSamples'=>$metricSamples]);
+$response=['ok'=>true,'generatedAt'=>atom_datetime(new DateTimeImmutable('now',new DateTimeZone('UTC'))),'filters'=>['scope'=>$scope,'account'=>$requested,'leverage'=>$leverage,'exitReason'=>$exitReason,'rollingWeeks'=>(int)$requestedRollingWeeks,'allHistory'=>(bool)$allHistory,'tradeClass'=>$class],'filterOptions'=>$filterOptions,'summary'=>$summary,'exitReasons'=>$exitReasons,'weekly'=>$weekly,'recentTrades'=>$recent,'tradeClasses'=>$classGroups,'tradeDistribution'=>['sortOrder'=>'BEST_TO_WORST','meanReturnPercent'=>avg_values(array_column($closed,'preleverageReturnPercent')),'trades'=>$distributionPoints],'rolling20'=>$rolling,'confidenceIntervals'=>$confidence,'classProfitContribution'=>$classGroups,'classDistribution'=>$classDistribution,'drawdown'=>$drawdown,'parameterComparison'=>$buildComparison,'benchmark'=>$benchmark,'executionQuality'=>$executionQuality,'metricSamples'=>$metricSamples];
+$encodedResponse=json_encode($response,JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR);
+if($cacheIdentity!==null)oppw_analytics_cache_write($cacheConfig,$cacheIdentity['slot'],$cacheIdentity['key'],$encodedResponse);
+header('X-OPPW-Analytics-Cache: '.$cacheStatus);
+json_encoded_response($encodedResponse);

@@ -84,6 +84,7 @@ def http_json(
     token: str = "",
     expected: tuple[int, ...] = (200,),
     raw_body: bytes | None = None,
+    response_headers: dict[str, str] | None = None,
 ) -> tuple[int, dict[str, Any], str]:
     body = raw_body
     if body is None and payload is not None:
@@ -99,6 +100,9 @@ def http_json(
     except urllib.error.HTTPError as error:
         response = error
     status = int(response.status)
+    if response_headers is not None:
+        response_headers.clear()
+        response_headers.update({key.lower(): value for key, value in response.headers.items()})
     content_type = response.headers.get("Content-Type", "")
     text = response.read().decode("utf-8", errors="strict")
     if not content_type.lower().startswith("application/json"):
@@ -370,6 +374,7 @@ def main() -> int:
             port_result = run([docker, "port", container, "3306/tcp"], env=docker_env, capture_output=True).stdout.strip()
             db_port = int(port_result.rsplit(":", 1)[1])
 
+            analytics_cache_dir = (temp / "analytics-cache").as_posix()
             config_path = temp / "contract-config.php"
             config_path.write_text(f"""<?php
 declare(strict_types=1);
@@ -384,6 +389,7 @@ return [
   'pairing_code_ttl_minutes' => 10, 'default_account_key' => 'DEMO',
   'event_limit' => 50, 'monitor_heartbeat_stale_seconds' => 180,
   'monitor_price_warning_seconds' => 60, 'service_supervisor_stale_seconds' => 20, 'require_https' => false,
+  'analytics_cache_ttl_seconds' => 30, 'analytics_cache_dir' => '{analytics_cache_dir}',
   'trust_forwarded_proto' => false, 'push_enabled' => false,
   'firebase_project_id' => '', 'firebase_service_account_file' => ''
 ];
@@ -773,9 +779,21 @@ return [
                 for point in retained_status["snapshot"]["equityCurves"]["allTime"]
             ):
                 raise AssertionError("status all-time equity omitted retained daily history")
+            analytics_headers: dict[str, str] = {}
+            analytics_url = base_url + "analytics.php?account=DEMO&rolling_weeks=3"
             _, analytics, analytics_raw = http_json(
-                "GET", base_url + "analytics.php?account=DEMO&rolling_weeks=3", token=access_token,
+                "GET", analytics_url, token=access_token, response_headers=analytics_headers,
             )
+            if analytics_headers.get("x-oppw-analytics-cache") != "MISS":
+                raise AssertionError("first analytics response was not an explicit cache miss")
+            cached_headers: dict[str, str] = {}
+            _, cached_analytics, cached_analytics_raw = http_json(
+                "GET", analytics_url, token=access_token, response_headers=cached_headers,
+            )
+            if cached_headers.get("x-oppw-analytics-cache") != "HIT":
+                raise AssertionError("identical analytics request did not reuse the completed response")
+            if cached_analytics_raw != analytics_raw or cached_analytics != analytics:
+                raise AssertionError("cached and uncached analytics responses are not identical")
             _, all_history_analytics, all_history_analytics_raw = http_json(
                 "GET", base_url + "analytics.php?account=DEMO&all_history=1", token=access_token,
             )
@@ -896,6 +914,39 @@ return [
                 gradle + ["--no-daemon", "testDebugUnitTest", "--tests", "com.oppw.monitor.data.ContractResponseParserTest"],
                 cwd=root / "Mobile", env=android_env,
             )
+
+            docker_sql(docker, container, """
+                INSERT INTO strategy_equity_points(
+                    strategy_key,captured_minute,balance,equity,deposit,current_profit,position_ticket
+                ) VALUES ('DEMO','2099-01-05 15:30:00',10000,10000,10000,0,NULL)
+            """, docker_env)
+            equity_headers: dict[str, str] = {}
+            http_json("GET", analytics_url, token=access_token, response_headers=equity_headers)
+            if equity_headers.get("x-oppw-analytics-cache") != "MISS":
+                raise AssertionError("new equity data did not invalidate the analytics response cache")
+
+            docker_sql(docker, container, """
+                UPDATE strategy_trades
+                   SET max_profit=COALESCE(max_profit,0)+0.01,
+                       updated_at='2037-01-01 00:00:00'
+                 WHERE strategy_key='DEMO'
+                 ORDER BY id DESC
+                 LIMIT 1
+            """, docker_env)
+            trade_headers: dict[str, str] = {}
+            _, trade_analytics, trade_analytics_raw = http_json(
+                "GET", analytics_url, token=access_token, response_headers=trade_headers,
+            )
+            if trade_headers.get("x-oppw-analytics-cache") != "MISS":
+                raise AssertionError("changed trade data did not invalidate the analytics response cache")
+            final_hit_headers: dict[str, str] = {}
+            _, final_hit, final_hit_raw = http_json(
+                "GET", analytics_url, token=access_token, response_headers=final_hit_headers,
+            )
+            if final_hit_headers.get("x-oppw-analytics-cache") != "HIT":
+                raise AssertionError("post-invalidation analytics response was not cached")
+            if final_hit_raw != trade_analytics_raw or final_hit != trade_analytics:
+                raise AssertionError("post-invalidation cache hit changed the encoded response")
             print(
                 "CONTRACT VALIDATION PASSED "
                 f"account={expected['accountKey']} stages={counts['authorityStages']} "

@@ -364,7 +364,13 @@ def main() -> int:
         ),
         "Mobile/backend/analytics.php": (
             "requested_analytics_rolling_weeks", "$allHistory", "enforce_single_flight", "LIMIT 5001",
-            "LIMIT 20001", "name='MOBILE_RECEIPT'", "AND occurred_at>=? AND occurred_at<?",
+            "oppw_analytics_data_watermark", "X-OPPW-Analytics-Cache: HIT", "LIMIT 20001",
+            "name='MOBILE_RECEIPT'", "AND occurred_at>=? AND occurred_at<?",
+        ),
+        "Mobile/backend/analytics-cache.php": (
+            "OPPW_ANALYTICS_CACHE_MAX_BYTES", "analytics_cache_ttl_seconds", "hash_hmac(", "realpath(__DIR__)",
+            "is_link($path)", "LOCK_SH", "LOCK_EX",
+            "latestMinuteEquity", "latestDailyEquity", "strategy_execution_stages", "MOBILE_RECEIPT",
         ),
         "Mobile/backend/market-admin.php": (
             "independent_manual_admin_token", "require_same_origin_browser_post",
@@ -381,7 +387,11 @@ def main() -> int:
         ),
         "Mobile/backend/tests/security-boundaries-test.php": (
             "pairing token fallback remains active", "paired receipt still writes execution authority",
-            "unused Apache artifact remains",
+            "unused Apache artifact remains", "analytics cache boundary missing",
+        ),
+        "Mobile/backend/tests/analytics-cache-test.php": (
+            "data watermark did not invalidate the cache key", "cache hit changed the encoded response",
+            "expired cache entry was reused", "authorization context did not isolate cache entries",
         ),
         "Mobile/app/src/main/java/com/oppw/monitor/data/Models.kt": (
             "val allHistory: Boolean = false",
@@ -397,6 +407,10 @@ def main() -> int:
         ),
         "docs/decisions/0019-explicit-all-history-analytics.md": (
             "Explicit all-history analytics", "all_history=1", "A request for 82 weeks remains 82 weeks",
+        ),
+        "docs/decisions/0020-watermark-keyed-analytics-response-cache.md": (
+            "Watermark-keyed analytics response cache", "Authorization and throttling are never cached or bypassed",
+            "No database migration or Android contract change is required",
         ),
     }
     for relative, markers in security_boundary_files.items():

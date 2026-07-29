@@ -32,6 +32,11 @@ return [
     'monitor_price_warning_seconds' => 60,
     'service_supervisor_stale_seconds' => 20,
 
+    // Authenticated analytics responses are reused briefly when their account data watermark is unchanged.
+    // Leave the directory empty to use PHP's system temp directory, or set a protected path outside the web root.
+    'analytics_cache_ttl_seconds' => 30,
+    'analytics_cache_dir' => '',
+
     // Leave true in production. Enable forwarded proto only behind a trusted proxy
     // that overwrites X-Forwarded-Proto itself.
     'require_https' => true,

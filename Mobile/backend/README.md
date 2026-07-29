@@ -69,6 +69,17 @@ The manual token must be configured explicitly and must differ from the pairing-
 
 Analytics accepts any positive rolling-week request and an explicit `all_history=1` request for the complete available account history. The Android screen exposes this as **All history**. Resource protection comes from an eight-account scope limit, bounded trade/lifecycle materialization, per-device and per-IP request rates, one concurrent request per device, hot-minute retention with indefinite daily fallback, and SQL queries constrained to the requested or complete available date range.
 
+Successful analytics responses also use a private, server-side, data-watermark-keyed cache. Authentication, authorization, rate limits, filter validation, and per-device single-flight protection still run for every request. The default TTL is 30 seconds (configuration accepts 1 through 120 seconds), and a new trade or latest equity observation changes the key immediately. A hit returns the exact JSON bytes produced by the original request; `X-OPPW-Analytics-Cache` reports `HIT`, `MISS`, or `BYPASS`, while `Cache-Control: no-store` continues to prohibit client/proxy storage.
+
+Optional private config:
+
+```php
+'analytics_cache_ttl_seconds' => 30,
+'analytics_cache_dir' => '', // Empty uses PHP's system temp directory.
+```
+
+If a directory is configured, use an absolute path outside the web root and grant access only to the PHP worker identity. Relative, web-root-contained, and symbolic-link paths are rejected. Cache files are size-bounded, HMAC integrity-checked, stored under hash-only names, and written with file locking. Cache I/O failure bypasses reuse and does not make analytics unavailable.
+
 ## Web-server deployment
 
 Only the Nginx deployment example is maintained. It allowlists the canonical HTTP PHP endpoints and returns 404 for source, SQL, tests, configuration examples, publisher code, and documentation. There are no Apache or `.htaccess` deployment artifacts in this repository.

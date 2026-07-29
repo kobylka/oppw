@@ -55,8 +55,12 @@ $assert(!str_contains($receiptSource, 'oppw_authority_event'), 'paired receipt s
 $assert(str_contains($receiptSource, "'MOBILE_RECEIPT'"), 'paired receipt is not stored as a diagnostic');
 
 $analyticsSource = $read('analytics.php');
-foreach (['enforce_single_flight', 'requested_analytics_rolling_weeks', "\$allHistory", 'LIMIT 5001', 'LIMIT 20001', "name='MOBILE_RECEIPT'", 'AND occurred_at>=? AND occurred_at<?'] as $marker) {
+foreach (['enforce_single_flight', 'requested_analytics_rolling_weeks', "\$allHistory", 'oppw_analytics_data_watermark', 'X-OPPW-Analytics-Cache: HIT', 'LIMIT 5001', 'LIMIT 20001', "name='MOBILE_RECEIPT'", 'AND occurred_at>=? AND occurred_at<?'] as $marker) {
     $assert(str_contains($analyticsSource, $marker), 'analytics work bound missing: ' . $marker);
+}
+$cacheSource = $read('analytics-cache.php');
+foreach (['OPPW_ANALYTICS_CACHE_MAX_BYTES', 'analytics_cache_ttl_seconds', 'hash_equals($expectedKey', 'hash_hmac(', 'realpath(__DIR__)', 'is_link($path)', 'LOCK_SH', 'LOCK_EX', "@chmod(\$path, 0600)"] as $marker) {
+    $assert(str_contains($cacheSource, $marker), 'analytics cache boundary missing: ' . $marker);
 }
 
 foreach (['market-admin.php', 'trade-admin.php'] as $manualPage) {
@@ -74,4 +78,4 @@ foreach (['apache-vhost.example.conf', '.htaccess', 'admin/.htaccess', 'private/
     $assert(!file_exists(dirname(__DIR__) . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $apacheArtifact)), 'unused Apache artifact remains: ' . $apacheArtifact);
 }
 
-echo "SECURITY BOUNDARY TESTS PASSED cases=6\n";
+echo "SECURITY BOUNDARY TESTS PASSED cases=7\n";
