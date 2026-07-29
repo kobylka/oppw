@@ -39,8 +39,8 @@ return [
     'analytics_segment_cache_ttl_seconds' => 86400,
     'analytics_cache_dir' => '',
 
-    // Leave true in production. Enable forwarded proto only behind a trusted proxy
-    // that overwrites X-Forwarded-Proto itself.
+    // Leave true in production. Enable forwarded values only behind a trusted proxy
+    // that overwrites X-Forwarded-Proto and X-Forwarded-Host itself.
     'require_https' => true,
     'trust_forwarded_proto' => false,
 

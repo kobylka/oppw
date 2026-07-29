@@ -44,6 +44,15 @@ $sameOrigin = [
     'HTTP_ORIGIN' => 'https://monitor.example.com',
 ];
 $assert(browser_form_is_same_origin($sameOrigin), 'same-origin browser form was rejected');
+$proxiedSameOrigin = $sameOrigin;
+$proxiedSameOrigin['HTTP_HOST'] = 'php:9000';
+$proxiedSameOrigin['HTTP_X_FORWARDED_HOST'] = 'monitor.example.com';
+$assert(browser_form_is_same_origin($proxiedSameOrigin, true, true), 'same-origin browser form behind trusted proxy was rejected');
+$assert(browser_form_is_same_origin($proxiedSameOrigin, true), 'browser-confirmed same-origin form depended on proxy host forwarding');
+$legacyProxiedSameOrigin = $proxiedSameOrigin;
+unset($legacyProxiedSameOrigin['HTTP_SEC_FETCH_SITE']);
+$assert(browser_form_is_same_origin($legacyProxiedSameOrigin, true, true), 'legacy same-origin browser behind trusted proxy was rejected');
+$assert(!browser_form_is_same_origin($legacyProxiedSameOrigin, true), 'untrusted forwarded host was accepted for a legacy browser');
 $crossOrigin = $sameOrigin;
 $crossOrigin['HTTP_SEC_FETCH_SITE'] = 'cross-site';
 $crossOrigin['HTTP_ORIGIN'] = 'https://attacker.example';

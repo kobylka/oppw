@@ -257,15 +257,24 @@ function normalized_request_origin(string $value): string
     return $scheme . '://' . $host . ':' . $port;
 }
 
-function browser_form_is_same_origin(array $server, ?bool $httpsRequest = null): bool
+function browser_form_is_same_origin(
+    array $server,
+    ?bool $httpsRequest = null,
+    bool $trustForwardedHost = false
+): bool
 {
     $fetchSite = strtolower(trim((string)($server['HTTP_SEC_FETCH_SITE'] ?? '')));
     if ($fetchSite !== '' && $fetchSite !== 'same-origin') return false;
+    if ($fetchSite === 'same-origin') return true;
 
     $httpsRequest ??= (!empty($server['HTTPS']) && strtolower((string)$server['HTTPS']) !== 'off')
         || (int)($server['SERVER_PORT'] ?? 0) === 443;
     $scheme = $httpsRequest ? 'https' : 'http';
     $host = trim((string)($server['HTTP_HOST'] ?? ''));
+    if ($trustForwardedHost) {
+        $forwardedHost = trim(explode(',', (string)($server['HTTP_X_FORWARDED_HOST'] ?? ''))[0]);
+        if ($forwardedHost !== '') $host = $forwardedHost;
+    }
     $expected = normalized_request_origin($scheme . '://' . $host);
     if ($expected === '') return false;
 
@@ -275,14 +284,18 @@ function browser_form_is_same_origin(array $server, ?bool $httpsRequest = null):
     $referer = trim((string)($server['HTTP_REFERER'] ?? ''));
     if ($referer !== '') return hash_equals($expected, normalized_request_origin($referer));
 
-    return $fetchSite === 'same-origin';
+    return false;
 }
 
 function require_same_origin_browser_post(): void
 {
     if (PHP_SAPI === 'cli') return;
     if (strcasecmp((string)($_SERVER['REQUEST_METHOD'] ?? ''), 'POST') !== 0) return;
-    if (!browser_form_is_same_origin($_SERVER, is_https_request())) {
+    if (!browser_form_is_same_origin(
+        $_SERVER,
+        is_https_request(),
+        !empty(config()['trust_forwarded_proto'])
+    )) {
         json_response(['ok' => false, 'error' => 'Cross-site form submission rejected'], 403);
     }
 }
