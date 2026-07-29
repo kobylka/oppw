@@ -4,11 +4,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/lib.php';
 
 require_https();
-header('Cache-Control: no-store, max-age=0');
-header('Pragma: no-cache');
-header('X-Content-Type-Options: nosniff');
-header('Referrer-Policy: no-referrer');
-header("Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
+browser_admin_headers();
 
 $cfg = config();
 $enabled = (bool)($cfg['pairing_admin_enabled'] ?? false);
@@ -96,6 +92,7 @@ $selectedAccounts = [];
 $canControlService = false;
 
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
+    require_same_origin_browser_post();
     enforce_rate_limit('pairing-admin', 10, 600);
 
     $providedToken = trim((string)($_POST['admin_token'] ?? ''));

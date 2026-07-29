@@ -7,6 +7,8 @@
 - `pairing-admin.php` and `push-admin.php`: optional pairing-admin browser token.
 - `market-admin.php` and `trade-admin.php`: optional manual-admin browser token.
 
+Paired-device tokens never write immutable strategy authority. `mobile-receipt.php` records only a diagnostic delivery acknowledgement; an explicit per-device grant is still required for service-control writes.
+
 ## Endpoints
 
 | Endpoint | Method | Authentication |
@@ -57,10 +59,19 @@ Private config:
 ```
 
 Enable only while importing data. Both pages require HTTPS, never put the token in the URL, apply IP-based rate limiting and return 404 while disabled.
+The manual token must be configured explicitly and must differ from the pairing-admin token; missing or reused credentials keep both manual-write pages unavailable. All browser-admin forms also reject cross-site POSTs and return restrictive no-store, CSP, framing, referrer, content-type, and permissions headers.
 
 `market-admin.php` writes two exchange-time markers for each supplied date: 09:30 ET open and 15:59 ET close. This makes weekly O/H/L/C work across DST changes.
 
 `trade-admin.php` writes `strategy_trades` and optional daily equity points. It updates an existing record when account + ticket already exists.
+
+## Analytics resource limits
+
+Authenticated analytics is limited to 80 rolling weeks and 160 account-weeks per request, eight accounts, bounded trade/lifecycle samples, per-device and per-IP request rates, and one concurrent request per device. Lifecycle and filter-option queries use the same bounded rolling window rather than scanning complete history.
+
+## Web-server deployment
+
+Only the Nginx deployment example is maintained. It allowlists the canonical HTTP PHP endpoints and returns 404 for source, SQL, tests, configuration examples, publisher code, and documentation. There are no Apache or `.htaccess` deployment artifacts in this repository.
 
 ## Log pagination
 

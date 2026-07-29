@@ -2,8 +2,12 @@
 declare(strict_types=1);
 require __DIR__ . '/lib.php';
 
+require_https();
+browser_admin_headers();
+
 $cfg = config();
-if (!(bool)($cfg['pairing_admin_enabled'] ?? false)) {
+$expected = trim((string)($cfg['pairing_admin_token'] ?? ''));
+if (!(bool)($cfg['pairing_admin_enabled'] ?? false) || $expected === '') {
     http_response_code(404);
     exit('Not found');
 }
@@ -13,9 +17,11 @@ $message = '';
 $error = '';
 $accounts = $db->query('SELECT account_key, display_name FROM monitor_accounts WHERE enabled = TRUE ORDER BY sort_order, display_name')->fetchAll();
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
+    require_same_origin_browser_post();
+    enforce_rate_limit('push-admin', 10, 600);
     $provided = trim((string)($_POST['admin_token'] ?? ''));
-    $expected = trim((string)($cfg['pairing_admin_token'] ?? ''));
     if ($expected === '' || !hash_equals($expected, $provided)) {
+        http_response_code(401);
         $error = 'Invalid admin token.';
     } elseif (!push_enabled()) {
         $error = 'Firebase push is disabled or incomplete in the server configuration.';
@@ -40,7 +46,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
 <body><h1>OPPW push test</h1><p><small>Available only while pairing browser administration is enabled. Disable it again after testing.</small></p>
 <?php if ($message !== ''): ?><p class="ok"><?= $message ?></p><?php endif; ?>
 <?php if ($error !== ''): ?><p class="error"><?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?></p><?php endif; ?>
-<form method="post">
+<form method="post" autocomplete="off">
 <label>Admin token<input type="password" name="admin_token" required autocomplete="current-password"></label>
 <label>Account<select name="account_key" required><?php foreach ($accounts as $account): ?><option value="<?= htmlspecialchars((string)$account['account_key'], ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars((string)$account['display_name'] . ' (' . (string)$account['account_key'] . ')', ENT_QUOTES, 'UTF-8') ?></option><?php endforeach; ?></select></label>
 <label>Title<input name="title" value="OPPW Monitor test" maxlength="120" required></label>

@@ -187,6 +187,100 @@ function enforce_rate_limit(string $bucket, int $limit, int $windowSeconds): voi
     }
 }
 
+function enforce_single_flight(PDO $db, string $bucket, string $subject): void
+{
+    if (PHP_SAPI === 'cli') return;
+    $lockName = 'oppw-' . substr(hash_hmac(
+        'sha256',
+        $bucket . '|' . $subject,
+        (string)config()['rate_limit_hmac_secret']
+    ), 0, 48);
+    $stmt = $db->prepare('SELECT GET_LOCK(?, 0)');
+    $stmt->execute([$lockName]);
+    if ((int)$stmt->fetchColumn() !== 1) {
+        header('Retry-After: 2');
+        json_response(['ok' => false, 'error' => 'A request for this resource is already running'], 429);
+    }
+    register_shutdown_function(static function () use ($db, $lockName): void {
+        try {
+            $release = $db->prepare('SELECT RELEASE_LOCK(?)');
+            $release->execute([$lockName]);
+        } catch (Throwable) {
+        }
+    });
+}
+
+function bounded_analytics_rolling_weeks(mixed $value, int $accountCount = 1): int
+{
+    $validated = filter_var($value, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+    if ($validated === false) return 4;
+    $safeAccountCount = max(1, min(8, $accountCount));
+    $accountWeightedMaximum = max(1, intdiv(160, $safeAccountCount));
+    return min(80, $accountWeightedMaximum, (int)$validated);
+}
+
+function independent_manual_admin_token(array $cfg): string
+{
+    if (!(bool)($cfg['manual_admin_enabled'] ?? false)) return '';
+    $manual = trim((string)($cfg['manual_admin_token'] ?? ''));
+    if ($manual === '' || str_contains($manual, 'replace-with-')) return '';
+    $pairing = trim((string)($cfg['pairing_admin_token'] ?? ''));
+    if ($pairing !== '' && hash_equals($pairing, $manual)) return '';
+    return $manual;
+}
+
+function browser_admin_headers(): void
+{
+    header('Cache-Control: no-store, max-age=0');
+    header('Pragma: no-cache');
+    header('X-Content-Type-Options: nosniff');
+    header('Referrer-Policy: no-referrer');
+    header('X-Frame-Options: DENY');
+    header('Permissions-Policy: camera=(), microphone=(), geolocation=()');
+    header("Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
+}
+
+function normalized_request_origin(string $value): string
+{
+    $parts = parse_url(trim($value));
+    if (!is_array($parts)) return '';
+    $scheme = strtolower((string)($parts['scheme'] ?? ''));
+    $host = strtolower((string)($parts['host'] ?? ''));
+    if (!in_array($scheme, ['http', 'https'], true) || $host === '') return '';
+    $port = isset($parts['port']) ? (int)$parts['port'] : ($scheme === 'https' ? 443 : 80);
+    return $scheme . '://' . $host . ':' . $port;
+}
+
+function browser_form_is_same_origin(array $server, ?bool $httpsRequest = null): bool
+{
+    $fetchSite = strtolower(trim((string)($server['HTTP_SEC_FETCH_SITE'] ?? '')));
+    if ($fetchSite !== '' && $fetchSite !== 'same-origin') return false;
+
+    $httpsRequest ??= (!empty($server['HTTPS']) && strtolower((string)$server['HTTPS']) !== 'off')
+        || (int)($server['SERVER_PORT'] ?? 0) === 443;
+    $scheme = $httpsRequest ? 'https' : 'http';
+    $host = trim((string)($server['HTTP_HOST'] ?? ''));
+    $expected = normalized_request_origin($scheme . '://' . $host);
+    if ($expected === '') return false;
+
+    $origin = trim((string)($server['HTTP_ORIGIN'] ?? ''));
+    if ($origin !== '') return hash_equals($expected, normalized_request_origin($origin));
+
+    $referer = trim((string)($server['HTTP_REFERER'] ?? ''));
+    if ($referer !== '') return hash_equals($expected, normalized_request_origin($referer));
+
+    return $fetchSite === 'same-origin';
+}
+
+function require_same_origin_browser_post(): void
+{
+    if (PHP_SAPI === 'cli') return;
+    if (strcasecmp((string)($_SERVER['REQUEST_METHOD'] ?? ''), 'POST') !== 0) return;
+    if (!browser_form_is_same_origin($_SERVER, is_https_request())) {
+        json_response(['ok' => false, 'error' => 'Cross-site form submission rejected'], 403);
+    }
+}
+
 function require_write_token(): void
 {
     require_https();

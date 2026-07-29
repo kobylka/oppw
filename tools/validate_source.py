@@ -358,6 +358,57 @@ def main() -> int:
     if "function equity_points(" in status_text or "$whereSql" in status_text:
         fail(errors, "status endpoint must not expose a raw SQL-fragment query helper")
 
+    security_boundary_files = {
+        "Mobile/backend/mobile-receipt.php": (
+            "'MOBILE_RECEIPT'", "diagnostic write failed",
+        ),
+        "Mobile/backend/analytics.php": (
+            "bounded_analytics_rolling_weeks", "enforce_single_flight", "LIMIT 5001",
+            "LIMIT 20001", "name='MOBILE_RECEIPT'", "AND occurred_at>=? AND occurred_at<?",
+        ),
+        "Mobile/backend/market-admin.php": (
+            "independent_manual_admin_token", "require_same_origin_browser_post",
+        ),
+        "Mobile/backend/trade-admin.php": (
+            "independent_manual_admin_token", "require_same_origin_browser_post",
+        ),
+        "Mobile/backend/push-admin.php": (
+            "require_https", "browser_admin_headers", "require_same_origin_browser_post",
+            "enforce_rate_limit('push-admin'",
+        ),
+        "Mobile/backend/nginx.example.conf": (
+            "location ~ ^/(?:accounts|analytics|cashflow", "location /", "return 404",
+        ),
+        "Mobile/backend/tests/security-boundaries-test.php": (
+            "pairing token fallback remains active", "paired receipt still writes execution authority",
+            "unused Apache artifact remains",
+        ),
+        "docs/decisions/0018-paired-mobile-receipts-are-diagnostic.md": (
+            "Paired mobile receipts are diagnostic", "never enters an immutable strategy-authority table",
+        ),
+    }
+    for relative, markers in security_boundary_files.items():
+        path = root / relative
+        if not path.is_file():
+            fail(errors, f"required backend security-boundary file is missing: {relative}")
+            continue
+        content = path.read_text(encoding="utf-8")
+        for marker in markers:
+            if marker not in content:
+                fail(errors, f"backend security-boundary marker missing from {relative}: {marker}")
+
+    mobile_receipt_text = (root / "Mobile/backend/mobile-receipt.php").read_text(encoding="utf-8")
+    for forbidden in ("authority.php", "oppw_authority_event", "strategy_execution_stages"):
+        if forbidden in mobile_receipt_text:
+            fail(errors, f"paired mobile receipt crosses execution authority via {forbidden}")
+    for apache_artifact in (
+        "Mobile/backend/apache-vhost.example.conf", "Mobile/backend/.htaccess",
+        "Mobile/backend/admin/.htaccess", "Mobile/backend/private/.htaccess",
+        "Mobile/backend/publisher/.htaccess", "Mobile/backend/sql/.htaccess",
+    ):
+        if (root / apache_artifact).exists():
+            fail(errors, f"unused Apache deployment artifact remains: {apache_artifact}")
+
     lifecycle_files = {
         "Mobile/backend/sql/schema.sql": (
             "strategy_equity_daily", "strategy_retention_runs", "strategy_market_points_no_delete",

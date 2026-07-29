@@ -853,7 +853,14 @@ return [
                 "strategyDecisions": int(docker_sql(docker, container, "SELECT COUNT(*) FROM strategy_decisions", docker_env)),
                 "authorityStages": int(docker_sql(docker, container, "SELECT COUNT(*) FROM strategy_execution_stages", docker_env)),
                 "authorityFills": int(docker_sql(docker, container, "SELECT COUNT(*) FROM strategy_fills", docker_env)),
+                "mobileReceiptAuthority": int(docker_sql(docker, container, "SELECT COUNT(*) FROM strategy_execution_stages WHERE stage='MOBILE_RECEIPT'", docker_env)),
+                "mobileReceiptDiagnostics": int(docker_sql(docker, container, "SELECT COUNT(*) FROM strategy_events WHERE name='MOBILE_RECEIPT'", docker_env)),
             }
+            if counts["mobileReceiptAuthority"] != 0 or counts["mobileReceiptDiagnostics"] != 1:
+                raise AssertionError(
+                    "a paired mobile receipt crossed the immutable-authority boundary: "
+                    f"authority={counts['mobileReceiptAuthority']} diagnostics={counts['mobileReceiptDiagnostics']}"
+                )
             for key in ("strategySpecifications", "strategyDecisions", "authorityFills"):
                 if counts[key] != int(expected[key]):
                     raise AssertionError(f"{key}: expected {expected[key]}, got {counts[key]}")

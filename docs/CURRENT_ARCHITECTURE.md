@@ -68,7 +68,7 @@ The LocalSystem code boundary under `%ProgramData%\OPPW` uses protected Administ
 | Analytics | `analytics.php` |
 | Event history | `events.php` |
 | Accounts | `accounts.php` |
-| Mobile delivery acknowledgement | `mobile-receipt.php` |
+| Diagnostic mobile delivery acknowledgement | `mobile-receipt.php` |
 | Latest authoritative trade | `oppw_latest_trade.php` |
 | Strategy decision history | `strategy-decisions.php` |
 | Strategy specification history | `strategy-specifications.php` |
@@ -77,6 +77,12 @@ The LocalSystem code boundary under `%ProgramData%\OPPW` uses protected Administ
 | Windows supervisor assignment and mobile desired state | `service-control.php` |
 
 Authentication endpoints live under `Mobile/backend/auth/`; push endpoints live under `Mobile/backend/push/`; administrative endpoints are not mobile read APIs.
+
+Paired mobile credentials cannot write strategy authority. `mobile-receipt.php` stores a fixed-name diagnostic acknowledgement in `strategy_events`; analytics may merge it into delivery-latency presentation, but it never creates a `strategy_execution_stages` row. Paired-device writes are otherwise limited to device-owned authentication/push metadata, unpairing, and explicitly granted service-control desired state.
+
+Analytics applies a hard 80-week and 160 account-week work window, a maximum eight-account scope, bounded trade/lifecycle result sets, per-device and per-IP request limits, and one in-flight analytics request per device. Every lifecycle query is constrained to the effective rolling window; the endpoint does not load complete execution history merely to answer a bounded request.
+
+Browser administration fails closed unless its explicit feature token is present. Manual market/trade imports require an independent manual-admin token and reject reuse of the pairing-admin token. Browser forms require HTTPS, same-origin submission, request throttling, no-store responses, framing denial, a restrictive content policy, and a restrictive permissions policy.
 
 Daily and weekly mobile equity curves use Europe/Warsaw period boundaries derived from the exchange-calendar `weekCashOpen`. On the first actual trading session of a week, both begin at the cash open (normally 15:30); when an explicitly identified manual position opened earlier that same day, its exact opening timestamp becomes the boundary. On subsequent trading days the daily curve begins at midnight while the weekly curve retains the first-session boundary. The MT5 publisher supplies the additive `position.manual` authority, and Android parses it without changing trading behavior.
 Android also enforces the published weekly boundary while parsing status responses. This compatibility guard removes pre-open points from an older backend response and leaves an intentionally completed prior-week curve unchanged. It does not infer a boundary from a calendar-week timestamp, because only exchange-calendar `weekCashOpen` can identify a holiday-delayed first trading session.
@@ -99,7 +105,7 @@ The drawdown episode list has a distinct authority. Closed-trade returns define 
 | Cash flow | `account_cash_flows` |
 | Current mobile snapshot | `strategy_snapshots`, exactly one mutable projection row per account |
 | Mobile analytics trade projection | `strategy_trades`, with protective-close price/reason recovered from `strategy_protection_changes` when event and flat snapshot delivery are separated |
-| Diagnostics and low-volume operational messages | `strategy_events` |
+| Diagnostics, mobile delivery receipts, and low-volume operational messages | `strategy_events` |
 | Minute equity history and indefinite daily projection | `strategy_equity_points` and `strategy_equity_daily` |
 | Minute market OHLC history | `strategy_market_points`, retained online indefinitely |
 | Desired process state and supervisor heartbeat | `strategy_service_desired_state` and `strategy_supervisor_nodes` |

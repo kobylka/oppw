@@ -3,16 +3,11 @@ declare(strict_types=1);
 require __DIR__ . '/lib.php';
 
 require_https();
-header('Cache-Control: no-store, max-age=0');
-header('Pragma: no-cache');
-header('X-Content-Type-Options: nosniff');
-header('Referrer-Policy: no-referrer');
-header("Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
+browser_admin_headers();
 
 $cfg = config();
-$enabled = (bool)($cfg['manual_admin_enabled'] ?? $cfg['pairing_admin_enabled'] ?? false);
-$expectedToken = trim((string)($cfg['manual_admin_token'] ?? $cfg['pairing_admin_token'] ?? ''));
-if (!$enabled || $expectedToken === '') {
+$expectedToken = independent_manual_admin_token($cfg);
+if ($expectedToken === '') {
     http_response_code(404);
     exit('Not found');
 }
@@ -52,6 +47,7 @@ for ($day = 0; $day < 5; $day++) {
 }
 
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
+    require_same_origin_browser_post();
     enforce_rate_limit('market-admin', 20, 600);
     $providedToken = trim((string)($_POST['admin_token'] ?? ''));
     if ($providedToken === '' || !hash_equals($expectedToken, $providedToken)) {
