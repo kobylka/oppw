@@ -38,9 +38,39 @@ class SupervisorConfigTests(unittest.TestCase):
 
     def test_installer_uses_locale_independent_builtin_sids(self):
         installer = (Path(__file__).resolve().parents[1] / "install-service.ps1").read_text(encoding="utf-8")
-        self.assertIn("*S-1-5-18:(F)", installer)
-        self.assertIn("*S-1-5-32-544:(F)", installer)
+        self.assertIn("SecurityIdentifier]::new('S-1-5-18')", installer)
+        self.assertIn("SecurityIdentifier]::new('S-1-5-32-544')", installer)
         self.assertNotIn("'Administrators:(F)'", installer)
+
+    def test_installer_protects_local_system_host_from_runtime_user_writes(self):
+        installer = (Path(__file__).resolve().parents[1] / "install-service.ps1").read_text(encoding="utf-8")
+        self.assertIn("$acl.SetAccessRuleProtection($true, $false)", installer)
+        self.assertIn("RemoveAccessRuleSpecific", installer)
+        self.assertIn("$acl.SetOwner($administratorsIdentity)", installer)
+        self.assertIn(
+            "Set-ExactPathAcl -Path $programData -RuntimeSid $runtimeSecurityIdentifier -RuntimeAccess Traverse -RuntimeChildrenInherit",
+            installer,
+        )
+        self.assertIn("Set-ExactPathAcl -Path $binDir -RuntimeSid $runtimeSecurityIdentifier", installer)
+        self.assertIn("Set-ExactPathAcl -Path $hostPath -RuntimeSid $runtimeSecurityIdentifier", installer)
+        self.assertIn(
+            "Set-ExactPathAcl -Path $runtimeDir -RuntimeSid $runtimeSecurityIdentifier -RuntimeAccess Modify -RuntimeChildrenInherit",
+            installer,
+        )
+        self.assertIn(
+            "Set-ExactPathAcl -Path $logDir -RuntimeSid $runtimeSecurityIdentifier -RuntimeAccess Modify -RuntimeChildrenInherit",
+            installer,
+        )
+        self.assertIn(
+            "Set-ExactPathAcl -Path $configPath -RuntimeSid $runtimeSecurityIdentifier -RuntimeAccess Read",
+            installer,
+        )
+        self.assertNotIn("icacls.exe $programData", installer)
+        self.assertNotIn('"*${runtimeSid}:(OI)(CI)(M)"', installer)
+        self.assertNotRegex(
+            installer,
+            r"Set-ExactPathAcl -Path \$(?:programData|binDir|hostPath|configPath)[^\r\n]*-RuntimeAccess Modify",
+        )
 
     def test_installer_runs_host_as_local_system_for_interactive_launch(self):
         installer = (Path(__file__).resolve().parents[1] / "install-service.ps1").read_text(encoding="utf-8")

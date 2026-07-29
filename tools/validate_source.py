@@ -217,7 +217,15 @@ def main() -> int:
     service_files = {
         "service/oppw_windows_supervisor.py": ("ACCOUNTS = (\"DEMO\", \"REAL\")", "ROLES = (\"EXECUTOR\", \"PUBLISHER\")", "assignmentTtlSeconds", "STARTUP_ORDER", "--service-ready-file"),
         "service/OPPWServiceHost.cs": ("ServiceName = \"OPPWContinuousSupervisor\"", "CreateKillOnCloseJob", "WTSQueryUserToken", "CreateProcessAsUser"),
-        "service/install-service.ps1": ("ValidateSet('Master','Backup')", "delayed-auto", "RuntimeUser", "runtimeSid"),
+        "service/install-service.ps1": (
+            "ValidateSet('Master','Backup')", "delayed-auto", "RuntimeUser", "runtimeSid",
+            "$acl.SetAccessRuleProtection($true, $false)", "RemoveAccessRuleSpecific",
+            "$acl.SetOwner($administratorsIdentity)",
+            "Set-ExactPathAcl -Path $programData -RuntimeSid $runtimeSecurityIdentifier -RuntimeAccess Traverse -RuntimeChildrenInherit",
+            "Set-ExactPathAcl -Path $binDir", "Set-ExactPathAcl -Path $hostPath",
+            "Set-ExactPathAcl -Path $runtimeDir", "Set-ExactPathAcl -Path $logDir",
+            "Set-ExactPathAcl -Path $configPath",
+        ),
         "Mobile/backend/service-control.php": ("setDesiredState", "strategy_service_control_events", "MASTER_ONLINE"),
     }
     for relative, markers in service_files.items():
@@ -229,6 +237,16 @@ def main() -> int:
         for marker in markers:
             if marker not in content:
                 fail(errors, f"service-supervision marker missing from {relative}: {marker}")
+    installer_path = root / "service" / "install-service.ps1"
+    installer_text = installer_path.read_text(encoding="utf-8") if installer_path.is_file() else ""
+    for unsafe_marker in ('icacls.exe $programData', '"*${runtimeSid}:(OI)(CI)(M)"'):
+        if unsafe_marker in installer_text:
+            fail(errors, f"runtime user must not receive inherited Modify access over the LocalSystem service root: {unsafe_marker}")
+    if re.search(
+        r"Set-ExactPathAcl -Path \$(?:programData|binDir|hostPath|configPath)[^\r\n]*-RuntimeAccess Modify",
+        installer_text,
+    ):
+        fail(errors, "runtime Modify access is allowed only on the service runtime and log directories")
 
     config_examples = sorted((root / "mt5").rglob("*config*.example.py"))
     expected_config = root / "mt5" / "oppw_mt5_config.example.py"

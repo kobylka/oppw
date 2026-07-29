@@ -30,6 +30,64 @@ function Remove-ServiceRegistration([string]$Name) {
         throw "Service $Name is marked for deletion but is still held open. Close Services (services.msc), Computer Management, and any service-properties windows, then run the installer again."
     }
 }
+function Set-ExactPathAcl {
+    param(
+        [Parameter(Mandatory=$true)][string]$Path,
+        [Parameter(Mandatory=$true)][Security.Principal.SecurityIdentifier]$RuntimeSid,
+        [ValidateSet('None','Traverse','Read','Modify')][string]$RuntimeAccess = 'None',
+        [switch]$RuntimeChildrenInherit
+    )
+
+    $acl = Get-Acl -LiteralPath $Path
+    $acl.SetAccessRuleProtection($true, $false)
+    foreach ($rule in @($acl.Access)) {
+        [void]$acl.RemoveAccessRuleSpecific($rule)
+    }
+
+    $systemIdentity = [Security.Principal.SecurityIdentifier]::new('S-1-5-18')
+    $administratorsIdentity = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
+    $acl.SetOwner($administratorsIdentity)
+
+    $isDirectory = Test-Path -LiteralPath $Path -PathType Container
+    $childInheritance = if ($isDirectory) {
+        [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit
+    } else {
+        [Security.AccessControl.InheritanceFlags]::None
+    }
+    $propagation = [Security.AccessControl.PropagationFlags]::None
+    $allow = [Security.AccessControl.AccessControlType]::Allow
+    foreach ($identity in @($systemIdentity, $administratorsIdentity)) {
+        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+            $identity,
+            [Security.AccessControl.FileSystemRights]::FullControl,
+            $childInheritance,
+            $propagation,
+            $allow
+        ))
+    }
+
+    if ($RuntimeAccess -ne 'None') {
+        $runtimeRights = switch ($RuntimeAccess) {
+            'Traverse' { [Security.AccessControl.FileSystemRights]::ReadAndExecute }
+            'Read' { [Security.AccessControl.FileSystemRights]::Read }
+            'Modify' { [Security.AccessControl.FileSystemRights]::Modify }
+        }
+        $runtimeInheritance = if ($isDirectory -and $RuntimeChildrenInherit) {
+            $childInheritance
+        } else {
+            [Security.AccessControl.InheritanceFlags]::None
+        }
+        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+            $RuntimeSid,
+            $runtimeRights,
+            $runtimeInheritance,
+            $propagation,
+            $allow
+        ))
+    }
+
+    Set-Acl -LiteralPath $Path -AclObject $acl
+}
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw 'Run this installer from an elevated PowerShell session.'
 }
@@ -73,17 +131,32 @@ try {
 
 $programData = Join-Path $env:ProgramData 'OPPW'
 $binDir = Join-Path $programData 'bin'
+$runtimeDir = Join-Path $programData 'runtime'
+$logDir = Join-Path $programData 'logs'
 $configPath = Join-Path $programData 'service.json'
 $hostPath = Join-Path $binDir 'OPPWServiceHost.exe'
 $supervisorPath = Join-Path $root 'service\oppw_windows_supervisor.py'
 New-Item -ItemType Directory -Path $programData -Force | Out-Null
 New-Item -ItemType Directory -Path $binDir -Force | Out-Null
+New-Item -ItemType Directory -Path $runtimeDir -Force | Out-Null
+New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+$runtimeSecurityIdentifier = [Security.Principal.SecurityIdentifier]::new($runtimeSid)
+
+# The LocalSystem service executable and its containing directory are a
+# privileged code boundary. The runtime user may traverse the root and write
+# only runtime/log data; it cannot replace the host, its directory, or config.
+Set-ExactPathAcl -Path $programData -RuntimeSid $runtimeSecurityIdentifier -RuntimeAccess Traverse -RuntimeChildrenInherit
+Set-ExactPathAcl -Path $binDir -RuntimeSid $runtimeSecurityIdentifier
+Set-ExactPathAcl -Path $runtimeDir -RuntimeSid $runtimeSecurityIdentifier -RuntimeAccess Modify -RuntimeChildrenInherit
+Set-ExactPathAcl -Path $logDir -RuntimeSid $runtimeSecurityIdentifier -RuntimeAccess Modify -RuntimeChildrenInherit
+
 $packagedHost = Join-Path $root 'artifacts\OPPWServiceHost.exe'
 if (Test-Path -LiteralPath $packagedHost -PathType Leaf) {
     Copy-Item -LiteralPath $packagedHost -Destination $hostPath -Force
 } else {
     & (Join-Path $root 'service\build-service-host.ps1') -RepoRoot $root -OutputPath $hostPath
 }
+Set-ExactPathAcl -Path $hostPath -RuntimeSid $runtimeSecurityIdentifier
 $existing = if (Test-Path -LiteralPath $configPath) { Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json } else { $null }
 $nodeId = if ($existing -and "$($existing.nodeRole)" -eq $NodeRole.ToUpperInvariant() -and "$($existing.nodeId)" -match '^[a-f0-9]{32}$') { "$($existing.nodeId)" } else { [Guid]::NewGuid().ToString('N') }
 $config = [ordered]@{
@@ -99,17 +172,11 @@ $config = [ordered]@{
     restartDelaySeconds = 5
     startupReadyTimeoutSeconds = 90
     startupFailureBackoffSeconds = 60
-    runtimeDir = (Join-Path $programData 'runtime')
-    logDir = (Join-Path $programData 'logs')
+    runtimeDir = $runtimeDir
+    logDir = $logDir
 }
 [IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json -Depth 4), [Text.UTF8Encoding]::new($false))
-$serviceAccount = $RuntimeUser
-& icacls.exe $programData /grant:r "*${runtimeSid}:(OI)(CI)(M)" | Out-Null
-if ($LASTEXITCODE -ne 0) { throw 'Could not grant the service account access to OPPW runtime directories.' }
-# Numeric SIDs are stable across localized Windows installations. icacls
-# requires the leading asterisk when a trustee is supplied as a SID.
-& icacls.exe $configPath /inheritance:r /grant:r '*S-1-5-18:(F)' '*S-1-5-32-544:(F)' "*${runtimeSid}:(R)" | Out-Null
-if ($LASTEXITCODE -ne 0) { throw 'Could not protect the private service configuration.' }
+Set-ExactPathAcl -Path $configPath -RuntimeSid $runtimeSecurityIdentifier -RuntimeAccess Read
 
 $binaryPath = '"' + $hostPath + '" "' + $PythonPath + '" "' + $supervisorPath + '" "' + $configPath + '" "' + $runtimeSid + '"'
 if ($PSCmdlet.ShouldProcess($serviceName, 'Create and start Windows service')) {

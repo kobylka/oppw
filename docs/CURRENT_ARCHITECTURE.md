@@ -53,6 +53,8 @@ EXECUTOR and PUBLISHER ownership is coordinated globally through MySQL-backed le
 
 Two Windows machines run the canonical `OPPWContinuousSupervisor` service as LocalSystem. The host locates the explicitly configured MetaTrader owner's active or disconnected Windows session and launches the Python supervisor and terminal children on that interactive desktop; it waits fail-closed while that user is logged out. The backend assigns all four Demo/Real Executor/Publisher children to the master while it is responsive, assigns them to the backup after master heartbeat expiry, and idles the backup when the master returns. MT5 children are attempted globally in Demo Executor, Real Executor, Demo Publisher, Real Publisher order. Each child atomically reports readiness only after terminal connection, account/symbol validation, and applicable AutoTrading validation; the supervisor permits only one unready child at a time and applies bounded per-role timeout/backoff so one failing account does not indefinitely block the other. This assignment controls process availability only; MySQL leases and fencing remain authoritative for role work and trading.
 
+The LocalSystem code boundary under `%ProgramData%\OPPW` uses protected Administrators ownership and exact ACLs. Only SYSTEM and Administrators may modify `bin`, `OPPWServiceHost.exe`, or `service.json`; the runtime user has read/traverse access at the root for configuration and service-stop observation, and Modify access only in the dedicated `runtime` and `logs` trees. Re-running the elevated installer replaces legacy ownership and inherited permissions with this allowlist before registering or starting the service.
+
 ## Backend capability ownership
 
 | Capability | Canonical endpoint/module |
