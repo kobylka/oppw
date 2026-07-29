@@ -158,8 +158,13 @@ function oppw_closed_trade_drawdown_episode_seeds(array $closedTrades): array
         if ($drawdownPercent < -OPPW_DRAWDOWN_EPSILON) {
             if ($active === null) {
                 $keys = array_filter([$latestPeakTradeKey, $tradeKey]);
+                $openedAt = (string)($trade['openedAt'] ?? '');
+                $startAt = $latestPeakAt !== '' ? $latestPeakAt : ($openedAt !== '' ? $openedAt : $closedAt);
+                if ($openedAt !== '' && oppw_drawdown_iso($openedAt) > oppw_drawdown_iso($startAt)) {
+                    $startAt = $openedAt;
+                }
                 $active = [
-                    'startAt' => $latestPeakAt !== '' ? $latestPeakAt : (string)($trade['openedAt'] ?? $closedAt),
+                    'startAt' => $startAt,
                     'trough' => $point,
                     'tradeKeys' => array_fill_keys($keys, true),
                 ];
@@ -256,7 +261,7 @@ function oppw_update_trade_episode_states_by_time(
                 $baselinePoint = $previousPoint;
             }
             $state['_baselineIndex'] = (float)$baselinePoint['equityIndex'];
-            $state['_baselineAt'] = (string)$baselinePoint['capturedAt'];
+            $state['_baselineAt'] = (string)$state['startAt'];
         }
         $baselineIndex = (float)$state['_baselineIndex'];
         if ($baselineIndex > OPPW_DRAWDOWN_EPSILON) {
@@ -305,7 +310,7 @@ function oppw_update_trade_episode_states(
                 $baselinePoint = $previousPoint;
             }
             $state['_baselineIndex'] = (float)$baselinePoint['equityIndex'];
-            $state['_baselineAt'] = (string)$baselinePoint['capturedAt'];
+            $state['_baselineAt'] = (string)$state['startAt'];
         }
         $baselineIndex = (float)$state['_baselineIndex'];
         if ($baselineIndex > OPPW_DRAWDOWN_EPSILON) {

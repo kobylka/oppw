@@ -93,11 +93,11 @@ if ($dailyHybrid['episodeAuthority'] !== 'CLOSED_TRADES_WITH_MINUTE_EQUITY_REFIN
     throw new RuntimeException('episode cards were not defined by closed-trade drawdowns');
 }
 $tradeEpisode = $dailyHybrid['episodes'][0];
-$assertClose((1.0 - 80.0 / 110.0) * 100.0, $tradeEpisode['depthPercent'], 'minute-refined trade drawdown depth');
+$assertClose(60.0, $tradeEpisode['depthPercent'], 'minute-refined trade drawdown depth');
 if ($tradeEpisode['troughAt'] !== '2026-07-21T11:00:00Z'
     || $tradeEpisode['troughSource'] !== 'MINUTE_EQUITY'
-    || $tradeEpisode['startAt'] !== '2026-07-20T13:00:00Z'
-    || $tradeEpisode['elapsedSeconds'] !== 255600
+    || $tradeEpisode['startAt'] !== '2026-07-21T10:00:00Z'
+    || $tradeEpisode['elapsedSeconds'] !== 180000
     || $tradeEpisode['recoverySeconds'] !== 176400
     || $tradeEpisode['tradeKeys'] !== ['DEMO:1', 'DEMO:2', 'DEMO:3']) {
     throw new RuntimeException('minute trough and timing did not refine the closed-trade episode');
@@ -114,10 +114,28 @@ $ongoingTradeDrawdown = oppw_daily_equity_drawdown_analyze([
 $ongoingEpisode = $ongoingTradeDrawdown['episodes'][0];
 if ($ongoingEpisode['recovered']
     || $ongoingEpisode['endAt'] !== '2026-07-24T12:00:00Z'
-    || $ongoingEpisode['elapsedSeconds'] !== 345600
+    || $ongoingEpisode['startAt'] !== '2026-07-21T10:00:00Z'
+    || $ongoingEpisode['elapsedSeconds'] !== 266400
     || $ongoingEpisode['recoverySeconds'] !== null
     || $ongoingEpisode['troughSource'] !== 'MINUTE_EQUITY') {
     throw new RuntimeException('ongoing closed-trade drawdown did not extend to the latest minute-equity point');
+}
+
+$lateMinuteHistory = oppw_daily_equity_drawdown_analyze([
+    $row('2026-05-10T22:00:00Z', 110.0, 42),
+    $row('2026-05-11T13:30:00Z', 110.0, 42),
+    $row('2026-05-12T20:00:00Z', 90.0, 42),
+    $row('2026-05-14T20:00:00Z', 80.0, 42),
+], [], [
+    $trade(41, '2026-05-04T13:30:00Z', '2026-05-08T20:00:00Z', 0.10),
+    $trade(42, '2026-05-11T13:30:00Z', '2026-05-12T20:00:00Z', -0.10),
+]);
+$lateMinuteEpisode = $lateMinuteHistory['episodes'][0];
+if ($lateMinuteEpisode['startAt'] !== '2026-05-11T13:30:00Z'
+    || $lateMinuteEpisode['endAt'] !== '2026-05-14T20:00:00Z'
+    || $lateMinuteEpisode['elapsedSeconds'] !== 282600
+    || $lateMinuteEpisode['troughSource'] !== 'MINUTE_EQUITY') {
+    throw new RuntimeException('drawdown did not start when its first losing trade opened');
 }
 
 $cashFlowAdjusted = oppw_drawdown_analyze([

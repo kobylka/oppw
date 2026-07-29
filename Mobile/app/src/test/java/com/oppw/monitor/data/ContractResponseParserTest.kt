@@ -107,7 +107,7 @@ class ContractResponseParserTest {
             assertEquals(86_400L, drawdown.episodeMinimumSeconds)
             assertEquals("CLOSED_TRADES_WITH_MINUTE_EQUITY_REFINEMENT", drawdown.episodeAuthority)
             assertEquals(2, drawdown.episodes.size)
-            assertEquals(20.0, drawdown.episodes.first().depthPercent, 0.01)
+            assertEquals(10.0, drawdown.episodes.first().depthPercent, 0.01)
             assertEquals("MINUTE_EQUITY", drawdown.episodes.first().troughSource)
             assertTrue("DEMO:990102" in drawdown.episodes.first().tradeKeys)
         }

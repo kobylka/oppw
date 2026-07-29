@@ -36,7 +36,7 @@
   "drawdownEpisodeCount": 2,
   "drawdownDisplayedEpisodeCount": 2,
   "drawdownEpisodeMinimumSeconds": 86400,
-  "drawdownEpisodeMinuteDepthPercent": 20.0,
+  "drawdownEpisodeMinuteDepthPercent": 10.0,
   "drawdownLatestEpisodeMinuteDepthPercent": 21.5686274510,
   "authorityStages": 9,
   "authorityFills": 2,

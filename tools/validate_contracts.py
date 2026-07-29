@@ -853,7 +853,11 @@ return [
             if first_episode["troughSource"] != "MINUTE_EQUITY":
                 raise AssertionError("closed-trade drawdown did not use its minute-equity trough")
             assert_close(first_episode["depthPercent"], float(expected["drawdownEpisodeMinuteDepthPercent"]), "minute-refined trade episode depth")
-            expected_trough = (current_monday + timedelta(weeks=-1, days=2)).replace(hour=16, minute=0)
+            expected_start = (current_monday + timedelta(weeks=-1, days=3)).replace(hour=15, minute=30)
+            actual_start = datetime.fromisoformat(first_episode["startAt"].replace("Z", "+00:00"))
+            if actual_start != expected_start.astimezone(timezone.utc):
+                raise AssertionError("closed-trade drawdown did not start when its first losing trade opened")
+            expected_trough = (current_monday + timedelta(weeks=-1, days=4)).replace(hour=21, minute=0)
             actual_trough = datetime.fromisoformat(first_episode["troughAt"].replace("Z", "+00:00"))
             if actual_trough != expected_trough.astimezone(timezone.utc):
                 raise AssertionError("closed-trade drawdown lost the exact minute trough timestamp")
