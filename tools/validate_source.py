@@ -421,6 +421,10 @@ def main() -> int:
             "Completed-week analytics input segments", "latest requested week is always queried live",
             "No database migration or Android contract change is required",
         ),
+        "docs/decisions/0022-streaming-daily-equity-reduction.md": (
+            "Streaming daily-equity reduction", "dedicated streaming prepass",
+            "No database migration is required",
+        ),
     }
     for relative, markers in security_boundary_files.items():
         path = root / relative
@@ -473,7 +477,11 @@ def main() -> int:
         "Mobile/backend/analytics.php": ("strategy_equity_daily", "equity-history-v1", "DAILY_FALLBACK"),
         "Mobile/backend/analytics-drawdown.php": (
             "cashFlowAdjusted", "statisticsExact", "MINUTE_WITH_DAILY_FALLBACK",
-            "oppw_downsample_drawdown_series",
+            "oppw_downsample_drawdown_series", "oppw_reduce_daily_equity_history",
+            "oppw_update_trade_episode_states_by_time",
+        ),
+        "Mobile/backend/tests/analytics-drawdown-test.php": (
+            "optimized daily reduction changed the canonical minute-derived state",
         ),
         "tools/validate_backup_restore.ps1": (
             "--single-transaction", "--routines", "--triggers", "sourceContainer",

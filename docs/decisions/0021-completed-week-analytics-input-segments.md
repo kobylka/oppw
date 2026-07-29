@@ -24,4 +24,4 @@ The canonical analytics calculations consume cached historical rows followed by 
 - Cold requests populate independent weekly segments; later windows reuse every overlapping completed week.
 - Late corrections to completed history may take up to the configured segment TTL to appear unless the private segment cache is cleared during deployment or repair.
 - Segment storage grows with distinct database/account/dataset/filter/week combinations and is pruned opportunistically after expiry.
-- PHP still performs the canonical cross-week calculation, preserving drawdown continuity and exact cached/uncached semantics.
+- PHP still performs the canonical cross-week calculation with the calculation-specific reducer accepted by ADR 0022, preserving drawdown continuity and exact cached/uncached semantics.

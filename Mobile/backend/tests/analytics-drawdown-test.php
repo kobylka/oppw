@@ -132,6 +132,37 @@ $cashFlowAdjusted = oppw_drawdown_analyze([
 $assertClose(10.0, $cashFlowAdjusted['maxDrawdownPercent'], 'cash-flow-adjusted drawdown percent');
 $assertClose(12.0, $cashFlowAdjusted['maxDrawdownCurrency'], 'cash-flow-adjusted drawdown currency');
 
+$equivalenceRows = [
+    $row('2026-03-27T08:00:00Z', 100.0, 31),
+    $row('2026-03-27T09:00:00Z', 150.0, 31),
+    $row('2026-03-27T10:00:00Z', 130.0),
+    $row('2026-03-28T10:00:00Z', 120.0, 32),
+    array_replace($row('2026-03-30T08:00:00Z', 310.0, 32), ['accountEntryFlow' => 200.0]),
+    array_replace($row('2026-03-30T20:00:00Z', 115.0), ['sourceGranularity' => 'DAILY_FALLBACK']),
+];
+$equivalenceFlows = [
+    ['occurred_at' => '2026-03-27T09:00:00Z', 'flow_type' => 'TOP_UP', 'amount' => 50.0],
+];
+$equivalenceTrades = [
+    $trade(31, '2026-03-27T07:00:00Z', '2026-03-27T08:30:00Z', 0.10),
+    $trade(32, '2026-03-30T07:00:00Z', '2026-03-30T08:30:00Z', -0.20),
+];
+$equivalenceSeeds = oppw_closed_trade_drawdown_episode_seeds($equivalenceTrades);
+$legacyReduction = oppw_drawdown_analyze($equivalenceRows, $equivalenceFlows, 2000, $equivalenceSeeds);
+$optimizedReduction = oppw_reduce_daily_equity_history($equivalenceRows, $equivalenceFlows, $equivalenceSeeds);
+$legacyComparable = [
+    'dailyRows' => $legacyReduction['_dailyDrawdownRows'],
+    'dailyEquity' => $legacyReduction['_dailyEquity'],
+    'portfolioEntryFlowsByDay' => $legacyReduction['_portfolioEntryFlowsByDay'],
+    'refinedTradeEpisodes' => $legacyReduction['_refinedTradeEpisodes'],
+    'minuteSampleCount' => $legacyReduction['minuteSampleCount'],
+    'dailyFallbackSampleCount' => $legacyReduction['dailyFallbackSampleCount'],
+    'tradeKeys' => $legacyReduction['tradeKeys'],
+];
+if ($optimizedReduction !== $legacyComparable) {
+    throw new RuntimeException('optimized daily reduction changed the canonical minute-derived state');
+}
+
 $portfolio = iterator_to_array(oppw_portfolio_equity_rows([
     ['strategy_key' => 'REAL', 'captured_minute' => '2026-07-27 10:00:00', 'equity' => 200.0, 'position_ticket' => null, 'source_granularity' => 'MINUTE'],
     ['strategy_key' => 'DEMO', 'captured_minute' => '2026-07-27 10:00:00', 'equity' => 100.0, 'position_ticket' => 7, 'source_granularity' => 'MINUTE'],
@@ -164,4 +195,4 @@ if (!$bounded['seriesDownsampled'] || count($bounded['series']) > 6) {
     throw new RuntimeException('drawdown chart series was not bounded');
 }
 
-echo "ANALYTICS DRAWDOWN TESTS PASSED cases=10\n";
+echo "ANALYTICS DRAWDOWN TESTS PASSED cases=11\n";

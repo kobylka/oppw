@@ -8,6 +8,10 @@ const OPPW_DRAWDOWN_EPISODE_MINIMUM_SECONDS = 86400;
 function oppw_drawdown_iso(string $value): string
 {
     if ($value === '') return '';
+    if (preg_match('/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:\.(\d{1,6}))?Z?$/', $value, $matches)) {
+        $micros = str_pad((string)($matches[3] ?? ''), 6, '0');
+        return $matches[1] . 'T' . $matches[2] . '.' . $micros . 'Z';
+    }
     try {
         return (new DateTimeImmutable($value, new DateTimeZone('UTC')))
             ->setTimezone(new DateTimeZone('UTC'))
@@ -202,6 +206,8 @@ function oppw_prepare_trade_episode_states(array $episodes): array
     return array_values(array_map(static function (array $episode): array {
         $episode['_startEpoch'] = oppw_drawdown_time_value((string)$episode['startAt']);
         $episode['_endEpoch'] = oppw_drawdown_time_value((string)$episode['tradeEndAt']);
+        $episode['_startSort'] = oppw_drawdown_iso((string)$episode['startAt']);
+        $episode['_endSort'] = oppw_drawdown_iso((string)$episode['tradeEndAt']);
         $episode['_baselineIndex'] = null;
         $episode['_baselineAt'] = '';
         $episode['_troughPercent'] = 0.0;
@@ -209,6 +215,60 @@ function oppw_prepare_trade_episode_states(array $episodes): array
         $episode['_latestAt'] = '';
         return $episode;
     }, $episodes));
+}
+
+/**
+ * Equivalent to oppw_update_trade_episode_states() for canonical UTC strings,
+ * avoiding a DateTime allocation for every minute in long episodes.
+ */
+function oppw_update_trade_episode_states_by_time(
+    array &$states,
+    int &$stateIndex,
+    ?array $previousPoint,
+    array $point
+): void {
+    $pointAt = (string)$point['capturedAt'];
+    $pointSort = (string)$point['_sortAt'];
+    while ($stateIndex < count($states)) {
+        $state =& $states[$stateIndex];
+        $startAt = (string)$state['_startSort'];
+        if ($state['_startEpoch'] === null || $pointSort < $startAt) {
+            unset($state);
+            return;
+        }
+        $endAt = (string)$state['_endSort'];
+        if ($state['recovered'] && $state['_endEpoch'] !== null && $pointSort > $endAt) {
+            $stateIndex++;
+            unset($state);
+            continue;
+        }
+        $state['_latestAt'] = $pointAt;
+        if (!str_contains((string)$point['sourceGranularity'], 'MINUTE')) {
+            unset($state);
+            return;
+        }
+        if ($state['_baselineIndex'] === null) {
+            $baselinePoint = $point;
+            if ($previousPoint !== null
+                && str_contains((string)$previousPoint['sourceGranularity'], 'MINUTE')
+                && (string)$previousPoint['_sortAt'] <= $startAt
+                && (float)$previousPoint['equityIndex'] > (float)$baselinePoint['equityIndex']) {
+                $baselinePoint = $previousPoint;
+            }
+            $state['_baselineIndex'] = (float)$baselinePoint['equityIndex'];
+            $state['_baselineAt'] = (string)$baselinePoint['capturedAt'];
+        }
+        $baselineIndex = (float)$state['_baselineIndex'];
+        if ($baselineIndex > OPPW_DRAWDOWN_EPSILON) {
+            $relativePercent = min(0.0, ((float)$point['equityIndex'] / $baselineIndex - 1.0) * 100.0);
+            if ($relativePercent < (float)$state['_troughPercent']) {
+                $state['_troughPercent'] = $relativePercent;
+                $state['_troughAt'] = $pointAt;
+            }
+        }
+        unset($state);
+        return;
+    }
 }
 
 function oppw_update_trade_episode_states(
@@ -602,6 +662,168 @@ function oppw_drawdown_analyze(
 }
 
 /**
+ * Reduces the minute portfolio stream to the exact state consumed by the
+ * daily-equity authority. Unlike oppw_drawdown_analyze(), this prepass does
+ * not build and repeatedly downsample a minute chart or calculate minute
+ * drawdown episodes that the daily result immediately discards.
+ */
+function oppw_reduce_daily_equity_history(
+    iterable $portfolioRows,
+    array $cashFlows,
+    array $tradeEpisodeSeeds
+): array {
+    usort($cashFlows, static fn(array $left, array $right): int =>
+        strcmp((string)($left['occurred_at'] ?? ''), (string)($right['occurred_at'] ?? ''))
+    );
+    foreach ($cashFlows as &$cashFlow) {
+        $cashFlow['_sortAt'] = oppw_drawdown_iso((string)($cashFlow['occurred_at'] ?? ''));
+    }
+    unset($cashFlow);
+
+    $dailyEquity = [];
+    $dailyDrawdownByDay = [];
+    $portfolioEntryFlowsByDay = [];
+    $allTradeKeys = [];
+    $minuteSampleCount = 0;
+    $dailyFallbackSampleCount = 0;
+    $flowIndex = 0;
+    $flowCount = count($cashFlows);
+    $previousSort = '';
+    $previousEquity = null;
+    $cumulativeExternalFlow = 0.0;
+    $equityIndex = 100.0;
+    $tradeEpisodeStates = oppw_prepare_trade_episode_states($tradeEpisodeSeeds);
+    $tradeEpisodeStateIndex = 0;
+    $previousAdjustedPoint = null;
+    $utc = new DateTimeZone('UTC');
+    $warsaw = new DateTimeZone('Europe/Warsaw');
+    $currentDay = '';
+    $currentWeekday = 0;
+    $nextDaySort = '';
+
+    foreach ($portfolioRows as $row) {
+        $capturedAt = (string)($row['capturedAt'] ?? '');
+        $equity = is_numeric($row['equity'] ?? null) ? (float)$row['equity'] : 0.0;
+        if ($capturedAt === '' || !is_finite($equity) || $equity <= 0.0) continue;
+        $capturedSort = oppw_drawdown_iso($capturedAt);
+        if ($capturedSort === '') continue;
+
+        $hasPreAdjustedValues = is_numeric($row['adjustedEquityIndex'] ?? null)
+            && is_numeric($row['adjustedEquity'] ?? null);
+        if ($hasPreAdjustedValues) {
+            $equityIndex = (float)$row['adjustedEquityIndex'];
+            $flowAdjustedEquity = (float)$row['adjustedEquity'];
+        } elseif ($previousEquity === null) {
+            $flowAdjustedEquity = $equity;
+        } else {
+            $externalFlow = (float)($row['accountEntryFlow'] ?? 0.0);
+            while ($flowIndex < $flowCount) {
+                $flowSort = (string)$cashFlows[$flowIndex]['_sortAt'];
+                if ($flowSort === '' || $flowSort <= $previousSort) {
+                    $flowIndex++;
+                    continue;
+                }
+                if ($flowSort > $capturedSort) break;
+                $externalFlow += oppw_external_flow_amount($cashFlows[$flowIndex++]);
+            }
+            $cumulativeExternalFlow += $externalFlow;
+            $factor = $previousEquity > OPPW_DRAWDOWN_EPSILON
+                ? ($equity - $externalFlow) / $previousEquity
+                : 1.0;
+            if (!is_finite($factor) || $factor <= OPPW_DRAWDOWN_EPSILON) $factor = OPPW_DRAWDOWN_EPSILON;
+            $equityIndex *= $factor;
+            $flowAdjustedEquity = $equity - $cumulativeExternalFlow;
+        }
+
+        $tradeKeys = array_values(array_unique(array_filter($row['tradeKeys'] ?? [])));
+        $sourceGranularity = (string)($row['sourceGranularity'] ?? 'MINUTE');
+        foreach ($tradeKeys as $key) $allTradeKeys[$key] = true;
+        if (str_contains($sourceGranularity, 'MINUTE')) $minuteSampleCount++;
+        if (str_contains($sourceGranularity, 'DAILY_FALLBACK')) $dailyFallbackSampleCount++;
+
+        $adjustedPoint = [
+            'capturedAt' => $capturedAt,
+            'equityIndex' => $equityIndex,
+            'sourceGranularity' => $sourceGranularity,
+            '_sortAt' => $capturedSort,
+        ];
+        if ($tradeEpisodeStates) {
+            oppw_update_trade_episode_states_by_time(
+                $tradeEpisodeStates,
+                $tradeEpisodeStateIndex,
+                $previousAdjustedPoint,
+                $adjustedPoint
+            );
+        }
+
+        if ($nextDaySort === '' || $capturedSort >= $nextDaySort) {
+            try {
+                $local = (new DateTimeImmutable($capturedAt, $utc))->setTimezone($warsaw);
+                $currentDay = $local->format('Y-m-d');
+                $currentWeekday = (int)$local->format('N');
+                $nextDaySort = $local->modify('tomorrow')->setTime(0, 0, 0, 0)
+                    ->setTimezone($utc)->format('Y-m-d\TH:i:s.u\Z');
+            } catch (Throwable) {
+                $currentDay = '';
+                $currentWeekday = 0;
+                $nextDaySort = '';
+            }
+        }
+        if ($currentDay !== '' && $currentWeekday <= 5) {
+            $dailyEquity[$currentDay] = $equity;
+            $dailyRow = [
+                'capturedAt' => $capturedAt,
+                'equity' => $equity,
+                'tradeKeys' => $tradeKeys,
+                'sourceGranularity' => $sourceGranularity,
+                'adjustedEquityIndex' => $equityIndex,
+                'adjustedEquity' => $flowAdjustedEquity,
+            ];
+            if (!isset($dailyDrawdownByDay[$currentDay])) {
+                $dailyDrawdownByDay[$currentDay] = ['first' => $dailyRow, 'low' => $dailyRow, 'close' => $dailyRow];
+            } else {
+                if ((float)$equityIndex < (float)$dailyDrawdownByDay[$currentDay]['low']['adjustedEquityIndex']) {
+                    $dailyDrawdownByDay[$currentDay]['low'] = $dailyRow;
+                }
+                $dailyDrawdownByDay[$currentDay]['close'] = $dailyRow;
+            }
+            $entryFlow = (float)($row['accountEntryFlow'] ?? 0.0);
+            if ($entryFlow !== 0.0) {
+                $portfolioEntryFlowsByDay[$currentDay] = ($portfolioEntryFlowsByDay[$currentDay] ?? 0.0) + $entryFlow;
+            }
+        }
+
+        $previousSort = $capturedSort;
+        $previousEquity = $equity;
+        $previousAdjustedPoint = $adjustedPoint;
+    }
+
+    ksort($dailyDrawdownByDay);
+    $dailyRows = [];
+    foreach ($dailyDrawdownByDay as $dayPoints) {
+        $unique = [];
+        foreach (['first', 'low', 'close'] as $kind) {
+            $candidate = $dayPoints[$kind];
+            $unique[(string)$candidate['capturedAt']] = $candidate;
+        }
+        uasort($unique, static fn(array $left, array $right): int =>
+            strcmp((string)$left['capturedAt'], (string)$right['capturedAt'])
+        );
+        foreach ($unique as $candidate) $dailyRows[] = $candidate;
+    }
+
+    return [
+        'dailyRows' => $dailyRows,
+        'dailyEquity' => $dailyEquity,
+        'portfolioEntryFlowsByDay' => $portfolioEntryFlowsByDay,
+        'refinedTradeEpisodes' => oppw_finalize_trade_episode_states($tradeEpisodeStates),
+        'minuteSampleCount' => $minuteSampleCount,
+        'dailyFallbackSampleCount' => $dailyFallbackSampleCount,
+        'tradeKeys' => array_keys($allTradeKeys),
+    ];
+}
+
+/**
  * Portfolio risk uses a daily curve containing the first, lowest-minute and
  * closing equity point for each Warsaw weekday. Episode cards remain defined
  * by closed-trade returns and use the minute stream to refine the starting
@@ -614,19 +836,19 @@ function oppw_daily_equity_drawdown_analyze(
     int $seriesMaximum = OPPW_DRAWDOWN_SERIES_MAXIMUM
 ): array {
     $tradeEpisodeSeeds = oppw_closed_trade_drawdown_episode_seeds($closedTrades);
-    $minuteAnalysis = oppw_drawdown_analyze($portfolioRows, $cashFlows, $seriesMaximum, $tradeEpisodeSeeds);
-    $dailyRows = $minuteAnalysis['_dailyDrawdownRows'];
+    $reduced = oppw_reduce_daily_equity_history($portfolioRows, $cashFlows, $tradeEpisodeSeeds);
+    $dailyRows = $reduced['dailyRows'];
     if (!$dailyRows) {
         $empty = oppw_empty_drawdown_result();
         $empty['episodeAuthority'] = 'CLOSED_TRADES_WITH_MINUTE_EQUITY_REFINEMENT';
-        $empty['_dailyEquity'] = $minuteAnalysis['_dailyEquity'];
-        $empty['_portfolioEntryFlowsByDay'] = $minuteAnalysis['_portfolioEntryFlowsByDay'];
+        $empty['_dailyEquity'] = $reduced['dailyEquity'];
+        $empty['_portfolioEntryFlowsByDay'] = $reduced['portfolioEntryFlowsByDay'];
         unset($empty['_dailyDrawdownRows'], $empty['_refinedTradeEpisodes']);
         return $empty;
     }
 
     $dailyAnalysis = oppw_drawdown_analyze($dailyRows, [], $seriesMaximum);
-    $refinedTradeEpisodes = $minuteAnalysis['_refinedTradeEpisodes'];
+    $refinedTradeEpisodes = $reduced['refinedTradeEpisodes'];
     $dailyAnalysis['episodes'] = array_values(array_filter(
         $refinedTradeEpisodes,
         static fn(array $episode): bool =>
@@ -635,16 +857,16 @@ function oppw_daily_equity_drawdown_analyze(
     $dailyAnalysis['episodeCount'] = count($refinedTradeEpisodes);
     $dailyAnalysis['episodeMinimumSeconds'] = OPPW_DRAWDOWN_EPISODE_MINIMUM_SECONDS;
     $dailyAnalysis['episodeAuthority'] = 'CLOSED_TRADES_WITH_MINUTE_EQUITY_REFINEMENT';
-    $dailyAnalysis['sourceGranularity'] = (int)$minuteAnalysis['minuteSampleCount'] > 0
-        ? ((int)$minuteAnalysis['dailyFallbackSampleCount'] > 0
+    $dailyAnalysis['sourceGranularity'] = (int)$reduced['minuteSampleCount'] > 0
+        ? ((int)$reduced['dailyFallbackSampleCount'] > 0
             ? 'DAILY_CLOSE_WITH_MINUTE_LOW_AND_DAILY_FALLBACK'
             : 'DAILY_CLOSE_WITH_MINUTE_LOW')
         : 'DAILY_FALLBACK';
-    $dailyAnalysis['minuteSampleCount'] = (int)$minuteAnalysis['minuteSampleCount'];
-    $dailyAnalysis['dailyFallbackSampleCount'] = (int)$minuteAnalysis['dailyFallbackSampleCount'];
-    $dailyAnalysis['tradeKeys'] = $minuteAnalysis['tradeKeys'];
-    $dailyAnalysis['_dailyEquity'] = $minuteAnalysis['_dailyEquity'];
-    $dailyAnalysis['_portfolioEntryFlowsByDay'] = $minuteAnalysis['_portfolioEntryFlowsByDay'];
+    $dailyAnalysis['minuteSampleCount'] = (int)$reduced['minuteSampleCount'];
+    $dailyAnalysis['dailyFallbackSampleCount'] = (int)$reduced['dailyFallbackSampleCount'];
+    $dailyAnalysis['tradeKeys'] = $reduced['tradeKeys'];
+    $dailyAnalysis['_dailyEquity'] = $reduced['dailyEquity'];
+    $dailyAnalysis['_portfolioEntryFlowsByDay'] = $reduced['portfolioEntryFlowsByDay'];
     unset(
         $dailyAnalysis['_dailyDrawdownRows'],
         $dailyAnalysis['_refinedTradeEpisodes']
