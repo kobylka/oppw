@@ -67,7 +67,7 @@ The manual token must be configured explicitly and must differ from the pairing-
 
 ## Analytics resource limits
 
-Authenticated analytics is limited to 80 rolling weeks and 160 account-weeks per request, eight accounts, bounded trade/lifecycle samples, per-device and per-IP request rates, and one concurrent request per device. Lifecycle and filter-option queries use the same bounded rolling window rather than scanning complete history.
+Analytics accepts any positive rolling-week request and an explicit `all_history=1` request for the complete available account history. The Android screen exposes this as **All history**. Resource protection comes from an eight-account scope limit, bounded trade/lifecycle materialization, per-device and per-IP request rates, one concurrent request per device, hot-minute retention with indefinite daily fallback, and SQL queries constrained to the requested or complete available date range.
 
 ## Web-server deployment
 

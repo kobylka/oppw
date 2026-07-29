@@ -118,7 +118,8 @@ object JsonParser {
             generatedAt = root.optString("generatedAt"),
             filters = AnalyticsFilters(
                 scope = filters.optString("scope", "SELECTED"), leverage = filters.optString("leverage"),
-                exitReason = filters.optString("exitReason"), rollingWeeks = filters.optInt("rollingWeeks", 4), tradeClass = filters.optString("tradeClass"),
+                exitReason = filters.optString("exitReason"), rollingWeeks = filters.optInt("rollingWeeks", 4),
+                allHistory = filters.optBoolean("allHistory"), tradeClass = filters.optString("tradeClass"),
             ),
             filterOptions = AnalyticsFilterOptions(
                 accounts = buildList {

@@ -210,13 +210,11 @@ function enforce_single_flight(PDO $db, string $bucket, string $subject): void
     });
 }
 
-function bounded_analytics_rolling_weeks(mixed $value, int $accountCount = 1): int
+function requested_analytics_rolling_weeks(mixed $value): int
 {
     $validated = filter_var($value, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
     if ($validated === false) return 4;
-    $safeAccountCount = max(1, min(8, $accountCount));
-    $accountWeightedMaximum = max(1, intdiv(160, $safeAccountCount));
-    return min(80, $accountWeightedMaximum, (int)$validated);
+    return (int)$validated;
 }
 
 function independent_manual_admin_token(array $cfg): string

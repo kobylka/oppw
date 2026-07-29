@@ -73,6 +73,9 @@ class ContractResponseParserTest {
         }
 
         val analytics = JsonParser.parseAnalytics(response("analytics.json"))
+        val allHistoryAnalytics = JsonParser.parseAnalytics(response("analytics-all-history.json"))
+        assertTrue(allHistoryAnalytics.filters.allHistory)
+        assertEquals(allHistoryAnalytics.filterOptions.availableWeeks, allHistoryAnalytics.filterOptions.effectiveRollingWeeks)
         analytics.summary.let { summary ->
             assertEquals(0.1465, summary.averageWeeklyPreleverageReturnPercent, 0.01)
             assertEquals(1.15, summary.averageWeeklyLeveragedReturnPercent, 0.01)
@@ -80,12 +83,12 @@ class ContractResponseParserTest {
             assertEquals(7.5, summary.averageWinLeveragedReturnPercent, 0.01)
             assertEquals(-0.6, summary.averageLossPreleverageReturnPercent, 0.01)
             assertEquals(-6.0, summary.averageLossLeveragedReturnPercent, 0.01)
-            assertEquals(6.0341606292, summary.calmarRatio, 0.01)
-            assertEquals(1.2014590348, summary.omegaRatio, 0.01)
-            assertEquals(14.6644125490, summary.ulcerIndexPercent, 0.01)
-            assertEquals(-10.0, summary.valueAtRisk95Percent, 0.01)
-            assertEquals(-10.0, summary.expectedShortfall95Percent, 0.01)
-            assertEquals(5, summary.riskSampleDays)
+            assertEquals(-3.3234576825, summary.calmarRatio, 0.01)
+            assertEquals(0.5780604790, summary.omegaRatio, 0.01)
+            assertEquals(16.3682821687, summary.ulcerIndexPercent, 0.01)
+            assertEquals(-18.6764705882, summary.valueAtRisk95Percent, 0.01)
+            assertEquals(-21.5686274510, summary.expectedShortfall95Percent, 0.01)
+            assertEquals(6, summary.riskSampleDays)
             assertEquals(-300.0, summary.maxDrawdown, 0.01)
             assertEquals(0.1, summary.recoveryFactor, 0.01)
         }
@@ -93,7 +96,7 @@ class ContractResponseParserTest {
             assertEquals("DAILY_CLOSE_WITH_MINUTE_LOW", drawdown.sourceGranularity)
             assertTrue(drawdown.cashFlowAdjusted)
             assertTrue(drawdown.statisticsExact)
-            assertEquals(9, drawdown.sampleCount)
+            assertEquals(10, drawdown.sampleCount)
             assertEquals(30.0, drawdown.maxDrawdownPercent, 0.01)
             assertEquals(300.0, drawdown.maxDrawdownCurrency, 0.01)
             assertEquals(2, drawdown.episodeCount)

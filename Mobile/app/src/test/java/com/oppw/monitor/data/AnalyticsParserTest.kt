@@ -9,6 +9,8 @@ class AnalyticsParserTest {
         val analytics = JsonParser.parseAnalytics("""
             {
               "ok": true,
+              "filters": {"rollingWeeks": 4, "allHistory": true},
+              "filterOptions": {"availableWeeks": 82, "effectiveRollingWeeks": 82},
               "summary": {
                 "averageWeeklyPreleverageReturnPercent": 0.1465,
                 "averageWeeklyLeveragedReturnPercent": 1.15,
@@ -93,6 +95,8 @@ class AnalyticsParserTest {
         assertEquals(0.798, analytics.weekly.single().preleverageReturnPercent, 0.000001)
         assertEquals(7.8, analytics.weekly.single().leveragedReturnPercent, 0.000001)
         assertEquals(1.0, analytics.tradeClasses.single().averagePreleverageReturnPercent, 0.000001)
+        assertEquals(true, analytics.filters.allHistory)
+        assertEquals(82, analytics.filterOptions.effectiveRollingWeeks)
         with(analytics.drawdown) {
             assertEquals("DAILY_CLOSE_WITH_MINUTE_LOW", sourceGranularity)
             assertEquals(true, cashFlowAdjusted)

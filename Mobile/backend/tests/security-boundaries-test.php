@@ -13,11 +13,10 @@ $read = static function (string $relative): string {
     return $content;
 };
 
-$assert(bounded_analytics_rolling_weeks(1) === 1, 'analytics minimum changed');
-$assert(bounded_analytics_rolling_weeks(80) === 80, 'analytics safe maximum changed');
-$assert(bounded_analytics_rolling_weeks(520) === 80, 'analytics work limit can be bypassed');
-$assert(bounded_analytics_rolling_weeks(80, 8) === 20, 'analytics account-weighted work limit can be bypassed');
-$assert(bounded_analytics_rolling_weeks('invalid') === 4, 'analytics invalid-input default changed');
+$assert(requested_analytics_rolling_weeks(1) === 1, 'analytics minimum changed');
+$assert(requested_analytics_rolling_weeks(82) === 82, 'analytics silently caps an explicit 82-week request');
+$assert(requested_analytics_rolling_weeks(520) === 520, 'analytics silently caps a long explicit request');
+$assert(requested_analytics_rolling_weeks('invalid') === 4, 'analytics invalid-input default changed');
 
 $pairingToken = str_repeat('p', 48);
 $manualToken = str_repeat('m', 48);
@@ -56,7 +55,7 @@ $assert(!str_contains($receiptSource, 'oppw_authority_event'), 'paired receipt s
 $assert(str_contains($receiptSource, "'MOBILE_RECEIPT'"), 'paired receipt is not stored as a diagnostic');
 
 $analyticsSource = $read('analytics.php');
-foreach (['enforce_single_flight', 'bounded_analytics_rolling_weeks', 'LIMIT 5001', 'LIMIT 20001', "name='MOBILE_RECEIPT'", 'AND occurred_at>=? AND occurred_at<?'] as $marker) {
+foreach (['enforce_single_flight', 'requested_analytics_rolling_weeks', "\$allHistory", 'LIMIT 5001', 'LIMIT 20001', "name='MOBILE_RECEIPT'", 'AND occurred_at>=? AND occurred_at<?'] as $marker) {
     $assert(str_contains($analyticsSource, $marker), 'analytics work bound missing: ' . $marker);
 }
 

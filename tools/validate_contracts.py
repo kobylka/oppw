@@ -776,6 +776,13 @@ return [
             _, analytics, analytics_raw = http_json(
                 "GET", base_url + "analytics.php?account=DEMO&rolling_weeks=3", token=access_token,
             )
+            _, all_history_analytics, all_history_analytics_raw = http_json(
+                "GET", base_url + "analytics.php?account=DEMO&all_history=1", token=access_token,
+            )
+            if not all_history_analytics["filters"].get("allHistory"):
+                raise AssertionError("analytics did not honor the explicit all-history request")
+            if int(all_history_analytics["filterOptions"]["effectiveRollingWeeks"]) != int(all_history_analytics["filterOptions"]["availableWeeks"]):
+                raise AssertionError("all-history analytics did not include every available week")
             summary = analytics["summary"]
             for key in (
                 "averageWeeklyPreleverageReturnPercent", "averageWeeklyLeveragedReturnPercent",
@@ -875,6 +882,7 @@ return [
             (output / "accounts.json").write_text(accounts_raw, encoding="utf-8")
             (output / "status.json").write_text(status_raw, encoding="utf-8")
             (output / "analytics.json").write_text(analytics_raw, encoding="utf-8")
+            (output / "analytics-all-history.json").write_text(all_history_analytics_raw, encoding="utf-8")
             (output / "service-control.json").write_text(service_control_raw, encoding="utf-8")
             android_env = os.environ.copy()
             android_env["OPPW_CONTRACT_OUTPUT_DIR"] = str(output)

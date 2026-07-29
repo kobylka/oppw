@@ -363,7 +363,7 @@ def main() -> int:
             "'MOBILE_RECEIPT'", "diagnostic write failed",
         ),
         "Mobile/backend/analytics.php": (
-            "bounded_analytics_rolling_weeks", "enforce_single_flight", "LIMIT 5001",
+            "requested_analytics_rolling_weeks", "$allHistory", "enforce_single_flight", "LIMIT 5001",
             "LIMIT 20001", "name='MOBILE_RECEIPT'", "AND occurred_at>=? AND occurred_at<?",
         ),
         "Mobile/backend/market-admin.php": (
@@ -383,8 +383,20 @@ def main() -> int:
             "pairing token fallback remains active", "paired receipt still writes execution authority",
             "unused Apache artifact remains",
         ),
+        "Mobile/app/src/main/java/com/oppw/monitor/data/Models.kt": (
+            "val allHistory: Boolean = false",
+        ),
+        "Mobile/app/src/main/java/com/oppw/monitor/data/StatusApiClient.kt": (
+            "analyticsWindowQuery", "&all_history=1",
+        ),
+        "Mobile/app/src/main/java/com/oppw/monitor/ui/screens/AnalyticsScreen.kt": (
+            "All history", "allHistory = false", "allHistory = true",
+        ),
         "docs/decisions/0018-paired-mobile-receipts-are-diagnostic.md": (
             "Paired mobile receipts are diagnostic", "never enters an immutable strategy-authority table",
+        ),
+        "docs/decisions/0019-explicit-all-history-analytics.md": (
+            "Explicit all-history analytics", "all_history=1", "A request for 82 weeks remains 82 weeks",
         ),
     }
     for relative, markers in security_boundary_files.items():

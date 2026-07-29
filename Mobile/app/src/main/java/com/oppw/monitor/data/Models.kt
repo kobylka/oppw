@@ -435,6 +435,7 @@ data class AnalyticsFilters(
     val leverage: String = "",
     val exitReason: String = "",
     val rollingWeeks: Int = 4,
+    val allHistory: Boolean = false,
     val tradeClass: String = "",
 )
 

@@ -349,7 +349,7 @@ private fun AnalyticsContent(state: UiState, analytics: AnalyticsResponse, onFil
 @Composable
 private fun FiltersPanel(filters: AnalyticsFilters, analytics: AnalyticsResponse, onFiltersChanged: (AnalyticsFilters) -> Unit) {
     val options = analytics.filterOptions
-    var rollingWeeksText by remember(filters.rollingWeeks) { mutableStateOf(filters.rollingWeeks.toString()) }
+    var rollingWeeksText by remember(filters.rollingWeeks, filters.allHistory) { mutableStateOf(filters.rollingWeeks.toString()) }
     val requestedRollingWeeks = rollingWeeksText.toIntOrNull()
     AppCard(Modifier.fillMaxWidth()) {
         SectionTitle("Analytics filters", "applied server-side")
@@ -359,23 +359,33 @@ private fun FiltersPanel(filters: AnalyticsFilters, analytics: AnalyticsResponse
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(
                 value = rollingWeeksText,
-                onValueChange = { value -> if (value.length <= 3 && value.all(Char::isDigit)) rollingWeeksText = value },
+                onValueChange = { value -> if (value.length <= 5 && value.all(Char::isDigit)) rollingWeeksText = value },
                 modifier = Modifier.fillMaxWidth(0.55f),
                 label = { Text("Rolling weeks") },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             )
             OutlinedButton(
-                enabled = requestedRollingWeeks != null && requestedRollingWeeks in 1..520 && requestedRollingWeeks != filters.rollingWeeks,
-                onClick = { requestedRollingWeeks?.let { onFiltersChanged(filters.copy(rollingWeeks = it)) } },
+                enabled = requestedRollingWeeks != null && requestedRollingWeeks > 0 && (requestedRollingWeeks != filters.rollingWeeks || filters.allHistory),
+                onClick = { requestedRollingWeeks?.let { onFiltersChanged(filters.copy(rollingWeeks = it, allHistory = false)) } },
             ) { Text("Apply") }
         }
-        Text(
-            if (options.availableWeeks > 0) "Using ${options.effectiveRollingWeeks} of ${options.availableWeeks} available calendar weeks"
-            else "No weekly trade data available",
-            color = TextSecondary,
-            style = MaterialTheme.typography.labelMedium,
-        )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                when {
+                    options.availableWeeks <= 0 -> "No analytics history available"
+                    filters.allHistory -> "Using all ${options.availableWeeks} available calendar weeks"
+                    else -> "Using ${options.effectiveRollingWeeks} of ${options.availableWeeks} available calendar weeks"
+                },
+                modifier = Modifier.weight(1f),
+                color = TextSecondary,
+                style = MaterialTheme.typography.labelMedium,
+            )
+            TextButton(
+                enabled = options.availableWeeks > 0 && !filters.allHistory,
+                onClick = { onFiltersChanged(filters.copy(allHistory = true)) },
+            ) { Text(if (filters.allHistory) "All selected" else "All history") }
+        }
         FilterMenu("Class", filters.tradeClass.ifBlank { "All" }, listOf("") + options.classes) { onFiltersChanged(filters.copy(tradeClass = it.takeUnless { value -> value == "All" }.orEmpty())) }
         TextButton(onClick = { onFiltersChanged(AnalyticsFilters()) }) { Text("Reset filters") }
     }

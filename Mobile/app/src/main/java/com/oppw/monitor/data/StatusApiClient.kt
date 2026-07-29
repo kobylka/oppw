@@ -72,7 +72,7 @@ class StatusApiClient(context: Context, private val baseUrl: String = BuildConfi
             append("&scope=").append(encode(filters.scope))
             if (filters.leverage.isNotBlank()) append("&leverage=").append(encode(filters.leverage))
             if (filters.exitReason.isNotBlank()) append("&exit_reason=").append(encode(filters.exitReason))
-            append("&rolling_weeks=").append(filters.rollingWeeks.coerceAtLeast(1))
+            append(analyticsWindowQuery(filters))
             if (filters.tradeClass.isNotBlank()) append("&class=").append(encode(filters.tradeClass))
         }
         return JsonParser.parseAnalytics(authenticatedRequest("GET", query).body)
@@ -188,3 +188,6 @@ class StatusApiClient(context: Context, private val baseUrl: String = BuildConfi
 
 internal fun requestReadTimeoutMillis(path: String): Int =
     if (path.substringBefore('?') == "analytics.php") 30_000 else 8_000
+
+internal fun analyticsWindowQuery(filters: AnalyticsFilters): String =
+    "&rolling_weeks=${filters.rollingWeeks.coerceAtLeast(1)}" + if (filters.allHistory) "&all_history=1" else ""
