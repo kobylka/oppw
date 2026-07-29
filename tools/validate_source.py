@@ -353,6 +353,11 @@ def main() -> int:
             if marker not in content:
                 fail(errors, f"bounded current-snapshot marker missing from {relative}: {marker}")
 
+    status_path = root / "Mobile" / "backend" / "status.php"
+    status_text = status_path.read_text(encoding="utf-8") if status_path.is_file() else ""
+    if "function equity_points(" in status_text or "$whereSql" in status_text:
+        fail(errors, "status endpoint must not expose a raw SQL-fragment query helper")
+
     lifecycle_files = {
         "Mobile/backend/sql/schema.sql": (
             "strategy_equity_daily", "strategy_retention_runs", "strategy_market_points_no_delete",

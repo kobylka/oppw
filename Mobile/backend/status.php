@@ -137,18 +137,6 @@ function downsample_points(array $rows, int $maximum): array
     return $result;
 }
 
-function equity_points(PDO $db, string $accountKey, string $whereSql, int $maximum): array
-{
-    $sql = "SELECT captured_minute, equity FROM strategy_equity_points WHERE strategy_key = ? $whereSql ORDER BY captured_minute";
-    $statement = $db->prepare($sql);
-    $statement->execute([$accountKey]);
-    $rows = array_map(static fn(array $value): array => [
-        'time' => atom_datetime(new DateTimeImmutable((string)$value['captured_minute'], new DateTimeZone('UTC'))),
-        'value' => (float)$value['equity'],
-    ], $statement->fetchAll());
-    return downsample_points($rows, $maximum);
-}
-
 function oppw_equity_period_points(
     PDO $db,
     string $accountKey,
