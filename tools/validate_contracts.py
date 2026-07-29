@@ -445,9 +445,17 @@ return [
             }, expected=(201,))
             access_token = pair["session"]["accessToken"]
             paired_device_id = pair["session"]["device"]["id"]
+            device_permission = int(docker_sql(
+                docker, container,
+                "SELECT can_control_service FROM monitor_device_accounts WHERE device_id="
+                + sql_text(paired_device_id) + " AND account_key='DEMO'",
+                docker_env,
+            ))
+            if device_permission != 1:
+                raise AssertionError("pairing did not propagate the pairing code's service-control permission")
             run([
                 php, str(root / "Mobile/backend/admin/set_device_accounts.php"),
-                "--device=" + paired_device_id, "--accounts=DEMO", "--can-control-service=1",
+                "--device=" + paired_device_id, "--accounts=DEMO",
             ], env=php_env, capture_output=True)
             device_permission = int(docker_sql(
                 docker, container,
