@@ -79,8 +79,8 @@ class ContractResponseParserTest {
         analytics.summary.let { summary ->
             assertEquals(0.2889701, summary.windowCompoundedPreleverageReturnPercent, 0.000001)
             assertEquals(1.871, summary.windowCompoundedLeveragedReturnPercent, 0.000001)
-            assertEquals(0.0962307334, summary.weeklyGeometricPreleverageReturnPercent, 0.000001)
-            assertEquals(0.6198169983, summary.weeklyGeometricLeveragedReturnPercent, 0.000001)
+            assertEquals(0.072164372, summary.weeklyGeometricPreleverageReturnPercent, 0.000001)
+            assertEquals(0.4645035134, summary.weeklyGeometricLeveragedReturnPercent, 0.000001)
             assertEquals(0.1465, summary.averageWeeklyPreleverageReturnPercent, 0.01)
             assertEquals(1.15, summary.averageWeeklyLeveragedReturnPercent, 0.01)
             assertEquals(0.75, summary.averageWinPreleverageReturnPercent, 0.01)

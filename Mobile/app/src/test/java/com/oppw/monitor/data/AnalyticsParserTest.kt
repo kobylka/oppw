@@ -14,8 +14,8 @@ class AnalyticsParserTest {
               "summary": {
                 "windowCompoundedPreleverageReturnPercent": 0.2889701,
                 "windowCompoundedLeveragedReturnPercent": 1.871,
-                "weeklyGeometricPreleverageReturnPercent": 0.0035193,
-                "weeklyGeometricLeveragedReturnPercent": 0.0225829,
+                "weeklyGeometricPreleverageReturnPercent": 0.072164372,
+                "weeklyGeometricLeveragedReturnPercent": 0.4645035134,
                 "averageWeeklyPreleverageReturnPercent": 0.1465,
                 "averageWeeklyLeveragedReturnPercent": 1.15,
                 "averageWinPreleverageReturnPercent": 0.75,
@@ -85,8 +85,8 @@ class AnalyticsParserTest {
         with(analytics.summary) {
             assertEquals(0.2889701, windowCompoundedPreleverageReturnPercent, 0.000001)
             assertEquals(1.871, windowCompoundedLeveragedReturnPercent, 0.000001)
-            assertEquals(0.0035193, weeklyGeometricPreleverageReturnPercent, 0.000001)
-            assertEquals(0.0225829, weeklyGeometricLeveragedReturnPercent, 0.000001)
+            assertEquals(0.072164372, weeklyGeometricPreleverageReturnPercent, 0.000001)
+            assertEquals(0.4645035134, weeklyGeometricLeveragedReturnPercent, 0.000001)
             assertEquals(0.1465, averageWeeklyPreleverageReturnPercent, 0.000001)
             assertEquals(1.15, averageWeeklyLeveragedReturnPercent, 0.000001)
             assertEquals(0.75, averageWinPreleverageReturnPercent, 0.000001)

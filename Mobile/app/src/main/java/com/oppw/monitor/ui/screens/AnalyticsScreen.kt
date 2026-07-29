@@ -105,7 +105,7 @@ private fun AnalyticsContent(state: UiState, analytics: AnalyticsResponse, onFil
                 MetricLink("Weekly geometric · leveraged", percent(summary.weeklyGeometricLeveragedReturnPercent), sample(analytics, "weeklyGeometricLeveragedReturn", allTradeKeys), openDrillDown)
                 MetricLink("Sharpe · annualized", ratioText(summary.sharpeRatio, summary.sharpeAvailable), sample(analytics, "sharpeRatio", allTradeKeys), openDrillDown)
                 MetricLink("Sortino · annualized", if (summary.sortinoInfinite) "∞" else ratioText(summary.sortinoRatio, summary.sortinoAvailable), sample(analytics, "sortinoRatio", allTradeKeys), openDrillDown)
-                Text("Window returns compound every filtered closed trade. Weekly geometric returns use the full ${analytics.filterOptions.effectiveRollingWeeks}-week window, including weeks without a close. Each row opens the exact filtered trades used in the calculation. Ratios use closed-trade account returns and √${summary.periodsPerYear} annualization.", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                Text("Window returns compound every filtered closed trade. Weekly geometric returns use the number of filtered closed trades as the root denominator; open trades are excluded. Each row opens the exact filtered trades used in the calculation. Ratios use closed-trade account returns and √${summary.periodsPerYear} annualization.", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
             }
         }
         item {
