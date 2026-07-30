@@ -76,7 +76,7 @@ The LocalSystem code boundary under `%ProgramData%\OPPW` uses protected Administ
 | Cash-flow ingestion | `cashflow.php` |
 | Windows supervisor assignment and mobile desired state | `service-control.php` |
 
-Authentication endpoints live under `Mobile/backend/auth/`; push endpoints live under `Mobile/backend/push/`; administrative endpoints are not mobile read APIs.
+Authentication endpoints live under `Mobile/backend/auth/`; push endpoints live under `Mobile/backend/push/`; administrative endpoints are not mobile read APIs. Strategy decision and specification history both use the paired-device session boundary and enforce the selected account grant before reading immutable authority.
 
 Paired mobile credentials cannot write strategy authority. `mobile-receipt.php` stores a fixed-name diagnostic acknowledgement in `strategy_events`; analytics may merge it into delivery-latency presentation, but it never creates a `strategy_execution_stages` row. Paired-device writes are otherwise limited to device-owned authentication/push metadata, unpairing, and explicitly granted service-control desired state.
 
@@ -89,6 +89,8 @@ On a whole-response miss, analytics separately caches ordered raw input rows for
 Filtered-performance return metrics compound every closed trade in the effective window as `product(1 + trade return) - 1`, independently for pre-leverage price returns and leveraged account returns. Their weekly geometric equivalents use `pow(compounded growth factor, 1 / closed trade count) - 1`; only filtered closed trades participate in the numerator and denominator, while open trades are excluded. The API and Android model expose these values as percentage points.
 
 Browser administration fails closed unless its explicit feature token is present. Manual market/trade imports require an independent manual-admin token and reject reuse of the pairing-admin token. Browser forms require HTTPS, same-origin submission, request throttling, no-store responses, framing denial, a restrictive content policy, and a restrictive permissions policy.
+
+Enabled Firebase push stores its short-lived OAuth token only in an explicitly configured private directory outside the web root. The directory and cache file are locked, symlinks are rejected, POSIX permissions are restricted to `0700`/`0600`, and no shared-system-temp fallback exists. Web-server configuration is deployment-owned and intentionally absent from the repository; deployments must expose only canonical HTTP endpoints and deny source, SQL, tests, examples, publisher code, and documentation.
 
 Daily and weekly mobile equity curves use Europe/Warsaw period boundaries derived from the exchange-calendar `weekCashOpen`. On the first actual trading session of a week, both begin at the cash open (normally 15:30); when an explicitly identified manual position opened earlier that same day, its exact opening timestamp becomes the boundary. On subsequent trading days the daily curve begins at midnight while the weekly curve retains the first-session boundary. The MT5 publisher supplies the additive `position.manual` authority, and Android parses it without changing trading behavior.
 Android also enforces the published weekly boundary while parsing status responses. This compatibility guard removes pre-open points from an older backend response and leaves an intentionally completed prior-week curve unchanged. It does not infer a boundary from a calendar-week timestamp, because only exchange-calendar `weekCashOpen` can identify a holiday-delayed first trading session.
@@ -139,7 +141,7 @@ Any payload change must follow `docs/CONTRACT_POLICY.md`.
 
 MT5 build identity, strategy specification version, release archive, and manifest derive from root `VERSION`. Android `versionName` derives from `Mobile/VERSION`; its monotonically increasing `versionCode` uses the epoch formula documented in ADR 0007. The two release lines advance independently. Releases are reproducible outputs in ignored `dist/`; they are never alternative source trees.
 
-The release gate requires a clean Git commit, canonical-source validation, Python compilation/tests, PHP lint, complete SQL migration validation in disposable MySQL, a disposable backup-and-restore drill, an actual PHP/MySQL/API-to-Android contract run, and Android tests/build.
+The release gate requires a clean Git commit, canonical-source validation, Python compilation/tests, PHP lint, complete SQL migration validation in disposable MySQL, a disposable backup-and-restore drill, an actual PHP/MySQL/API-to-Android contract run, and Android debug/release tests/builds. MT5 runtime wheels are exact-version and SHA-256 locked for Windows CPython 3.13. Android bootstrapping pins both the official Gradle wrapper JAR and distribution hashes, while strict Gradle verification metadata covers resolved plugin and dependency artifacts.
 
 ## Runtime/private material
 

@@ -392,7 +392,8 @@ return [
   'analytics_cache_ttl_seconds' => 30, 'analytics_segment_cache_ttl_seconds' => 86400,
   'analytics_cache_dir' => '{analytics_cache_dir}',
   'trust_forwarded_proto' => false, 'push_enabled' => false,
-  'firebase_project_id' => '', 'firebase_service_account_file' => ''
+  'firebase_project_id' => '', 'firebase_service_account_file' => '',
+  'fcm_cache_dir' => '{(temp / "fcm-cache").as_posix()}'
 ];
 """, encoding="utf-8")
 
@@ -521,6 +522,23 @@ return [
                     raise AssertionError(f"decision acknowledgement mismatch on delivery {delivery + 1}")
                 if stored.get("strategySpecificationHash") != identities["specHash"]:
                     raise AssertionError(f"specification acknowledgement mismatch on delivery {delivery + 1}")
+
+            http_json("GET", base_url + "strategy-specifications.php?account=DEMO", expected=(401,))
+            _, specifications, _ = http_json(
+                "GET", base_url + "strategy-specifications.php?account=DEMO", token=access_token,
+            )
+            if specifications.get("accountKey") != "DEMO" or len(specifications.get("specifications", [])) != 1:
+                raise AssertionError("authenticated strategy specification history was not returned")
+            specification = specifications["specifications"][0]
+            if specification.get("specHash") != identities["specHash"]:
+                raise AssertionError("strategy specification history returned the wrong immutable specification")
+            for timestamp_key in ("effectiveFrom", "createdAt", "assignedAt"):
+                try:
+                    timestamp = datetime.fromisoformat(str(specification.get(timestamp_key, "")).replace("Z", "+00:00"))
+                except ValueError as error:
+                    raise AssertionError("strategy specification timestamp is not valid ISO-8601: " + timestamp_key) from error
+                if timestamp.utcoffset() != timedelta(0):
+                    raise AssertionError("strategy specification timestamp is not canonical UTC: " + timestamp_key)
 
             snapshot_count = int(docker_sql(
                 docker, container,

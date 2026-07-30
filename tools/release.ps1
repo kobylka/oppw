@@ -94,7 +94,7 @@ try {
 
     Push-Location (Join-Path $root 'Mobile')
     try {
-        & .\gradlew.bat --no-daemon clean testDebugUnitTest assembleDebug
+        & .\gradlew.bat --no-daemon --dependency-verification strict clean testDebugUnitTest assembleDebug assembleRelease
         if ($LASTEXITCODE -ne 0) { throw 'Android tests/build failed.' }
     } finally {
         Pop-Location

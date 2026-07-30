@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import re
 import subprocess
 import sys
@@ -115,6 +116,45 @@ def main() -> int:
     for dependency in ("MetaTrader5", "tzdata", "exchange-calendars"):
         if dependency.lower() not in mt5_requirements:
             fail(errors, f"requirements_mt5 is missing direct runtime dependency: {dependency}")
+    requirements_text = mt5_requirements_file.read_text(encoding="utf-8") if mt5_requirements_file.is_file() else ""
+    if "--require-hashes" not in requirements_text or "--only-binary=:all:" not in requirements_text:
+        fail(errors, "requirements_mt5 must require hashed binary artifacts")
+    expected_mt5_lock = {
+        "MetaTrader5": ("5.0.5735", "0933ea4a9a52b32adcf5590df00f9f75ff380a02bad7b62e23cbd757f34fbb12"),
+        "tzdata": ("2026.3", "dc096730c87af6cab1b171c9d532be840741ff5d459015e7f6947bd7d7e54931"),
+        "exchange-calendars": ("4.13.2", "fc5a2ad0d61b5c3a6539a3061cd4cbb55c59f4a903455cec7926e4b798919996"),
+        "numpy": ("2.3.2", "c63d95dc9d67b676e9108fe0d2182987ccb0f11933c1e8959f42fa0da8d4fa56"),
+        "pandas": ("3.0.3", "a82d532a3351d435432cd913edbccaf8b8e01d4dd0e5ced5a8d2e8ecd94c7e44"),
+        "pyluach": ("2.3.0", "4497b731aef59508b079dbf5f00bc5bf4329ac45090a6cd37b5a83756f0e69ab"),
+        "toolz": ("1.1.0", "15ccc861ac51c53696de0a5d6d4607f99c210739caf987b5d2054f3efed429d8"),
+        "korean-lunar-calendar": ("0.4.0", "c042e20de0bb702add6bec8d0f6da1ea8d3b170838e63846f70420cf341fe4e7"),
+        "python-dateutil": ("2.9.0.post0", "a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427"),
+        "six": ("1.17.0", "4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274"),
+    }
+    for dependency, (locked_version, locked_hash) in expected_mt5_lock.items():
+        pattern = rf"(?mi)^{re.escape(dependency)}=={re.escape(locked_version)}\s*\\\s*\n\s*--hash=sha256:{locked_hash}\s*$"
+        if not re.search(pattern, requirements_text):
+            fail(errors, f"requirements_mt5 lock is incomplete or changed for {dependency}=={locked_version}")
+
+    wrapper_jar = root / "Mobile/gradle/wrapper/gradle-wrapper.jar"
+    expected_wrapper_hash = "55243ef57851f12b070ad14f7f5bb8302daceeebc5bce5ece5fa6edb23e1145c"
+    if not wrapper_jar.is_file() or hashlib.sha256(wrapper_jar.read_bytes()).hexdigest() != expected_wrapper_hash:
+        fail(errors, "Gradle wrapper JAR is not the pinned official Gradle 9.4.1 artifact")
+    wrapper_properties = root / "Mobile/gradle/wrapper/gradle-wrapper.properties"
+    wrapper_properties_text = wrapper_properties.read_text(encoding="utf-8") if wrapper_properties.is_file() else ""
+    if "distributionSha256Sum=2ab2958f2a1e51120c326cad6f385153bb11ee93b3c216c5fccebfdfbb7ec6cb" not in wrapper_properties_text:
+        fail(errors, "Gradle 9.4.1 distribution checksum is not pinned")
+    for bootstrap_relative in ("Mobile/bootstrap-gradle-wrapper.ps1", "Mobile/bootstrap-gradle-wrapper.sh"):
+        bootstrap_path = root / bootstrap_relative
+        bootstrap_text = bootstrap_path.read_text(encoding="utf-8") if bootstrap_path.is_file() else ""
+        if expected_wrapper_hash not in bootstrap_text or "2ab2958f2a1e51120c326cad6f385153bb11ee93b3c216c5fccebfdfbb7ec6cb" not in bootstrap_text:
+            fail(errors, f"Gradle bootstrap does not pin both verified artifacts: {bootstrap_relative}")
+        if "wrapper.jar.sha256" in bootstrap_text:
+            fail(errors, f"Gradle bootstrap trusts a mutable colocated checksum: {bootstrap_relative}")
+    verification_metadata = root / "Mobile/gradle/verification-metadata.xml"
+    verification_text = verification_metadata.read_text(encoding="utf-8") if verification_metadata.is_file() else ""
+    if "<verify-metadata>true</verify-metadata>" not in verification_text or verification_text.count("<sha256 value=") < 100:
+        fail(errors, "Gradle dependency verification metadata is missing or incomplete")
 
     canonical = root / "mt5" / "oppw_mt5_continuous.py"
     if not canonical.is_file():
@@ -383,12 +423,11 @@ def main() -> int:
             "require_https", "browser_admin_headers", "require_same_origin_browser_post",
             "enforce_rate_limit('push-admin'",
         ),
-        "Mobile/backend/nginx.example.conf": (
-            "location ~ ^/(?:accounts|analytics|cashflow", "location /", "return 404",
-        ),
         "Mobile/backend/tests/security-boundaries-test.php": (
             "pairing token fallback remains active", "paired receipt still writes execution authority",
-            "unused Apache artifact remains", "analytics cache boundary missing",
+            "unused Apache artifact remains", "deployment-specific Nginx example remains",
+            "FCM OAuth cache fell back to shared system temp",
+            "strategy specifications retain the undefined authentication path", "analytics cache boundary missing",
         ),
         "Mobile/backend/tests/analytics-cache-test.php": (
             "data watermark did not invalidate the cache key", "cache hit changed the encoded response",
@@ -409,6 +448,10 @@ def main() -> int:
         ),
         "docs/decisions/0018-paired-mobile-receipts-are-diagnostic.md": (
             "Paired mobile receipts are diagnostic", "never enters an immutable strategy-authority table",
+        ),
+        "docs/decisions/0023-secure-token-storage-and-verified-build-inputs.md": (
+            "Shared temporary storage is not a fallback",
+            "strict dependency verification metadata", "deployment-specific Apache, Nginx, or `.htaccess`",
         ),
         "docs/decisions/0019-explicit-all-history-analytics.md": (
             "Explicit all-history analytics", "all_history=1", "A request for 82 weeks remains 82 weeks",
@@ -552,7 +595,8 @@ def main() -> int:
         "write_mysql_client_config.php",
         "equity-periods-test.php",
         "validate_contracts.py",
-        "testDebugUnitTest assembleDebug",
+        "--dependency-verification strict",
+        "testDebugUnitTest assembleDebug assembleRelease",
         "git diff --cached --quiet",
         "service\\tests",
         "build-service-host.ps1",
@@ -597,6 +641,8 @@ def main() -> int:
         fail(errors, "generated/runtime files are tracked: " + ", ".join(forbidden_tracked))
 
     backend = root / "Mobile" / "backend"
+    if (backend / "nginx.example.conf").exists():
+        fail(errors, "deployment-specific Nginx configuration must not be committed")
     forbidden_endpoint_names = {
         "latest-trade.php", "last-trade-authority.php", "oppw_latest_trade_v45_2.php"
     }

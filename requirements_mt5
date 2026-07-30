@@ -1,3 +1,25 @@
-MetaTrader5
-tzdata
-exchange-calendars
+# Reproducible Windows CPython 3.13 runtime lock. Update deliberately by
+# downloading every wheel for cp313/win_amd64 and reviewing its SHA-256.
+--require-hashes
+--only-binary=:all:
+
+MetaTrader5==5.0.5735 \
+    --hash=sha256:0933ea4a9a52b32adcf5590df00f9f75ff380a02bad7b62e23cbd757f34fbb12
+tzdata==2026.3 \
+    --hash=sha256:dc096730c87af6cab1b171c9d532be840741ff5d459015e7f6947bd7d7e54931
+exchange-calendars==4.13.2 \
+    --hash=sha256:fc5a2ad0d61b5c3a6539a3061cd4cbb55c59f4a903455cec7926e4b798919996
+numpy==2.3.2 \
+    --hash=sha256:c63d95dc9d67b676e9108fe0d2182987ccb0f11933c1e8959f42fa0da8d4fa56
+pandas==3.0.3 \
+    --hash=sha256:a82d532a3351d435432cd913edbccaf8b8e01d4dd0e5ced5a8d2e8ecd94c7e44
+pyluach==2.3.0 \
+    --hash=sha256:4497b731aef59508b079dbf5f00bc5bf4329ac45090a6cd37b5a83756f0e69ab
+toolz==1.1.0 \
+    --hash=sha256:15ccc861ac51c53696de0a5d6d4607f99c210739caf987b5d2054f3efed429d8
+korean-lunar-calendar==0.4.0 \
+    --hash=sha256:c042e20de0bb702add6bec8d0f6da1ea8d3b170838e63846f70420cf341fe4e7
+python-dateutil==2.9.0.post0 \
+    --hash=sha256:a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427
+six==1.17.0 \
+    --hash=sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274

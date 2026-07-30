@@ -471,40 +471,96 @@ function fcm_service_account(): array
 function fcm_access_token(): string
 {
     $cfg = config();
-    $cacheFile = rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'oppw-fcm-' . hash('sha256', (string)$cfg['firebase_project_id']) . '.json';
-    if (is_file($cacheFile)) {
-        try {
-            $cached = json_decode((string)file_get_contents($cacheFile), true, 32, JSON_THROW_ON_ERROR);
-            if (is_string($cached['token'] ?? null) && (int)($cached['expires_at'] ?? 0) > time() + 60) return $cached['token'];
-        } catch (Throwable) {
+    $cacheFile = fcm_token_cache_path($cfg);
+    if (is_link($cacheFile)) throw new RuntimeException('Firebase token cache file cannot be a symbolic link');
+    $handle = @fopen($cacheFile, 'c+b');
+    if ($handle === false) throw new RuntimeException('Firebase token cache file could not be opened');
+    try {
+        if (!flock($handle, LOCK_EX)) throw new RuntimeException('Firebase token cache could not be locked');
+        $stat = fstat($handle);
+        if (!is_array($stat) || (((int)$stat['mode'] & 0170000) !== 0100000)) {
+            throw new RuntimeException('Firebase token cache is not a regular file');
         }
-    }
+        if (!@chmod($cacheFile, 0600)) throw new RuntimeException('Firebase token cache permissions could not be restricted');
+        if (DIRECTORY_SEPARATOR === '/' && (((int)fileperms($cacheFile) & 0077) !== 0)) {
+            throw new RuntimeException('Firebase token cache permissions are too broad');
+        }
+        rewind($handle);
+        $rawCache = stream_get_contents($handle, 65537);
+        if (is_string($rawCache) && strlen($rawCache) <= 65536 && trim($rawCache) !== '') {
+            try {
+                $cached = json_decode($rawCache, true, 32, JSON_THROW_ON_ERROR);
+                if (is_string($cached['token'] ?? null) && (int)($cached['expires_at'] ?? 0) > time() + 60) {
+                    return $cached['token'];
+                }
+            } catch (Throwable) {
+            }
+        }
 
-    $service = fcm_service_account();
-    $now = time();
-    $header = base64url_encode(json_encode(['alg' => 'RS256', 'typ' => 'JWT'], JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR));
-    $claims = base64url_encode(json_encode([
-        'iss' => $service['client_email'],
-        'scope' => 'https://www.googleapis.com/auth/firebase.messaging',
-        'aud' => $service['token_uri'],
-        'iat' => $now,
-        'exp' => $now + 3600,
-    ], JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR));
-    $unsigned = $header . '.' . $claims;
-    if (!openssl_sign($unsigned, $signature, (string)$service['private_key'], OPENSSL_ALGO_SHA256)) {
-        throw new RuntimeException('Unable to sign Firebase service-account JWT');
+        $service = fcm_service_account();
+        $now = time();
+        $header = base64url_encode(json_encode(['alg' => 'RS256', 'typ' => 'JWT'], JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR));
+        $claims = base64url_encode(json_encode([
+            'iss' => $service['client_email'],
+            'scope' => 'https://www.googleapis.com/auth/firebase.messaging',
+            'aud' => $service['token_uri'],
+            'iat' => $now,
+            'exp' => $now + 3600,
+        ], JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR));
+        $unsigned = $header . '.' . $claims;
+        if (!openssl_sign($unsigned, $signature, (string)$service['private_key'], OPENSSL_ALGO_SHA256)) {
+            throw new RuntimeException('Unable to sign Firebase service-account JWT');
+        }
+        $assertion = $unsigned . '.' . base64url_encode($signature);
+        $body = http_build_query([
+            'grant_type' => 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+            'assertion' => $assertion,
+        ]);
+        $response = http_request_json((string)$service['token_uri'], 'POST', $body, ['Content-Type: application/x-www-form-urlencoded']);
+        $token = trim((string)($response['body']['access_token'] ?? ''));
+        if ($token === '') throw new RuntimeException('Firebase OAuth token response did not contain access_token');
+        $expiresAt = $now + max(300, (int)($response['body']['expires_in'] ?? 3600));
+        $encoded = json_encode(['token' => $token, 'expires_at' => $expiresAt], JSON_THROW_ON_ERROR);
+        if (!ftruncate($handle, 0) || !rewind($handle) || fwrite($handle, $encoded) !== strlen($encoded) || !fflush($handle)) {
+            throw new RuntimeException('Firebase token cache could not be updated');
+        }
+        return $token;
+    } finally {
+        @flock($handle, LOCK_UN);
+        fclose($handle);
     }
-    $assertion = $unsigned . '.' . base64url_encode($signature);
-    $body = http_build_query([
-        'grant_type' => 'urn:ietf:params:oauth:grant-type:jwt-bearer',
-        'assertion' => $assertion,
-    ]);
-    $response = http_request_json((string)$service['token_uri'], 'POST', $body, ['Content-Type: application/x-www-form-urlencoded']);
-    $token = trim((string)($response['body']['access_token'] ?? ''));
-    if ($token === '') throw new RuntimeException('Firebase OAuth token response did not contain access_token');
-    $expiresAt = $now + max(300, (int)($response['body']['expires_in'] ?? 3600));
-    @file_put_contents($cacheFile, json_encode(['token' => $token, 'expires_at' => $expiresAt], JSON_THROW_ON_ERROR), LOCK_EX);
-    return $token;
+}
+
+function fcm_token_cache_path(array $cfg): string
+{
+    $configured = trim((string)($cfg['fcm_cache_dir'] ?? ''));
+    if ($configured === '' || str_contains($configured, "\0")
+        || !preg_match('/^(?:[A-Za-z]:[\\\\\/]|\\\\\\\\|\/)/', $configured)) {
+        throw new RuntimeException('push_enabled requires an absolute fcm_cache_dir outside the web root');
+    }
+    if (is_link($configured)) throw new RuntimeException('Firebase token cache directory cannot be a symbolic link');
+    if (!is_dir($configured) && !@mkdir($configured, 0700, true) && !is_dir($configured)) {
+        throw new RuntimeException('Firebase token cache directory could not be created');
+    }
+    $directory = realpath($configured);
+    $webRoot = realpath(__DIR__);
+    if ($directory === false || $webRoot === false) throw new RuntimeException('Firebase token cache directory could not be resolved');
+    $normalize = static function (string $path): string {
+        $value = rtrim(str_replace('\\', '/', $path), '/');
+        return DIRECTORY_SEPARATOR === '\\' ? strtolower($value) : $value;
+    };
+    $normalizedDirectory = $normalize($directory);
+    $normalizedWebRoot = $normalize($webRoot);
+    if ($normalizedDirectory === $normalizedWebRoot || str_starts_with($normalizedDirectory . '/', $normalizedWebRoot . '/')) {
+        throw new RuntimeException('Firebase token cache directory must be outside the web root');
+    }
+    if (!@chmod($directory, 0700) || !is_writable($directory)) {
+        throw new RuntimeException('Firebase token cache directory is not private and writable');
+    }
+    if (DIRECTORY_SEPARATOR === '/' && (((int)fileperms($directory) & 0077) !== 0)) {
+        throw new RuntimeException('Firebase token cache directory permissions are too broad');
+    }
+    return $directory . DIRECTORY_SEPARATOR . 'fcm-oauth-' . hash('sha256', (string)($cfg['firebase_project_id'] ?? '')) . '.json';
 }
 
 function http_request_json(string $url, string $method, string $body, array $headers = []): array

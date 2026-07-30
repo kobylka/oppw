@@ -18,6 +18,24 @@ $assert(requested_analytics_rolling_weeks(82) === 82, 'analytics silently caps a
 $assert(requested_analytics_rolling_weeks(520) === 520, 'analytics silently caps a long explicit request');
 $assert(requested_analytics_rolling_weeks('invalid') === 4, 'analytics invalid-input default changed');
 
+$missingFcmCacheRejected = false;
+try {
+    fcm_token_cache_path(['firebase_project_id' => 'test']);
+} catch (RuntimeException) {
+    $missingFcmCacheRejected = true;
+}
+$assert($missingFcmCacheRejected, 'FCM OAuth cache fell back to shared system temp');
+$fcmTestDirectory = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'oppw-fcm-security-' . bin2hex(random_bytes(8));
+try {
+    $fcmCachePath = fcm_token_cache_path([
+        'firebase_project_id' => 'test-project',
+        'fcm_cache_dir' => $fcmTestDirectory,
+    ]);
+    $assert(dirname($fcmCachePath) === realpath($fcmTestDirectory), 'FCM OAuth cache escaped the configured private directory');
+} finally {
+    if (is_dir($fcmTestDirectory)) rmdir($fcmTestDirectory);
+}
+
 $pairingToken = str_repeat('p', 48);
 $manualToken = str_repeat('m', 48);
 $assert(independent_manual_admin_token([
@@ -83,8 +101,14 @@ foreach (['require_https', 'browser_admin_headers', 'require_same_origin_browser
     $assert(str_contains($pushSource, $marker), 'push administration protection missing: ' . $marker);
 }
 
+$strategySpecificationSource = $read('strategy-specifications.php');
+$assert(str_contains($strategySpecificationSource, 'require_mobile_session'), 'strategy specifications do not authenticate paired devices');
+$assert(!str_contains($strategySpecificationSource, 'require_access_session'), 'strategy specifications retain the undefined authentication path');
+$assert(str_contains($strategySpecificationSource, 'new DateTimeImmutable'), 'strategy specification timestamps retain the fatal type path');
+
 foreach (['apache-vhost.example.conf', '.htaccess', 'admin/.htaccess', 'private/.htaccess', 'publisher/.htaccess', 'sql/.htaccess'] as $apacheArtifact) {
     $assert(!file_exists(dirname(__DIR__) . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $apacheArtifact)), 'unused Apache artifact remains: ' . $apacheArtifact);
 }
+$assert(!file_exists(dirname(__DIR__) . DIRECTORY_SEPARATOR . 'nginx.example.conf'), 'deployment-specific Nginx example remains');
 
-echo "SECURITY BOUNDARY TESTS PASSED cases=7\n";
+echo "SECURITY BOUNDARY TESTS PASSED cases=10\n";

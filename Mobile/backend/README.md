@@ -21,6 +21,8 @@ Paired-device tokens never write immutable strategy authority. `mobile-receipt.p
 | `status.php?account=DEMO` | GET | Mobile token + account grant |
 | `events.php?account=DEMO` | GET | Mobile token + account grant |
 | `analytics.php?account=DEMO` | GET | Mobile token + account grant |
+| `strategy-decisions.php?account=DEMO` | GET | Mobile token + account grant |
+| `strategy-specifications.php?account=DEMO` | GET | Mobile token + account grant |
 | `push/register.php` | POST | Mobile bearer token |
 | `push/unregister.php` | POST | Mobile bearer token |
 | `ingest.php` | POST | MT5 writer token |
@@ -85,7 +87,11 @@ If a directory is configured, use an absolute path outside the web root and gran
 
 ## Web-server deployment
 
-Only the Nginx deployment example is maintained. It allowlists the canonical HTTP PHP endpoints and returns 404 for source, SQL, tests, configuration examples, publisher code, and documentation. There are no Apache or `.htaccess` deployment artifacts in this repository.
+Web-server configuration is deployment-owned and no Apache, Nginx, or `.htaccess` example is committed. The deployed document root or explicit route allowlist must make only the canonical HTTP endpoints reachable and must deny source, SQL, tests, configuration examples, publisher code, and documentation. Preserve HTTPS and the security headers emitted by PHP; validate the actual server configuration rather than assuming a repository example is active.
+
+## Push token cache
+
+When `push_enabled` is true, configure `fcm_cache_dir` as an absolute dedicated directory outside the web root. The PHP worker must own it and no group or other identity may access it on POSIX systems (mode `0700`; token files are `0600`). The backend rejects missing, relative, web-root-contained, symbolic-link, broadly permissioned, or unwritable paths. OAuth tokens never fall back to the shared system temporary directory.
 
 ## Log pagination
 
