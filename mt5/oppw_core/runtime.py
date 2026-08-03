@@ -391,6 +391,10 @@ class RuntimeMixin:
         self.last_minute_status = now.strftime("%Y-%m-%d %H:%M")
         self.last_meaningful_signature = self.status_signature(position, now)
         if position is None:
+            # A publisher can start during the weekend, when ordinary reads
+            # are intentionally cache-only. Refresh once before producing its
+            # forced What-if record so a prior projection repair is included.
+            self.latest_closed_trade_record(force=True)
             self.record_strategy_decision_if_changed(force=True)
         self.publish_mobile_minute_status(position, now, current_bar, force=True)
 
@@ -402,6 +406,11 @@ class RuntimeMixin:
         now = datetime.now(self.tz)
         position = self.managed_position()
         current_bar = self.current_m1_bar(self.cfg.trade_symbol)
+        if position is None:
+            # The dedicated publisher owns normal snapshot delivery. It must
+            # therefore recalculate and publish an immutable decision when
+            # MySQL-authoritative leverage inputs change after startup.
+            self.record_strategy_decision_if_changed()
         minute_key = now.strftime("%Y-%m-%d %H:%M")
         if minute_key != self.last_minute_status:
             self.last_minute_status = minute_key

@@ -747,7 +747,8 @@ class StrategyDecisionMixin:
         preview = preview or self.potential_position_preview()
         payload = self.strategy_decision_payload(preview)
         signature = (
-            self.strategy_decision_week_key(), payload["outcome"], round(float(payload["selectedLeverage"]), 6),
+            self.strategy_decision_week_key(), payload["build"], payload["strategySpecId"], payload["strategySpecHash"],
+            payload["parameterHash"], payload["outcome"], round(float(payload["selectedLeverage"]), 6),
             round(float(payload["inputs"]["previousFullWeekChange"]), 8), round(float(payload["inputs"]["previousTradeChange"]), 8),
             str(payload["inputs"].get("previousFullWeekSource", "")), str(payload["inputs"].get("previousTradeSource", "")),
             round(float(payload["sizing"].get("volume") or 0.0), 8), int(payload["sizing"].get("sizingUnits") or 0),

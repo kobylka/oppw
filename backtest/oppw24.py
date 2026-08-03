@@ -873,7 +873,7 @@ if __name__ == "__main__":
         sim.read_quotes(files, "20180413")
         sim.read_csv_quotes(files, "20180413")
     
-    LEVERAGE = 3
+    LEVERAGE = 8
     SL = (100-50/LEVERAGE)/100
     BE = 0.996
     
@@ -883,7 +883,7 @@ if __name__ == "__main__":
     
     tpps = [0.007,0.02,0.05,0.05,0.05]
     print(tpps)
-    result = sim.process(sim_i.quotes, "QQQ","20220103", "20260724", LEVERAGE, tpps, SL, BE, 0.004,0.004, 30000, False,False,True,True)
+    result = sim.process(sim_i.quotes, "QQQ","20220103", "20260731", LEVERAGE, tpps, SL, BE, 0.004,0.004, 30000, False,False,True,True)
     print(result)
     
     #1,79216 125

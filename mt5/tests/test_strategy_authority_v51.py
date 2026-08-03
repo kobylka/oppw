@@ -10,6 +10,7 @@ import unittest
 from datetime import datetime, time
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 from zoneinfo import ZoneInfo
 
 
@@ -96,6 +97,78 @@ class StrategySpecificationTests(unittest.TestCase):
         decision = strategy.strategy_decision_payload(preview)
         self.assertEqual(decision["strategySpecId"], strategy.strategy_specification["specId"])
         self.assertEqual(decision["strategySpecHash"], strategy.strategy_specification["specHash"])
+
+    def test_recorder_emits_a_new_decision_when_specification_changes(self):
+        strategy = self.strategy()
+        strategy.is_weekend = lambda _now: False
+        strategy.is_executor = False
+        strategy.log = Mock()
+        strategy.last_strategy_decision_signature = None
+        strategy.last_strategy_decision_payload = None
+        preview = {
+            "available": False, "symbol": "US100", "side": "BUY", "strategyLeverage": 8,
+            "previousFullWeekChange": 0.0, "previousTradeChange": 0.0,
+            "previousFullWeekSource": "test", "previousTradeSource": "test",
+            "volume": 0.0, "balance": 0.0, "sizingFreeMargin": 0.0,
+            "sizingUnits": 0, "minimumVolumeFloor": False, "error": "test unavailable",
+        }
+
+        first = strategy.record_strategy_decision_if_changed(preview=preview)
+        strategy.strategy_specification = {
+            **strategy.strategy_specification,
+            "specId": "c" * 32,
+            "specHash": "d" * 64,
+        }
+        second = strategy.record_strategy_decision_if_changed(preview=preview)
+
+        self.assertNotEqual(first["decisionId"], second["decisionId"])
+        self.assertEqual("d" * 64, second["strategySpecHash"])
+
+    def test_publisher_recalculates_decision_while_flat(self):
+        strategy = object.__new__(MODULE.OPPWContinuousStrategy)
+        strategy.tz = WARSAW
+        strategy.is_weekend = lambda _now: False
+        strategy.coordinator = SimpleNamespace(require_role_lease=Mock())
+        strategy.reload_state_read_only = Mock()
+        strategy.managed_position = Mock(return_value=None)
+        strategy.current_m1_bar = Mock(return_value=None)
+        strategy.cfg = SimpleNamespace(trade_symbol="US100")
+        strategy.record_strategy_decision_if_changed = Mock()
+        strategy.last_minute_status = ""
+        strategy.emit_status = Mock()
+        strategy.print_instance_banner = Mock()
+        strategy.publish_account_change_if_needed = Mock(return_value=False)
+        strategy.status_signature = Mock(return_value="unchanged")
+        strategy.last_meaningful_signature = "unchanged"
+        strategy.publish_mobile_minute_status = Mock(return_value=True)
+        strategy.publish_mobile_if_due = Mock()
+
+        strategy.publisher_cycle()
+
+        strategy.record_strategy_decision_if_changed.assert_called_once_with()
+
+    def test_publisher_startup_forces_authoritative_trade_read_before_decision(self):
+        strategy = object.__new__(MODULE.OPPWContinuousStrategy)
+        strategy.monitor_publisher = SimpleNamespace(ready=True)
+        strategy.coordinator = SimpleNamespace(require_role_lease=Mock())
+        strategy.reload_state_read_only = Mock()
+        strategy.tz = WARSAW
+        strategy.cfg = SimpleNamespace(trade_symbol="US100")
+        strategy.managed_position = Mock(return_value=None)
+        strategy.current_m1_bar = Mock(return_value=None)
+        strategy.account_funding_signature = Mock(return_value="funding")
+        strategy.emit_status = Mock()
+        strategy.print_instance_banner = Mock()
+        strategy.status_signature = Mock(return_value="status")
+        strategy.latest_closed_trade_record = Mock()
+        strategy.record_strategy_decision_if_changed = Mock()
+        strategy.publish_mobile_minute_status = Mock()
+        sys.modules["MetaTrader5"].account_info = Mock(return_value=SimpleNamespace())
+
+        strategy.publisher_startup()
+
+        strategy.latest_closed_trade_record.assert_called_once_with(force=True)
+        strategy.record_strategy_decision_if_changed.assert_called_once_with(force=True)
 
     def test_execution_stage_contains_spec_and_authority_fields(self):
         strategy = self.strategy()
