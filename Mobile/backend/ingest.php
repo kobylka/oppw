@@ -285,9 +285,46 @@ try {
     if ($previousPosition !== null && $currentPosition === null) {
         $details = is_array($closedEvent['details'] ?? null) ? $closedEvent['details'] : [];
         $ticket = (int)($previousPosition['ticket'] ?? 0);
+        $exactExit = null;
+        foreach ($normalizedEvents as $candidate) {
+            $candidateDetails = is_array($candidate['details'] ?? null) ? $candidate['details'] : [];
+            if (
+                ($candidate['name'] ?? '') === 'EXECUTION_STAGE'
+                && strtoupper((string)($candidateDetails['stage'] ?? '')) === 'EXIT_FILLED'
+                && (int)($candidateDetails['position_ticket'] ?? 0) === $ticket
+                && (int)($candidateDetails['deal_ticket'] ?? 0) > 0
+                && is_numeric($candidateDetails['actual_price'] ?? null)
+                && (float)$candidateDetails['actual_price'] > 0
+            ) {
+                $exactExit = [
+                    'fill_price' => (float)$candidateDetails['actual_price'],
+                    'reference_price' => oppw_nullable_number($candidateDetails['reference_price'] ?? null),
+                    'reason' => (string)($candidateDetails['reason'] ?? ''),
+                    'filled_at' => (string)$candidate['time'],
+                ];
+            }
+        }
+        if ($exactExit === null) {
+            $exactExitLookup = $db->prepare(
+                'SELECT actual_price AS fill_price, reference_price, reason, occurred_at AS filled_at
+                   FROM strategy_execution_stages
+                  WHERE strategy_key = ? AND position_ticket = ? AND stage = ?
+                    AND result = TRUE AND deal_ticket > 0 AND actual_price > 0
+                  ORDER BY occurred_at DESC, id DESC
+                  LIMIT 1'
+            );
+            $exactExitLookup->execute([$accountKey, $ticket, 'EXIT_FILLED']);
+            $storedExactExit = $exactExitLookup->fetch();
+            if (is_array($storedExactExit)) $exactExit = $storedExactExit;
+        }
+
+        $eventExitPrice = is_numeric($details['exit'] ?? null) && (float)$details['exit'] > 0
+            ? (float)$details['exit']
+            : 0.0;
+        $eventReason = trim((string)($details['reason'] ?? ''));
         $protectionReason = '';
         $protectionPrice = 0.0;
-        if (!is_numeric($details['exit'] ?? null) || (float)$details['exit'] <= 0 || trim((string)($details['reason'] ?? '')) === '') {
+        if ($exactExit === null && ($eventExitPrice <= 0 || $eventReason === '')) {
             $protectionLookup = $db->prepare(
                 'SELECT new_sl, reason
                    FROM strategy_protection_changes
@@ -302,8 +339,14 @@ try {
                 $protectionReason = trim((string)($protection['reason'] ?? ''));
             }
         }
-        $closePrice = $number($details['exit'] ?? ($protectionPrice > 0 ? $protectionPrice : ($currentPrice ?: ($previousPosition['bid'] ?? 0))));
-        $reason = trim((string)($details['reason'] ?? ''));
+        $exactFillPrice = is_array($exactExit) ? $number($exactExit['fill_price'] ?? 0) : 0.0;
+        $closePrice = $exactFillPrice > 0
+            ? $exactFillPrice
+            : ($eventExitPrice > 0 ? $eventExitPrice : ($protectionPrice > 0 ? $protectionPrice : ($currentPrice ?: $number($previousPosition['bid'] ?? 0))));
+        $reason = is_array($exactExit)
+            ? oppw_projection_exit_reason($exactExit['reason'] ?? '')
+            : $eventReason;
+        if ($reason === '') $reason = $eventReason;
         if ($reason === '' && $protectionReason !== '') {
             if (preg_match('/TSL_STOP_([0-9]+(?:\.[0-9]+)?)%/i', $protectionReason, $match)) {
                 $reason = 'TSL_' . rtrim(rtrim($match[1], '0'), '.') . '%';
@@ -313,12 +356,18 @@ try {
         }
         if ($reason === '' || strtoupper($reason) === 'POSITION_CLOSED') $reason = 'UNKNOWN';
         $reason = substr($reason, 0, 100);
+        $closedAt = is_array($exactExit) && trim((string)($exactExit['filled_at'] ?? '')) !== ''
+            ? normalize_datetime($exactExit['filled_at'])
+            : $capturedAt;
+        if (is_array($exactExit) && is_numeric($exactExit['reference_price'] ?? null) && (float)$exactExit['reference_price'] > 0) {
+            $sellReference = (float)$exactExit['reference_price'];
+        }
         $lookup = $db->prepare('SELECT balance_before, open_price FROM strategy_trades WHERE strategy_key = ? AND position_ticket = ? LIMIT 1');
         $lookup->execute([$accountKey, $ticket]);
         $existingTrade = $lookup->fetch();
         $balanceBefore = $existingTrade['balance_before'] ?? null;
         $openPrice = $number($existingTrade['open_price'] ?? $previousPosition['openPrice'] ?? 0);
-        $change = is_numeric($details['change'] ?? null)
+        $change = $exactFillPrice <= 0 && is_numeric($details['change'] ?? null)
             ? (float)$details['change']
             : ($openPrice > 0 && $closePrice > 0 ? $closePrice / $openPrice - 1.0 : 0.0);
         $profit = is_numeric($balanceBefore) ? $balance - (float)$balanceBefore : null;
@@ -339,7 +388,7 @@ try {
               WHERE strategy_key = ? AND position_ticket = ?'
         );
         $closeTrade->execute([
-            $capturedAt, $closePrice ?: null, $sellReference, $exitSlippage, $exitSlippagePercent,
+            $closedAt, $closePrice ?: null, $sellReference, $exitSlippage, $exitSlippagePercent,
             $profit, $change * 100.0, $reason, $balance,
             $closePrice, $closePrice, $closePrice, $closePrice,
             $closePrice, $closePrice, $closePrice, $closePrice,

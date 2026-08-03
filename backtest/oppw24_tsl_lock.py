@@ -388,6 +388,7 @@ class Sim:
         apply_tax=False,
         debug=False,
         plots=False,
+        thursday_hold_threshold=0.02,
     ):
         self.trade_returns = []
         self.daily_equity_points = []
@@ -448,6 +449,7 @@ class Sim:
         
         open_price = 0
         qqq_open_price = 0
+        thursday_hold_until_to_or_be = False
         
         yearlies = []
         self.returns = []
@@ -515,6 +517,7 @@ class Sim:
                 close_price = 0
                 qqq_open_price = 0
                 open_date = ""
+                thursday_hold_until_to_or_be = False
 
                 close_date = date
                 trade_type = ""
@@ -565,8 +568,15 @@ class Sim:
                 self.balance += deposit
 
             # --------------------------------------------------------
-            # Premarket processing for an existing carried position.
-            # A new weekly position has not been opened yet.
+            # Thursday-open threshold decision.
+            #
+            # "openest" is the first available Thursday quote. The rule is
+            # evaluated before the premarket loop so TSL1PRE cannot execute
+            # before the Thursday decision:
+            #   - return >= threshold: hold until BE or TO, suppressing
+            #     TSL1PRE/TSL1/TSL2/TSL3/TSL4 and Thursday/Friday OH/CH;
+            #   - return < threshold: close immediately at Thursday open.
+            # Hard disaster-stop protection retains priority on a gap down.
             # --------------------------------------------------------
 
             if open_price > 0:
@@ -575,6 +585,22 @@ class Sim:
                     close_date = date
                     close_price = openest
                     trade_type = "GAP DOWN"
+
+                elif is_thursday and thursday_hold_threshold is not None:
+                    thursday_open_return = openest / open_price - 1.0
+
+                    if thursday_open_return >= thursday_hold_threshold:
+                        thursday_hold_until_to_or_be = True
+                    else:
+                        i = 4
+                        close_date = date
+                        close_price = openest
+                        trade_type = "THURSDAY_THRESHOLD_CLOSE"
+
+            # --------------------------------------------------------
+            # Premarket processing for an existing carried position.
+            # A new weekly position has not been opened yet.
+            # --------------------------------------------------------
 
             if close_price == 0 and open_price > 0:
                 for i in range(4, 934):
@@ -593,7 +619,7 @@ class Sim:
                         trade_type = "SLPRE"
                         break
 
-                    elif is_thursday and o / open_price < thursday_SL:
+                    elif is_thursday and not thursday_hold_until_to_or_be and o / open_price < thursday_SL:
                         close_date = date
                         close_price = o
                         trade_type = "TSL1PRE"
@@ -628,6 +654,7 @@ class Sim:
                 close_price = 0
                 qqq_open_price = 0
                 open_date = ""
+                thursday_hold_until_to_or_be = False
 
             # --------------------------------------------------------
             # Open the new weekly position at the cash-session open.
@@ -638,6 +665,7 @@ class Sim:
                 self.prev_open = opon
                 open_date = date
                 qqq_open_price = qqq_open
+                thursday_hold_until_to_or_be = False
                 self.trade_no += 1
                 
                 #if(self.deposited < 200000 and z%4==0):
@@ -660,7 +688,7 @@ class Sim:
                     close_price = opon
                     trade_type = "SLO"
 
-                elif opon > open_price * (1 + tpp):
+                elif not thursday_hold_until_to_or_be and opon > open_price * (1 + tpp):
                     close_date = date
                     close_price = opon
                     trade_type = "OH"
@@ -670,12 +698,12 @@ class Sim:
                     close_price = opon
                     trade_type = "BEO"
 
-                elif (is_thursday and opon / open_price < thursday_SL):
+                elif (is_thursday and not thursday_hold_until_to_or_be and opon / open_price < thursday_SL):
                     close_date = date
                     close_price = opon
                     trade_type = "TSL1"
 
-                elif (is_friday and opon / open_price < friday_SL):
+                elif (is_friday and not thursday_hold_until_to_or_be and opon / open_price < friday_SL):
                     close_date = date
                     close_price = opon
                     trade_type = "TSL3"
@@ -702,13 +730,13 @@ class Sim:
                         trade_type = "SL"
                         break
 
-                    elif (is_thursday and l / open_price < thursday_SL):
+                    elif (is_thursday and not thursday_hold_until_to_or_be and l / open_price < thursday_SL):
                         close_date = date
                         close_price = open_price * thursday_SL
                         trade_type = "TSL2"
                         break
 
-                    elif (is_friday and l / open_price < friday_SL):
+                    elif (is_friday and not thursday_hold_until_to_or_be and l / open_price < friday_SL):
                         close_date = date
                         close_price = open_price * friday_SL
                         trade_type = "TSL4"
@@ -725,7 +753,7 @@ class Sim:
             # --------------------------------------------------------
 
             if open_price > 0 and close_price == 0:
-                if close > open_price * (1 + tpp):
+                if not thursday_hold_until_to_or_be and close > open_price * (1 + tpp):
                     i = 1324
                     close_date = date
                     close_price = close
@@ -755,6 +783,7 @@ class Sim:
                 close_price = 0
                 qqq_open_price = 0
                 open_date = ""
+                thursday_hold_until_to_or_be = False
 
             # --------------------------------------------------------
             # Update state only for a position surviving the day.
@@ -883,7 +912,7 @@ if __name__ == "__main__":
     
     tpps = [0.007,0.02,0.05,0.05,0.05]
     print(tpps)
-    result = sim.process(sim_i.quotes, "QQQ","20220103", "20260724", LEVERAGE, tpps, SL, BE, 0.004,0.004, 30000, False,False,True,True)
+    result = sim.process(sim_i.quotes, "QQQ","20220103", "20260724", LEVERAGE, tpps, SL, BE, 0.004,0.004, 30000, False,True,True,True, thursday_hold_threshold=-0.017)
     print(result)
     
     #1,79216 125

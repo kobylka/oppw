@@ -629,6 +629,7 @@ class StrategyDecisionMixin:
                 "breakEvenExitFormula": "BEPRE/BEO/BH compare execution price with position fill price * breakEvenRatio and use market SELL",
                 "thursdayTslDistance": float(self.cfg.tsl_stop),
                 "thursdayTslFormula": "position fill price * (1 - thursdayTslDistance), active from Thursday date change",
+                "thursdayPremarketCrossedTslExitReason": "TSL1PRE",
                 "hardStopPointsOverLeverage": float(self.cfg.leverage_stop_points),
                 "hardStopRatioL10": float(self.hard_sl_ratio(int(self.cfg.loss_leverage))),
                 "hardStopRatioL8": float(self.hard_sl_ratio(int(self.cfg.base_leverage))),
@@ -638,6 +639,7 @@ class StrategyDecisionMixin:
             "orderSemantics": {
                 "entry": "MARKET BUY using current ask in TRADE_ACTION_DEAL",
                 "strategyExit": "MARKET SELL using current bid in TRADE_ACTION_DEAL",
+                "marketExitPriceAuthority": "confirmed MT5 deal fill; request bid is retained only until an exact deal is available",
                 "weeklyTimeout": "MARKET SELL at final XNYS session close minus non-entry lead",
                 "protection": "TRADE_ACTION_SLTP broker-side SL; no pending entry or exit orders",
                 "deviationPoints": int(self.cfg.deviation_points),

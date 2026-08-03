@@ -537,17 +537,26 @@ class PositionLifecycleMixin:
     def closed_position_contract(self) -> tuple[str, float, float]:
         """Return the authoritative strategy close label, reference and raw return.
 
-        Broker-side protective stops can fill while this process is stopped.  In
-        that case the first post-restart quote is not the exit price.  Preserve
-        the installed protection threshold as the strategy return reference;
-        account P/L remains the authority for actual cash execution results.
+        Broker-side protective stops can fill while this process is stopped. In
+        that case the first post-restart quote is not the exit price, so retain
+        the installed protection threshold. For a latched market exit, retain
+        the confirmed MT5 deal price instead of older installed protection.
+        Account P/L remains the authority for actual cash execution results.
         """
-        reason = self.state.exit_latched_reason or self.state.active_tp_reason or self.state.active_sl_reason or "broker/manual"
+        latched_reason = str(self.state.exit_latched_reason or "")
         reference_price = float(self.state.last_exit_price or 0.0)
-        if self.state.active_sl_reason and self.state.active_sl_price > 0:
-            reference_price = float(self.state.active_sl_price)
-        elif self.state.active_tp_reason and self.state.active_tp_price > 0:
-            reference_price = float(self.state.active_tp_price)
+        if latched_reason:
+            # A fenced market exit is authoritative over protection that was
+            # installed earlier on the same position.  close_position_market
+            # records its request price and replaces it with the exact MT5
+            # deal price when the acknowledgement includes a deal ticket.
+            reason = latched_reason
+        else:
+            reason = self.state.active_tp_reason or self.state.active_sl_reason or "broker/manual"
+            if self.state.active_sl_reason and self.state.active_sl_price > 0:
+                reference_price = float(self.state.active_sl_price)
+            elif self.state.active_tp_reason and self.state.active_tp_price > 0:
+                reference_price = float(self.state.active_tp_price)
 
         if str(reason).upper() == "TSL":
             reason = f"TSL_{float(self.cfg.tsl_stop) * 100.0:g}%"

@@ -5,7 +5,7 @@ import sys
 import tempfile
 import types
 import unittest
-from datetime import datetime
+from datetime import datetime, time
 from pathlib import Path
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -62,6 +62,9 @@ class TslDeferredInstallTests(unittest.TestCase):
         strategy.lock_immutable_hard_stop = lambda *_args: self.fail("immutable stop must not be recalculated")
         strategy.fresh_tick_for_protection = lambda *_args: tick
         strategy.broker_minimum_distance = lambda _info: 10.0
+        strategy.session_times = lambda day: SimpleNamespace(
+            cash_open=datetime.combine(day, time(15, 30), WARSAW)
+        )
         strategy.arm_exit = lambda *_args: self.fail("TSL defer/cross paths must not use arm_exit")
         market_closes = []
         modifications = []
@@ -85,6 +88,17 @@ class TslDeferredInstallTests(unittest.TestCase):
             strategy, position, market_closes, modifications = self.make_strategy(temp_dir, tick)
             result = strategy.apply_standard_protection(
                 position, datetime(2026, 7, 23, 0, 0, tzinfo=WARSAW)
+            )
+            self.assertTrue(result)
+            self.assertEqual(market_closes, ["TSL1PRE"])
+            self.assertEqual(modifications, [])
+
+    def test_crossed_tsl_after_cash_open_keeps_unified_label(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tick = SimpleNamespace(bid=28_884.0, ask=28_885.0)
+            strategy, position, market_closes, modifications = self.make_strategy(temp_dir, tick)
+            result = strategy.apply_standard_protection(
+                position, datetime(2026, 7, 23, 16, 0, tzinfo=WARSAW)
             )
             self.assertTrue(result)
             self.assertEqual(market_closes, ["TSL"])

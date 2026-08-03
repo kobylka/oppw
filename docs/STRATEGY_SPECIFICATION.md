@@ -20,6 +20,8 @@ Changing a trading-relevant resolved value creates a different hash and a new im
 - A manually adopted position receives the same immutable hard-stop lock and broker-side protection restoration as a strategy-opened position before other cycle logic runs.
 - A manually adopted position with no valid `L8`/`L10` MT5 comment resolves leverage from the same authoritative prior-week/prior-trade leverage decision as a strategy entry. Any manual-position hard-stop lock created with a conflicting inferred leverage is corrected once using its original balance-at-fill baseline, regardless of a stale execution source label; stale strategy execution/decision linkage is removed during adoption.
 - The current-week monitoring summary aggregates live MT5 M1 candles from the first actual XNYS cash open. While a current-week manual position is adopted, its opening timestamp becomes the observation boundary and its fill price is included in weekly open/high/low, including positions opened before or exactly at cash open. The exact cash-open M1 price remains a separate strategy reference.
+- The unified 0.4% TSL becomes active at the Thursday date change. If the Thursday premarket bid is already through that threshold, the globally fenced market exit is labeled `TSL1PRE`; other crossed-threshold TSL market exits retain `TSL`.
+- A market exit initially retains its request bid, then replaces it with the confirmed MT5 deal price. That exact fill outranks any older broker SL/TP when producing the close record.
 
 ## Authoritative contents
 
@@ -48,4 +50,4 @@ The complete specification remains available in status snapshots. Its explicit p
 
 ## Exact and reconciled fills
 
-Market fills containing an MT5 deal ticket are stored as exact fills. If a broker-side SL closes a position and the loop observes only that the position disappeared, the loop records a reconciliation fill with `is_exact = 0` and source `POSITION_DISAPPEARANCE_RECONCILIATION`. It is never presented as an exact broker deal.
+Market fills containing an MT5 deal ticket are stored as exact fills. If a broker-side SL closes a position and the loop observes only that the position disappeared, the loop records a reconciliation fill with `is_exact = 0` and source `POSITION_DISAPPEARANCE_RECONCILIATION`. It is never presented as an exact broker deal. When delivery order differs between executor events and publisher snapshots, an exact `EXIT_FILLED` record always repairs and outranks the provisional disappearance-based trade projection.

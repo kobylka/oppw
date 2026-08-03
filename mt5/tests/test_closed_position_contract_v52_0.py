@@ -13,6 +13,11 @@ mt5.ORDER_TYPE_BUY = 0
 mt5.ORDER_TYPE_SELL = 1
 mt5.POSITION_TYPE_BUY = 0
 mt5.POSITION_TYPE_SELL = 1
+mt5.TRADE_ACTION_DEAL = 1
+mt5.ORDER_TIME_GTC = 0
+mt5.TRADE_RETCODE_DONE = 10009
+mt5.TRADE_RETCODE_PLACED = 10008
+mt5.TRADE_RETCODE_DONE_PARTIAL = 10010
 
 SOURCE = Path(__file__).resolve().parents[1] / "oppw_mt5_continuous.py"
 SPEC = importlib.util.spec_from_file_location("oppw_closed_position_contract", SOURCE)
@@ -50,13 +55,72 @@ class ClosedPositionContractTests(unittest.TestCase):
         self.assertEqual("C", strategy.trade_class(change, reason))
 
     def test_latched_market_exit_keeps_recorded_exit_price(self):
-        strategy = self.strategy(exit_latched_reason="TO", last_exit_price=101.25)
+        strategy = self.strategy(
+            exit_latched_reason="TSL1PRE",
+            last_exit_price=95.165,
+            active_sl_reason="SL",
+            active_sl_price=95.0,
+        )
 
         reason, exit_price, change = strategy.closed_position_contract()
 
-        self.assertEqual("TO", reason)
-        self.assertAlmostEqual(101.25, exit_price)
-        self.assertAlmostEqual(0.0125, change)
+        self.assertEqual("TSL1PRE", reason)
+        self.assertAlmostEqual(95.165, exit_price)
+        self.assertAlmostEqual(-0.04835, change)
+        self.assertEqual("C", strategy.trade_class(change, reason))
+
+    def test_confirmed_market_exit_persists_exact_deal_price(self):
+        strategy = MODULE.OPPWContinuousStrategy.__new__(MODULE.OPPWContinuousStrategy)
+        strategy.cfg = SimpleNamespace(
+            live_enabled=True,
+            deviation_points=50,
+            magic=24001,
+            comment_prefix="OPPW",
+            state_file=Path("state.json"),
+        )
+        strategy.state = SimpleNamespace(
+            exit_latched_reason="",
+            exit_latched_at="",
+            last_exit_price=0.0,
+            save=Mock(),
+        )
+        strategy.log = Mock()
+        strategy.trade_request_role_allowed = Mock(return_value=True)
+        strategy.require_fresh_tick = Mock(return_value=SimpleNamespace(bid=95.2))
+        strategy.ensure_autotrading_enabled = Mock(return_value=True)
+        strategy.request_allowed_now = Mock(return_value=True)
+        strategy.checked_deal_request = Mock(
+            return_value=({"type_filling": 0}, SimpleNamespace(retcode=0))
+        )
+        strategy.filling_mode_name = Mock(return_value="FOK")
+        strategy.execution_stage = Mock()
+        strategy.coordinator = SimpleNamespace(
+            acquire_trade_gate=lambda *_args: object(),
+            validate_trade_gate=lambda *_args: None,
+            release_trade_gate=lambda *_args: None,
+        )
+        position = SimpleNamespace(ticket=123, symbol="US100", volume=0.64)
+        mt5.symbol_info = Mock(return_value=SimpleNamespace())
+        mt5.order_send = Mock(return_value=SimpleNamespace(
+            retcode=10009,
+            price=95.165,
+            order=2160777,
+            deal=1994541,
+            comment="done",
+        ))
+
+        result = strategy.close_position_market(
+            position, "TSL1PRE", MODULE.datetime(2026, 7, 30, tzinfo=MODULE.UTC)
+        )
+
+        self.assertTrue(result)
+        self.assertEqual("TSL1PRE", strategy.state.exit_latched_reason)
+        self.assertAlmostEqual(95.165, strategy.state.last_exit_price)
+        self.assertGreaterEqual(strategy.state.save.call_count, 2)
+        self.assertTrue(any(
+            call.args and call.args[0] == "EXIT_FILLED"
+            for call in strategy.execution_stage.call_args_list
+        ))
 
     @patch.object(MODULE.time_module, "sleep")
     @patch.object(MODULE.StrategyState, "load")

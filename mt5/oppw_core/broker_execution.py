@@ -587,6 +587,11 @@ class BrokerExecutionMixin:
 
         self.state.exit_latched_reason = reason
         self.state.exit_latched_at = now.isoformat()
+        # Preserve the market-SELL reference immediately so a concurrent
+        # publisher cannot fall back to an older installed SL while the order
+        # acknowledgement is still in flight.  A confirmed deal price below
+        # replaces this reference before the executor returns to its loop.
+        self.state.last_exit_price = bid
         self.state.save(self.cfg.state_file)
         self.log.info("EVENT SELL_REQUEST reason=%s ticket=%s volume=%s bid=%.5f", reason_log, position.ticket, position.volume, bid)
         self.execution_stage("EXIT_SENT", position_ticket=int(position.ticket), reference_price=bid, reason=reason)
@@ -616,14 +621,17 @@ class BrokerExecutionMixin:
                                  filling_mode=self.filling_mode_name(request.get("type_filling", -1)), reason=reason, latency_ms=exit_ack_ms)
             self.log.error("EVENT SELL_REJECTED reason=%s retcode=%s comment=%s", reason_log, getattr(result, "retcode", None), getattr(result, "comment", mt5.last_error()))
             return False
+        actual_price = float(getattr(result, "price", 0.0) or bid)
         self.execution_stage("EXIT_ACCEPTED", position_ticket=int(position.ticket), reference_price=bid,
-                             actual_price=float(getattr(result, "price", 0.0) or bid), retcode=int(result.retcode), reason=reason, latency_ms=exit_ack_ms,
+                             actual_price=actual_price, retcode=int(result.retcode), reason=reason, latency_ms=exit_ack_ms,
                              order_ticket=int(getattr(result, "order", 0) or 0), deal_ticket=int(getattr(result, "deal", 0) or 0),
                              side="SELL", volume=float(position.volume), filling_mode=self.filling_mode_name(request.get("type_filling", -1)))
         if int(getattr(result, "deal", 0) or 0) > 0:
+            self.state.last_exit_price = actual_price
+            self.state.save(self.cfg.state_file)
             self.execution_stage(
                 "EXIT_FILLED", position_ticket=int(position.ticket), reference_price=bid,
-                actual_price=float(getattr(result, "price", 0.0) or bid), retcode=int(result.retcode), reason=reason,
+                actual_price=actual_price, retcode=int(result.retcode), reason=reason,
                 latency_ms=exit_ack_ms, order_ticket=int(getattr(result, "order", 0) or 0),
                 deal_ticket=int(getattr(result, "deal", 0) or 0), side="SELL", volume=float(position.volume),
                 filling_mode=self.filling_mode_name(request.get("type_filling", -1)),
@@ -711,7 +719,15 @@ class BrokerExecutionMixin:
                     float(position.price_open), self.cfg.tsl_ratio,
                 )
                 self.tsl_install_deferred = False
-                return self.close_position_market(position, "TSL", now)
+                # Retain the established taxonomy for a Thursday premarket
+                # gap through the newly-active TSL threshold.  Later TSL
+                # market exits keep the unified TSL label.
+                tsl_exit_reason = (
+                    "TSL1PRE"
+                    if now.weekday() == 3 and now < self.session_times(now.date()).cash_open
+                    else "TSL"
+                )
+                return self.close_position_market(position, tsl_exit_reason, now)
 
             tsl_already_installed = (
                 current_broker_sl > 0

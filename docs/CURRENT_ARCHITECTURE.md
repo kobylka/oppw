@@ -112,7 +112,7 @@ The drawdown episode list has a distinct authority. Closed-trade returns define 
 | Trade transition | `strategy_trade_ledger` |
 | Cash flow | `account_cash_flows` |
 | Current mobile snapshot | `strategy_snapshots`, exactly one mutable projection row per account |
-| Mobile analytics trade projection | `strategy_trades`, with protective-close price/reason recovered from `strategy_protection_changes` when event and flat snapshot delivery are separated |
+| Mobile analytics trade projection | `strategy_trades`; exact market-exit price/reason comes from `strategy_fills`/`EXIT_FILLED` and outranks snapshot or protection fallbacks, while broker-side protective closes may recover from `strategy_protection_changes` |
 | Diagnostics, mobile delivery receipts, and low-volume operational messages | `strategy_events` |
 | Minute equity history and indefinite daily projection | `strategy_equity_points` and `strategy_equity_daily` |
 | Minute market OHLC history | `strategy_market_points`, retained online indefinitely |

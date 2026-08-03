@@ -5,7 +5,7 @@ import sys
 import tempfile
 import types
 import unittest
-from datetime import datetime
+from datetime import datetime, time
 from pathlib import Path
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -62,6 +62,9 @@ class TslMarketExitTests(unittest.TestCase):
             strategy.lock_immutable_hard_stop = lambda *_args: self.fail("immutable stop must not be recalculated")
             strategy.fresh_tick_for_protection = lambda *_args: SimpleNamespace(bid=28_884.0, ask=28_885.0)
             strategy.broker_minimum_distance = lambda _info: 1.0
+            strategy.session_times = lambda day: SimpleNamespace(
+                cash_open=datetime.combine(day, time(15, 30), WARSAW)
+            )
             strategy.arm_exit = lambda *_args: self.fail("crossed TSL must not use arm_exit")
             market_closes = []
             strategy.close_position_market = lambda _position, reason, _now: market_closes.append(reason) or True
@@ -81,7 +84,7 @@ class TslMarketExitTests(unittest.TestCase):
             )
 
             self.assertTrue(result)
-            self.assertEqual(market_closes, ["TSL"])
+            self.assertEqual(market_closes, ["TSL1PRE"])
 
 
 if __name__ == "__main__":

@@ -669,29 +669,49 @@ return [
             if receipt.get("latencyMs") is None:
                 raise AssertionError("mobile receipt did not calculate delivery latency")
 
-            # Regression: a protective close event may arrive independently of
-            # the later flat snapshot. The snapshot quote must not replace the
-            # accepted broker-side stop as the strategy return reference.
+            # Regression: the publisher may deliver the first flat snapshot
+            # before the executor's exact EXIT_FILLED event. The immutable fill
+            # must subsequently repair the provisional hard-SL projection.
             close_time = datetime.now(timezone.utc)
-            installed_tsl = float(snapshot["position"]["openPrice"]) * 0.996
+            old_hard_sl = float(snapshot["position"]["stopLoss"])
+            exact_exit_reference = 27_611.5
+            exact_exit_fill = 27_607.0
+            # Earlier market-stat assertions deliberately use small synthetic
+            # index values. Restore trade-range market rows to the execution
+            # instrument's scale before testing exact-fill excursion repair.
+            contract_open = float(snapshot["position"]["openPrice"])
+            contract_opened_at = datetime.fromisoformat(
+                str(snapshot["position"]["openedAt"]).replace("Z", "+00:00")
+            ).astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+            contract_close_at = close_time.strftime("%Y-%m-%d %H:%M:%S")
+            docker_sql(
+                docker, container,
+                "UPDATE strategy_market_points SET current_price={0},bid={0},ask={0},"
+                "m1_open={0},m1_high={0},m1_low={0},m1_close={0} WHERE strategy_key='DEMO' "
+                "AND captured_minute>={1} AND captured_minute<={2}".format(
+                    contract_open, sql_text(contract_opened_at), sql_text(contract_close_at)
+                ),
+                docker_env,
+            )
             http_json("POST", base_url + "events-ingest.php", {
                 "accountKey": "DEMO", "coordination": ingest_payload["coordination"],
                 "events": [{
-                    "time": iso(close_time), "level": "INFO", "name": "EXECUTION_STAGE", "result": True,
-                    "message": "contract separated TSL protection",
+                    "time": iso(close_time - timedelta(milliseconds=1)),
+                    "level": "INFO", "name": "EXECUTION_STAGE", "result": True,
+                    "message": "contract old hard SL remains installed before TSL1PRE gap",
                     "details": {
-                        "execution_id": fixture["executionId"], "position_ticket": fixture["positionTicket"],
-                        "stage": "MODIFIED", "result": True, "old_sl": 27550.0, "new_sl": installed_tsl,
-                        "old_tp": 0.0, "new_tp": 0.0,
-                        "reason": "IMMUTABLE_HARD_SL_L10_RATIO_0.950000+TSL_STOP_0.4000%_RATIO_0.996000",
+                        "execution_id": fixture["executionId"], "decision_id": identities["decisionId"],
+                        "position_ticket": fixture["positionTicket"], "stage": "MODIFIED", "result": True,
+                        "old_sl": old_hard_sl, "new_sl": old_hard_sl, "old_tp": 0.0, "new_tp": 0.0,
+                        "reason": "IMMUTABLE_HARD_SL_L10_RATIO_0.950000",
                     },
                 }],
             }, token=WRITE_TOKEN, expected=(201,))
             flat_payload = copy.deepcopy(ingest_payload)
             flat_payload["capturedAt"] = iso(close_time + timedelta(seconds=1))
             flat_payload["snapshot"]["position"] = None
-            flat_payload["snapshot"]["market"]["currentPrice"] = float(snapshot["position"]["openPrice"]) * 0.988552
-            flat_payload["snapshot"]["market"]["bid"] = float(snapshot["position"]["openPrice"]) * 0.988552
+            flat_payload["snapshot"]["market"]["currentPrice"] = exact_exit_fill
+            flat_payload["snapshot"]["market"]["bid"] = exact_exit_fill
             flat_payload["events"] = []
             flat_payload.pop("strategyDecision", None)
             flat_payload.pop("strategySpecification", None)
@@ -705,20 +725,60 @@ return [
                 raise AssertionError(
                     "flat snapshot append regressed the one-row current projection"
                 )
-            close_projection = docker_sql(
+            provisional_projection = docker_sql(
                 docker, container,
                 "SELECT CONCAT(close_price,'|',exit_reason,'|',preleverage_return_percent,'|',trade_class) "
                 "FROM strategy_trades WHERE strategy_key='DEMO' AND position_ticket=" + str(fixture["positionTicket"]),
                 docker_env,
             ).split("|")
-            assert_close(close_projection[0], installed_tsl, "separated close stop price")
-            if close_projection[1] != "TSL_0.4%":
-                raise AssertionError(f"separated close reason: expected TSL_0.4%, got {close_projection[1]}")
-            assert_close(close_projection[2], -0.4, "separated close pre-leverage return")
-            if close_projection[3] != "C":
-                raise AssertionError(f"separated close class: expected C, got {close_projection[3]}")
+            assert_close(provisional_projection[0], old_hard_sl, "pre-fill provisional hard-SL price")
+            if provisional_projection[1] != "SL" or provisional_projection[3] != "D":
+                raise AssertionError(
+                    "flat-before-fill setup did not reproduce the provisional SL/D projection: "
+                    + "|".join(provisional_projection)
+                )
 
-            # Keep the protective-close projection scenario independent from
+            http_json("POST", base_url + "events-ingest.php", {
+                "accountKey": "DEMO", "coordination": ingest_payload["coordination"],
+                "events": [{
+                    "time": iso(close_time), "level": "INFO", "name": "EXECUTION_STAGE", "result": True,
+                    "message": "contract late exact TSL1PRE exit fill",
+                    "details": {
+                        "execution_id": fixture["executionId"], "decision_id": identities["decisionId"],
+                        "position_ticket": fixture["positionTicket"], "stage": "EXIT_FILLED", "result": True,
+                        "reference_price": exact_exit_reference, "actual_price": exact_exit_fill,
+                        "retcode": 10009, "filling_mode": "FOK", "reason": "TSL1PRE",
+                        "order_ticket": 770002, "deal_ticket": 880002, "side": "SELL", "volume": 0.02,
+                    },
+                }],
+            }, token=WRITE_TOKEN, expected=(201,))
+            close_projection = docker_sql(
+                docker, container,
+                "SELECT CONCAT(close_price,'|',exit_reference_price,'|',exit_slippage_points,'|',"
+                "exit_reason,'|',preleverage_return_percent,'|',trade_class,'|',worst_price,'|',mae_points) "
+                "FROM strategy_trades WHERE strategy_key='DEMO' AND position_ticket=" + str(fixture["positionTicket"]),
+                docker_env,
+            ).split("|")
+            assert_close(close_projection[0], exact_exit_fill, "late exact exit fill price")
+            assert_close(close_projection[1], exact_exit_reference, "late exact exit reference")
+            assert_close(close_projection[2], exact_exit_reference - exact_exit_fill, "late exact exit slippage")
+            if close_projection[3] != "TSL1PRE":
+                raise AssertionError(f"late exact close reason: expected TSL1PRE, got {close_projection[3]}")
+            assert_close(
+                close_projection[4],
+                (exact_exit_fill / float(snapshot["position"]["openPrice"]) - 1.0) * 100.0,
+                "late exact pre-leverage return",
+            )
+            if close_projection[5] != "C":
+                raise AssertionError(f"late exact close class: expected C, got {close_projection[5]}")
+            assert_close(close_projection[6], exact_exit_fill, "late exact repaired worst price")
+            assert_close(
+                close_projection[7],
+                exact_exit_fill - float(snapshot["position"]["openPrice"]),
+                "late exact repaired MAE",
+            )
+
+            # Keep the close-projection race scenario independent from
             # the deterministic closed-trade fixture seeded below, while
             # retaining the ticket used to link execution-quality stages.
             docker_sql(

@@ -19,7 +19,9 @@ Key execution rules
 * Hard SL restoration and deliberate Thursday TSL tightening are maintained with TRADE_ACTION_SLTP.
 * BEPRE, BEO, and BH submit fenced market SELL requests; they do not create an exit bracket as their primary action.
 * One configurable TSL is active continuously from Thursday date change through Friday and the weekend if needed.
-* TSL is a broker-side SL label; candle lows do not latch it.
+* TSL is normally broker-side protection; a crossed threshold that cannot be installed closes through the fenced market-SELL path.
+* A Thursday premarket gap through the newly-active TSL is labeled TSL1PRE.
+* Confirmed market-SELL deal prices override request quotes and previously installed protection in the close record.
 * Closed-trade leverage inputs come exclusively from the OPPW MySQL trade history through the authenticated backend endpoint.
 * Status deposit is read directly from MT5 as float(account.margin).
 * Terminal/account AutoTrading permissions are verified continuously before every live trade request.

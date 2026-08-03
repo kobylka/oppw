@@ -42,6 +42,13 @@ function oppw_nullable_bool(mixed $value): ?int
     return null;
 }
 
+function oppw_projection_exit_reason(mixed $value): string
+{
+    $reason = trim((string)$value);
+    if (strtoupper($reason) === 'TSL') return 'TSL_0.4%';
+    return substr($reason, 0, 100);
+}
+
 function oppw_current_spec_id(PDO $db, string $accountKey): ?string
 {
     $stmt = $db->prepare(
@@ -175,6 +182,87 @@ function oppw_authority_event(
                     (int)((int)($details['deal_ticket'] ?? 0) > 0), $payloadJson, $payloadHash, $receivedAt,
                 ]);
                 $counts['fills'] += $fill->rowCount();
+
+                // The mutable mobile/analytics trade projection must converge
+                // on an exact market-exit fill even when a publisher's flat
+                // snapshot reached ingest.php first. Replaying the immutable
+                // event is intentionally able to repair the projection.
+                $dealTicket = (int)($details['deal_ticket'] ?? 0);
+                if ($stage === 'EXIT_FILLED' && $dealTicket > 0) {
+                    $positionTicket = (int)($details['position_ticket'] ?? 0);
+                    $fillPrice = (float)$details['actual_price'];
+                    $referencePrice = oppw_nullable_number($details['reference_price'] ?? null);
+                    $exitReason = oppw_projection_exit_reason($details['reason'] ?? '');
+                    if ($exitReason === '') $exitReason = 'UNKNOWN';
+                    $slippage = $referencePrice !== null && $referencePrice > 0
+                        ? $referencePrice - $fillPrice
+                        : null;
+                    $slippagePercent = $slippage !== null
+                        ? $slippage / $referencePrice * 100.0
+                        : null;
+                    $bounds = $db->prepare(
+                        'SELECT opened_at, open_price
+                           FROM strategy_trades
+                          WHERE strategy_key = ? AND position_ticket = ? AND closed_at IS NOT NULL
+                          LIMIT 1'
+                    );
+                    $bounds->execute([$accountKey, $positionTicket]);
+                    $tradeBounds = $bounds->fetch();
+                    $openPrice = is_array($tradeBounds) ? (float)($tradeBounds['open_price'] ?? 0) : 0.0;
+                    $bestPrice = max($openPrice, $fillPrice);
+                    $worstPrice = $openPrice > 0 ? min($openPrice, $fillPrice) : $fillPrice;
+                    if (is_array($tradeBounds)) {
+                        $marketExtrema = $db->prepare(
+                            'SELECT
+                                MAX(GREATEST(
+                                    COALESCE(NULLIF(current_price, 0), 0),
+                                    COALESCE(NULLIF(bid, 0), 0),
+                                    COALESCE(NULLIF(m1_high, 0), 0)
+                                )) AS highest_price,
+                                MIN(LEAST(
+                                    CASE WHEN current_price > 0 THEN current_price ELSE 1e30 END,
+                                    CASE WHEN bid > 0 THEN bid ELSE 1e30 END,
+                                    CASE WHEN m1_low > 0 THEN m1_low ELSE 1e30 END
+                                )) AS lowest_price
+                               FROM strategy_market_points
+                              WHERE strategy_key = ? AND captured_minute >= ? AND captured_minute <= ?'
+                        );
+                        $marketExtrema->execute([$accountKey, $tradeBounds['opened_at'], $eventTime]);
+                        $extrema = $marketExtrema->fetch();
+                        $highest = is_array($extrema) && is_numeric($extrema['highest_price'] ?? null)
+                            ? (float)$extrema['highest_price']
+                            : 0.0;
+                        $lowest = is_array($extrema) && is_numeric($extrema['lowest_price'] ?? null)
+                            ? (float)$extrema['lowest_price']
+                            : 0.0;
+                        if ($highest > 0) $bestPrice = max($bestPrice, $highest);
+                        if ($lowest > 0 && $lowest < 1e30) $worstPrice = min($worstPrice, $lowest);
+                    }
+                    $mfePoints = $openPrice > 0 ? max(0.0, $bestPrice - $openPrice) : 0.0;
+                    $mfePercent = $openPrice > 0 ? max(0.0, $bestPrice / $openPrice - 1.0) * 100.0 : 0.0;
+                    $maePoints = $openPrice > 0 ? min(0.0, $worstPrice - $openPrice) : 0.0;
+                    $maePercent = $openPrice > 0 ? min(0.0, $worstPrice / $openPrice - 1.0) * 100.0 : 0.0;
+                    $projection = $db->prepare(
+                        'UPDATE strategy_trades
+                            SET closed_at = ?, close_price = ?, exit_reference_price = ?,
+                                exit_slippage_points = ?, exit_slippage_percent = ?,
+                                profit_percent = (? / NULLIF(open_price, 0) - 1.0) * 100.0,
+                                exit_reason = CASE
+                                    WHEN exit_reason = ? AND ? = ? THEN exit_reason
+                                    ELSE ?
+                                END,
+                                best_price = ?, worst_price = ?,
+                                mfe_points = ?, mfe_percent = ?,
+                                mae_points = ?, mae_percent = ?
+                          WHERE strategy_key = ? AND position_ticket = ? AND closed_at IS NOT NULL'
+                    );
+                    $projection->execute([
+                        $eventTime, $fillPrice, $referencePrice, $slippage, $slippagePercent,
+                        $fillPrice, 'TSL1PRE', $exitReason, 'TSL_0.4%', $exitReason,
+                        $bestPrice, $worstPrice, $mfePoints, $mfePercent, $maePoints, $maePercent,
+                        $accountKey, $positionTicket,
+                    ]);
+                }
             }
 
             if (in_array($stage, ['PROTECTION_REQUESTED', 'PROTECTED', 'MODIFIED', 'PROTECTION_REJECTED'], true)) {
