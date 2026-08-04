@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 from service.oppw_windows_supervisor import (
     ACCOUNTS, ROLES, STARTUP_ORDER, assignments_fresh, load_config, next_start_key,
+    ready_capability_status,
 )
 
 
@@ -112,6 +113,20 @@ class SupervisorConfigTests(unittest.TestCase):
         self.assertGreater(ready_position, connect.index("mt5.account_info()"))
         self.assertGreater(ready_position, connect.index("mt5.symbol_select(self.cfg.signal_symbol"))
         self.assertGreater(ready_position, connect.index('self.ensure_autotrading_enabled("CONNECT"'))
+        self.assertIn('"liveEnabled": bool(self.cfg.live_enabled)', connect)
+        self.assertIn('"autotradingEnabled": bool(autotrading_enabled)', connect)
+        self.assertIn("live={live_status} autotrading={autotrading_status}", supervisor)
+
+    def test_ready_capability_status_reads_loop_readiness_payload(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ready.json"
+            path.write_text(
+                json.dumps({"liveEnabled": True, "autotradingEnabled": False}),
+                encoding="utf-8",
+            )
+            self.assertEqual(("ENABLED", "DISABLED"), ready_capability_status(path))
+            path.write_text("not json", encoding="utf-8")
+            self.assertEqual(("UNKNOWN", "UNKNOWN"), ready_capability_status(path))
 
     def test_installer_accepts_service_already_marked_for_deletion(self):
         installer = (Path(__file__).resolve().parents[1] / "install-service.ps1").read_text(encoding="utf-8")

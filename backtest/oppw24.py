@@ -277,12 +277,12 @@ class Sim:
                 SL =  (100-50/LEVERAGE)/100
                 
                 granular = int((self.balance/(20/LEVERAGE)/2240))*2240
-                #granular = int((self.balance/1.765/2240))*2240
-                if(LEVERAGE == 10):
-                    granular = int((self.balance/1.765/2240))*2240
+                granular = int((self.balance/1.765/2240))*2240
+                #if(LEVERAGE == 10):
+                    #granular = int((self.balance/1.765/2240))*2240
                     
                 #change = round(close_price/open_price-1,4)
-                change = int((close_price/open_price-1)*10000)/10000
+                change = int((close_price/open_price-1)*100000)/100000
                 #print(LEVERAGE, self.balance, change)
                 #print(change)
                 self.cumulative_change *= change*LEVERAGE+1
@@ -641,7 +641,7 @@ class Sim:
                 self.trade_no += 1
                 
                 #if(self.deposited < 200000 and z%4==0):
-                if(self.deposited < 2 and z%4==0):
+                if(self.deposited < 200000 and z%4==0):
                     granular = int((self.balance/1.765/2240))
                     plus_one = int(2240*(granular+1)*1.765-self.balance+100)
                     self.deposited += plus_one
@@ -883,7 +883,7 @@ if __name__ == "__main__":
     
     tpps = [0.007,0.02,0.05,0.05,0.05]
     print(tpps)
-    result = sim.process(sim_i.quotes, "QQQ","20220103", "20260731", LEVERAGE, tpps, SL, BE, 0.004,0.004, 30000, False,False,True,True)
+    result = sim.process(sim_i.quotes, "QQQ","20250106", "20260731", LEVERAGE, tpps, SL, BE, 0.004,0.004, 16000, False,False,True,True)
     print(result)
     
     #1,79216 125

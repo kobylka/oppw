@@ -55,6 +55,22 @@ def utc_text() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def ready_capability_status(path: Path) -> tuple[str, str]:
+    """Return the loop-reported Live and MT5 AutoTrading states for console output."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return "UNKNOWN", "UNKNOWN"
+    if not isinstance(payload, dict):
+        return "UNKNOWN", "UNKNOWN"
+
+    def label(name: str) -> str:
+        value = payload.get(name)
+        return "ENABLED" if value is True else "DISABLED" if value is False else "UNKNOWN"
+
+    return label("liveEnabled"), label("autotradingEnabled")
+
+
 def load_config(path: Path) -> dict[str, Any]:
     values = json.loads(path.read_text(encoding="utf-8"))
     required = ("nodeId", "nodeRole", "repoRoot", "pythonPath", "controlUrl", "writeToken")
@@ -270,7 +286,11 @@ class Supervisor:
                 )
             if item.process is not None and item.ready_file.is_file() and not item.ready_reported:
                 item.ready_reported = True
-                self.log(f"PROCESS_READY account={item.account} role={item.role} pid={item.process.pid}")
+                live_status, autotrading_status = ready_capability_status(item.ready_file)
+                self.log(
+                    f"PROCESS_READY account={item.account} role={item.role} pid={item.process.pid} "
+                    f"live={live_status} autotrading={autotrading_status}"
+                )
             if (
                 item.process is not None
                 and not item.ready_file.is_file()

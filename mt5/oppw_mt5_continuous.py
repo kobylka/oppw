@@ -242,12 +242,15 @@ class OPPWContinuousStrategy(
         else:
             self.log.info("EVENT INSTANCE_ROLE role=PUBLISHER account=%s trading_allowed=false backend_publishing=true", self.account)
         if self.service_ready_file is not None:
+            autotrading_enabled, _ = self.autotrading_status()
             ready_payload = {
                 "account": self.account,
                 "role": self.role,
                 "pid": os.getpid(),
                 "connectedAt": datetime.now(UTC).isoformat(),
                 "build": BUILD_ID,
+                "liveEnabled": bool(self.cfg.live_enabled),
+                "autotradingEnabled": bool(autotrading_enabled),
             }
             temporary_ready_file = self.service_ready_file.with_suffix(
                 self.service_ready_file.suffix + f".{os.getpid()}.tmp"
