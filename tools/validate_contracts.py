@@ -738,6 +738,34 @@ return [
                     + "|".join(provisional_projection)
                 )
 
+            # Regression: an asynchronous market-close acknowledgement has no
+            # immediate deal ticket. The later CLOSED lifecycle event must
+            # repair the provisional snapshot reason (CH rather than UNKNOWN
+            # or the previously installed hard-stop label) without changing
+            # the snapshot-derived close price.
+            http_json("POST", base_url + "events-ingest.php", {
+                "accountKey": "DEMO", "coordination": ingest_payload["coordination"],
+                "events": [{
+                    "time": iso(close_time), "level": "INFO", "name": "EXECUTION_STAGE", "result": True,
+                    "message": "contract late CH lifecycle close",
+                    "details": {
+                        "execution_id": fixture["executionId"], "decision_id": identities["decisionId"],
+                        "position_ticket": fixture["positionTicket"], "stage": "CLOSED",
+                        "reference_price": contract_open, "reason": "CH",
+                    },
+                }],
+            }, token=WRITE_TOKEN, expected=(201,))
+            lifecycle_projection = docker_sql(
+                docker, container,
+                "SELECT exit_reason FROM strategy_trades WHERE strategy_key='DEMO' AND position_ticket="
+                + str(fixture["positionTicket"]),
+                docker_env,
+            )
+            if lifecycle_projection != "CH":
+                raise AssertionError(
+                    f"late lifecycle close reason: expected CH, got {lifecycle_projection}"
+                )
+
             http_json("POST", base_url + "events-ingest.php", {
                 "accountKey": "DEMO", "coordination": ingest_payload["coordination"],
                 "events": [{

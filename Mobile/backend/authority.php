@@ -49,6 +49,27 @@ function oppw_projection_exit_reason(mixed $value): string
     return substr($reason, 0, 100);
 }
 
+/**
+ * Replace only a provisional close label after the executor's lifecycle event
+ * arrives. A snapshot and its executor events use independent publishers, so
+ * the flat snapshot can legitimately be persisted first. Exact EXIT_FILLED
+ * repair remains responsible for prices and returns; this helper repairs only
+ * an otherwise unknown close taxonomy.
+ */
+function oppw_repair_placeholder_closed_trade_reason(PDO $db, string $accountKey, int $positionTicket, mixed $value): void
+{
+    $reason = oppw_projection_exit_reason($value);
+    if ($positionTicket <= 0 || $reason === '' || strtoupper($reason) === 'POSITION_CLOSED') return;
+
+    $repair = $db->prepare(
+        'UPDATE strategy_trades
+            SET exit_reason = ?
+          WHERE strategy_key = ? AND position_ticket = ? AND closed_at IS NOT NULL
+            AND (exit_reason IS NULL OR exit_reason = ? OR exit_reason = ? OR exit_reason = ?)'
+    );
+    $repair->execute([$reason, $accountKey, $positionTicket, '', 'UNKNOWN', 'POSITION_CLOSED']);
+}
+
 function oppw_current_spec_id(PDO $db, string $accountKey): ?string
 {
     $stmt = $db->prepare(
@@ -161,6 +182,19 @@ function oppw_authority_event(
                 $payloadJson, $payloadHash, $receivedAt,
             ]);
             $counts['stages'] += $stmt->rowCount();
+
+            // A close acknowledged without an immediate deal ticket (for
+            // example CH at market close) is finalized asynchronously. Its
+            // CLOSED lifecycle stage may arrive after the publisher's flat
+            // snapshot, which initially has no reliable exit reason.
+            if ($stage === 'CLOSED') {
+                oppw_repair_placeholder_closed_trade_reason(
+                    $db,
+                    $accountKey,
+                    (int)($details['position_ticket'] ?? 0),
+                    $details['reason'] ?? ''
+                );
+            }
 
             if (in_array($stage, ['FILLED', 'EXIT_FILLED'], true) && (float)($details['actual_price'] ?? 0) > 0) {
                 $fillId = hash('sha256', $eventHash . '|fill');
@@ -309,6 +343,14 @@ function oppw_authority_event(
                 substr((string)($details['reason'] ?? ''), 0, 100), $payloadJson, $payloadHash, $receivedAt,
             ]);
             $counts['trades'] += $trade->rowCount();
+            if ($name === 'POSITION_CLOSED') {
+                oppw_repair_placeholder_closed_trade_reason(
+                    $db,
+                    $accountKey,
+                    $ticket,
+                    $details['reason'] ?? ''
+                );
+            }
         }
     }
     return $counts;

@@ -322,6 +322,28 @@ try {
             ? (float)$details['exit']
             : 0.0;
         $eventReason = trim((string)($details['reason'] ?? ''));
+        $lifecycleReason = '';
+        if ($exactExit === null && $eventReason === '') {
+            // The dedicated executor event publisher can reach the backend
+            // before the snapshot publisher. Reuse the persisted lifecycle
+            // close reason instead of recording a false UNKNOWN projection.
+            $closedStageLookup = $db->prepare(
+                'SELECT reason
+                   FROM strategy_execution_stages
+                  WHERE strategy_key = ? AND position_ticket = ? AND stage = ?
+                    AND reason <> ?
+                  ORDER BY occurred_at DESC, id DESC
+                  LIMIT 1'
+            );
+            $closedStageLookup->execute([$accountKey, $ticket, 'CLOSED', '']);
+            $storedClosedStage = $closedStageLookup->fetch();
+            if (is_array($storedClosedStage)) {
+                $candidateReason = oppw_projection_exit_reason($storedClosedStage['reason'] ?? '');
+                if ($candidateReason !== '' && strtoupper($candidateReason) !== 'POSITION_CLOSED') {
+                    $lifecycleReason = $candidateReason;
+                }
+            }
+        }
         $protectionReason = '';
         $protectionPrice = 0.0;
         if ($exactExit === null && ($eventExitPrice <= 0 || $eventReason === '')) {
@@ -347,6 +369,7 @@ try {
             ? oppw_projection_exit_reason($exactExit['reason'] ?? '')
             : $eventReason;
         if ($reason === '') $reason = $eventReason;
+        if ($reason === '') $reason = $lifecycleReason;
         if ($reason === '' && $protectionReason !== '') {
             if (preg_match('/TSL_STOP_([0-9]+(?:\.[0-9]+)?)%/i', $protectionReason, $match)) {
                 $reason = 'TSL_' . rtrim(rtrim($match[1], '0'), '.') . '%';
