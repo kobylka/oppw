@@ -69,6 +69,16 @@ import kotlin.math.min
 
 private data class DrillDown(val title: String, val tradeKeys: List<String>)
 
+internal fun analyticsRollingWeeksInput(filters: AnalyticsFilters, availableWeeks: Int): String =
+    if (filters.allHistory && availableWeeks > 0) availableWeeks.toString() else filters.rollingWeeks.toString()
+
+internal fun analyticsRollingWeeksCanApply(value: String, filters: AnalyticsFilters, availableWeeks: Int): Boolean {
+    val requested = value.toIntOrNull() ?: return false
+    if (requested <= 0) return false
+    val applied = if (filters.allHistory && availableWeeks > 0) availableWeeks else filters.rollingWeeks
+    return requested != applied
+}
+
 @Composable
 fun AnalyticsScreen(state: UiState, onRetry: () -> Unit, onFiltersChanged: (AnalyticsFilters) -> Unit) {
     val analytics = state.analytics
@@ -353,7 +363,9 @@ private fun AnalyticsContent(state: UiState, analytics: AnalyticsResponse, onFil
 @Composable
 private fun FiltersPanel(filters: AnalyticsFilters, analytics: AnalyticsResponse, onFiltersChanged: (AnalyticsFilters) -> Unit) {
     val options = analytics.filterOptions
-    var rollingWeeksText by remember(filters.rollingWeeks, filters.allHistory) { mutableStateOf(filters.rollingWeeks.toString()) }
+    var rollingWeeksText by remember(filters.rollingWeeks, filters.allHistory, options.availableWeeks) {
+        mutableStateOf(analyticsRollingWeeksInput(filters, options.availableWeeks))
+    }
     val requestedRollingWeeks = rollingWeeksText.toIntOrNull()
     AppCard(Modifier.fillMaxWidth()) {
         SectionTitle("Analytics filters", "applied server-side")
@@ -370,18 +382,22 @@ private fun FiltersPanel(filters: AnalyticsFilters, analytics: AnalyticsResponse
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             )
             OutlinedButton(
-                enabled = requestedRollingWeeks != null && requestedRollingWeeks > 0 && (requestedRollingWeeks != filters.rollingWeeks || filters.allHistory),
+                enabled = analyticsRollingWeeksCanApply(rollingWeeksText, filters, options.availableWeeks),
                 onClick = { requestedRollingWeeks?.let { onFiltersChanged(filters.copy(rollingWeeks = it, allHistory = false)) } },
             ) { Text("Apply") }
         }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            "Enter the number of trailing weeks, then tap Apply.",
+            color = TextSecondary,
+            style = MaterialTheme.typography.labelMedium,
+        )
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(5.dp)) {
             Text(
                 when {
                     options.availableWeeks <= 0 -> "No analytics history available"
-                    filters.allHistory -> "Using all available history"
+                    filters.allHistory -> "All ${options.availableWeeks} weeks selected"
                     else -> "Trailing ${options.effectiveRollingWeeks} rolling weeks"
                 },
-                modifier = Modifier.weight(1f),
                 color = TextSecondary,
                 style = MaterialTheme.typography.labelMedium,
             )
@@ -392,10 +408,12 @@ private fun FiltersPanel(filters: AnalyticsFilters, analytics: AnalyticsResponse
                     style = MaterialTheme.typography.labelMedium,
                 )
             }
-            TextButton(
-                enabled = options.availableWeeks > 0 && !filters.allHistory,
-                onClick = { onFiltersChanged(filters.copy(allHistory = true)) },
-            ) { Text(if (filters.allHistory) "All selected" else "All history") }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                OutlinedButton(
+                    enabled = options.availableWeeks > 0 && !filters.allHistory,
+                    onClick = { onFiltersChanged(filters.copy(allHistory = true)) },
+                ) { Text(if (filters.allHistory) "All history selected" else "Show all history") }
+            }
         }
         FilterMenu("Class", filters.tradeClass.ifBlank { "All" }, listOf("") + options.classes) { onFiltersChanged(filters.copy(tradeClass = it.takeUnless { value -> value == "All" }.orEmpty())) }
         TextButton(onClick = { onFiltersChanged(AnalyticsFilters(allHistory = true)) }) { Text("Reset filters") }
