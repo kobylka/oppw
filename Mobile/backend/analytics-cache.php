@@ -242,7 +242,7 @@ function oppw_analytics_segment_read(array $cfg, string $slot, string $expectedK
     }
 }
 
-function oppw_analytics_segment_write(array $cfg, string $slot, string $key, array $rows): bool
+function oppw_analytics_segment_write(array $cfg, string $slot, string $key, array $rows, bool $cleanup = true): bool
 {
     if (!preg_match('/^[a-f0-9]{64}$/', $key) || !array_is_list($rows)) return false;
     try {
@@ -274,7 +274,7 @@ function oppw_analytics_segment_write(array $cfg, string $slot, string $key, arr
         fclose($handle);
     }
     @chmod($path, 0600);
-    oppw_analytics_segment_cleanup($cfg, $path);
+    if ($cleanup) oppw_analytics_segment_cleanup($cfg, $path);
     return $written === strlen($content);
 }
 
@@ -334,7 +334,7 @@ function oppw_analytics_week_segments(
 
 function oppw_analytics_segment_stats(): array
 {
-    return ['hits' => 0, 'misses' => 0, 'liveQueries' => 0, 'cacheRows' => 0, 'databaseRows' => 0];
+    return ['hits' => 0, 'misses' => 0, 'liveQueries' => 0, 'cacheRows' => 0, 'databaseRows' => 0, 'cleanupRuns' => 0];
 }
 
 function oppw_analytics_segmented_rows(
@@ -352,6 +352,7 @@ function oppw_analytics_segmented_rows(
         throw new InvalidArgumentException('Analytics total row limit must be positive');
     }
     $totalRows = 0;
+    $cleanupPending = true;
     $segments = oppw_analytics_week_segments($windowStartUtc, $windowEndUtc, $now);
     foreach ($segments['completed'] as $range) {
         $segmentContext = array_merge($context, [
@@ -370,7 +371,11 @@ function oppw_analytics_segmented_rows(
                 }
             }
             $stats['databaseRows'] += count($rows);
-            oppw_analytics_segment_write($cfg, $identity['slot'], $identity['key'], $rows);
+            oppw_analytics_segment_write($cfg, $identity['slot'], $identity['key'], $rows, $cleanupPending);
+            if ($cleanupPending) {
+                $stats['cleanupRuns']++;
+                $cleanupPending = false;
+            }
         } else {
             $stats['hits']++;
             $stats['cacheRows'] += count($rows);

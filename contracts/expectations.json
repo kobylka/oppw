@@ -38,7 +38,7 @@
   "drawdownEpisodeMinimumSeconds": 86400,
   "drawdownEpisodeMinuteDepthPercent": 10.0,
   "drawdownLatestEpisodeMinuteDepthPercent": 21.5686274510,
-  "authorityStages": 10,
+  "authorityStages": 11,
   "authorityFills": 3,
   "strategyDecisions": 1,
   "strategySpecifications": 1

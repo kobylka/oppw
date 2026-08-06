@@ -131,6 +131,7 @@ object JsonParser {
                 leverages = options.optJSONArray("leverages").toDoubles(), exitReasons = options.optJSONArray("exitReasons").toStrings(),
                 availableWeeks = options.optInt("availableWeeks"), defaultRollingWeeks = options.optInt("defaultRollingWeeks", 4),
                 effectiveRollingWeeks = options.optInt("effectiveRollingWeeks"),
+                windowStart = options.optString("windowStart"), windowEndExclusive = options.optString("windowEndExclusive"),
                 classes = options.optJSONArray("classes").toStrings().ifEmpty { listOf("A", "B", "C", "D") },
             ),
             summary = AnalyticsSummary(
@@ -207,12 +208,31 @@ object JsonParser {
                 )) }
             },
             classProfitContribution = parseTradeClasses(root.optJSONArray("classProfitContribution") ?: JSONArray()),
-            classDistribution = buildList {
-                val values = root.optJSONArray("classDistribution") ?: JSONArray()
-                for (i in 0 until values.length()) values.getJSONObject(i).let { item -> add(ClassDistributionPoint(
-                    year = item.optInt("year"), leverage = item.optDouble("leverage"), tradeClass = item.optString("tradeClass"), trades = item.optInt("trades"),
-                    profit = item.optDouble("profit"), tradeKeys = item.optJSONArray("tradeKeys").toStrings(),
-                )) }
+            classDistributionByYear = buildList {
+                val values = root.optJSONArray("classDistributionByYear")
+                if (values != null) {
+                    for (i in 0 until values.length()) values.getJSONObject(i).let { item -> add(YearClassDistributionPoint(
+                        year = item.optInt("year"), tradeClass = item.optString("tradeClass"), trades = item.optInt("trades"),
+                        profit = item.optDouble("profit"), tradeKeys = item.optJSONArray("tradeKeys").toStrings(),
+                    )) }
+                } else {
+                    val grouped = linkedMapOf<String, YearClassDistributionPoint>()
+                    val legacy = root.optJSONArray("classDistribution") ?: JSONArray()
+                    for (i in 0 until legacy.length()) legacy.getJSONObject(i).let { item ->
+                        val year = item.optInt("year")
+                        val tradeClass = item.optString("tradeClass")
+                        val key = "$year|$tradeClass"
+                        val previous = grouped[key]
+                        grouped[key] = YearClassDistributionPoint(
+                            year = year,
+                            tradeClass = tradeClass,
+                            trades = (previous?.trades ?: 0) + item.optInt("trades"),
+                            profit = (previous?.profit ?: 0.0) + item.optDouble("profit"),
+                            tradeKeys = ((previous?.tradeKeys ?: emptyList()) + item.optJSONArray("tradeKeys").toStrings()).distinct(),
+                        )
+                    }
+                    addAll(grouped.values)
+                }
             },
             drawdown = (root.optJSONObject("drawdown") ?: JSONObject()).let { value -> DrawdownAnalytics(
                 maxDrawdownPercent = value.optDoubleAny("maxDrawdownPercent"),

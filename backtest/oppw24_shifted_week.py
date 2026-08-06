@@ -21,10 +21,19 @@ def date_diff(date_str1, date_str2):
         # Calculate the difference in days
         return (date2 - date1).days
 
-def weekly_trading_day_indices(quote_dates):
-        """Return each quote date's zero-based trading-session index in its ISO week."""
-        indices = {}
-        session_counts = {}
+def shifted_trading_cycle_schedule(quote_dates, entry_weekday):
+        """Build shifted five-session trading cycles.
+
+        entry_weekday uses datetime.weekday(): Monday=0 through Friday=4.
+        Each calendar cycle starts on the selected weekday and ends immediately
+        before the next occurrence of that weekday. The first available trading
+        date in the cycle is the entry date, and the final available trading date
+        is the mandatory timeout date.
+        """
+        if entry_weekday not in range(5):
+                raise ValueError("entry_weekday must be between 0 (Monday) and 4 (Friday)")
+
+        grouped_dates = {}
 
         for date in sorted(quote_dates):
                 date_obj = datetime.strptime(date, "%Y%m%d").date()
@@ -32,13 +41,26 @@ def weekly_trading_day_indices(quote_dates):
                 if date_obj.weekday() > 4:
                         continue
 
-                iso_year, iso_week, _ = date_obj.isocalendar()
-                week_key = (iso_year, iso_week)
-                session_index = session_counts.get(week_key, 0)
-                indices[date] = session_index
-                session_counts[week_key] = session_index + 1
+                days_since_cycle_start = (date_obj.weekday() - entry_weekday) % 7
+                cycle_start = date_obj - timedelta(days=days_since_cycle_start)
+                cycle_key = cycle_start.strftime("%Y%m%d")
+                grouped_dates.setdefault(cycle_key, []).append(date)
 
-        return indices
+        schedule = {}
+
+        for cycle_key, dates in grouped_dates.items():
+                dates = sorted(dates)
+                last_index = len(dates) - 1
+
+                for session_index, date in enumerate(dates):
+                        schedule[date] = {
+                                "cycle_key": cycle_key,
+                                "session_index": session_index,
+                                "is_entry": session_index == 0,
+                                "is_timeout": session_index == last_index,
+                        }
+
+        return schedule
 
 def interpolated_premarket_tpp(
         start_tpp,
@@ -276,17 +298,10 @@ class Sim:
     def sell(self, time, open_price, close_price, open_date, close_date, trade_type, LEVERAGE, debug=False):
                 SL =  (100-50/LEVERAGE)/100
                 
-                granular = int((self.balance/(20/LEVERAGE)/2240))*2240
-                #granular = int((self.balance/(20/LEVERAGE)/2240)+1)*2240
-                #if(round(20/(self.balance/granular), 2) < 3):
-                #    granular = int((self.balance/(20/LEVERAGE)/2240)+2)*2240
-                #if(round(20/(self.balance/granular), 2) < 3):
-                 #   granular = int((self.balance/(20/LEVERAGE)/2240)+3)*2240
-                granular = int((self.balance/1.765/2240))*2240
+                granular = int((self.balance/(20/LEVERAGE)/2240)+1)*2240
+                #granular = int((self.balance/1.765/2240))*2240
                 #if(LEVERAGE == 10):
                     #granular = int((self.balance/1.765/2240))*2240
-                    
-                effective_leverage = round(20/(self.balance/granular), 2)
                     
                 #change = round(close_price/open_price-1,4)
                 change = int((close_price/open_price-1)*100000)/100000
@@ -333,7 +348,7 @@ class Sim:
                 
                 if(debug == True):
                     #print(self.balance)
-                    print(effective_leverage, granular, self.balance,self.trade_no, time,trade_type, open_date, close_date, date_diff(open_date, close_date)+1, change, math.pow(self.balance/self.deposited, 1/self.trade_no), ratio, avg_loss, avg_win)
+                    print(round(20/(self.balance/granular), 2), granular, self.balance,self.trade_no, time,trade_type, open_date, close_date, date_diff(open_date, close_date)+1, change, math.pow(self.balance/self.deposited, 1/self.trade_no), ratio, avg_loss, avg_win)
                 if(change*lev < -0.1): self.lost += granular*20**lev
                 
                 if(self.balance > self.max_equity):
@@ -357,9 +372,9 @@ class Sim:
                 
                 self.returns.append(change*LEVERAGE)
                 
-                if(change < -0.0041):
+                if(change < -0.0035):
                     self.classD += 1
-                elif(change < 0):
+                elif(change == -0.0035):
                     self.classC += 1
                 elif(change < 0.007):
                     self.classB += 1
@@ -395,6 +410,7 @@ class Sim:
         apply_tax=False,
         debug=False,
         plots=False,
+        entry_weekday=0,
     ):
         self.trade_returns = []
         self.daily_equity_points = []
@@ -452,6 +468,7 @@ class Sim:
         self.max_dd_duration = 0
         
         date = ""
+        open_date = ""
         
         open_price = 0
         qqq_open_price = 0
@@ -465,10 +482,10 @@ class Sim:
         thursday_SL = 1-thursday_stop
         friday_SL = 1-friday_stop
 
-        # TPP levels follow the order of actual trading sessions in each ISO
-        # week. For example, when Monday is absent, Tuesday receives tpps[0],
-        # Wednesday tpps[1], and subsequent sessions advance from there.
-        trading_day_indices = weekly_trading_day_indices(self.quotes.keys())
+        # Build shifted cycles. For example, entry_weekday=1 produces
+        # Tuesday -> next Monday cycles. If Tuesday is unavailable, the position
+        # opens on the first later trading session within that same cycle.
+        cycle_schedule = shifted_trading_cycle_schedule(self.quotes.keys(), entry_weekday)
         
         z = 0
         
@@ -481,11 +498,19 @@ class Sim:
 
             if weekday_index > 4: continue
 
-            is_monday = weekday_index == 0
-            is_tuesday = weekday_index == 1
-            is_wednesday = weekday_index == 2
-            is_thursday = weekday_index == 3
-            is_friday = weekday_index == 4
+            cycle = cycle_schedule.get(date)
+            if cycle is None:
+                continue
+
+            trading_day_index = cycle["session_index"]
+            new_week_entry = cycle["is_entry"]
+            timeout_session = cycle["is_timeout"]
+
+            # These preserve the original rule timing but make it relative to
+            # the shifted trading cycle rather than fixed calendar weekdays.
+            is_relative_wednesday = trading_day_index == 2
+            is_relative_thursday = trading_day_index == 3
+            is_relative_friday = timeout_session
 
             quotes = self.quotes[date][stock]
 
@@ -496,15 +521,12 @@ class Sim:
             opon = quotes[934][0]
             close = quotes[1324][3]
 
-            trading_day_index = trading_day_indices[date]
             tpp = tpps[min(trading_day_index, len(tpps) - 1)]
 
             close_price = 0
             close_date = date
             trade_type = ""
             i = 1324
-
-            new_week_entry = (date_diff(prev_date, date) > 1 and weekday_index in (0, 1))
 
             # --------------------------------------------------------
             # Close previous position at the previous session close.
@@ -561,14 +583,9 @@ class Sim:
             else:
                 LEVERAGE = self.leverage
             
-            if(self.prev_open > 0):
-                current_week_change = close/self.prev_open-1
-                if(is_thursday and add_days(date,1) not in self.quotes):
-                    self.prev_full_week_change = current_week_change
-                elif(is_friday):
-                    self.prev_full_week_change = current_week_change
-                elif(is_wednesday and add_days(date,1) not in self.quotes and add_days(date,2) not in self.quotes):
-                    self.prev_full_week_change = current_week_change
+            if self.prev_open > 0 and timeout_session:
+                current_week_change = close / self.prev_open - 1
+                self.prev_full_week_change = current_week_change
 
             SL = (100 - 50 / LEVERAGE) / 100
 
@@ -610,7 +627,7 @@ class Sim:
                         trade_type = "SLPRE"
                         break
 
-                    elif is_thursday and o / open_price < thursday_SL:
+                    elif is_relative_thursday and o / open_price < thursday_SL:
                         close_date = date
                         close_price = o
                         trade_type = "TSL1PRE"
@@ -623,8 +640,6 @@ class Sim:
                         break
                     elif(
                         trading_day_index == 1
-                        and (is_tuesday or is_wednesday)
-                        and date_diff(open_date, date) == 1
                     ):
                         premarket_tpp = interpolated_premarket_tpp(
                             tpps[0],
@@ -687,12 +702,12 @@ class Sim:
                     close_price = opon
                     trade_type = "BEO"
 
-                elif (is_thursday and opon / open_price < thursday_SL):
+                elif (is_relative_thursday and opon / open_price < thursday_SL):
                     close_date = date
                     close_price = opon
                     trade_type = "TSL1"
 
-                elif (is_friday and opon / open_price < friday_SL):
+                elif (is_relative_friday and opon / open_price < friday_SL):
                     close_date = date
                     close_price = opon
                     trade_type = "TSL3"
@@ -719,13 +734,13 @@ class Sim:
                         trade_type = "SL"
                         break
 
-                    elif (is_thursday and l / open_price < thursday_SL):
+                    elif (is_relative_thursday and l / open_price < thursday_SL):
                         close_date = date
                         close_price = open_price * thursday_SL
                         trade_type = "TSL2"
                         break
 
-                    elif (is_friday and l / open_price < friday_SL):
+                    elif (is_relative_friday and l / open_price < friday_SL):
                         close_date = date
                         close_price = open_price * friday_SL
                         trade_type = "TSL4"
@@ -749,13 +764,13 @@ class Sim:
                     trade_type = "CH"
                     
                 #elif (is_wednesday and (close+1) / open_price < thursday_SL):
-                elif (is_wednesday and (close+100000) / open_price < thursday_SL):
+                elif (is_relative_wednesday and (close+100000) / open_price < thursday_SL):
                     i = 1324
                     close_date = date
                     close_price = close
                     trade_type = "TSL0"
 
-                elif is_friday:
+                elif timeout_session:
                     i = 1324
                     close_date = date
                     close_price = close
@@ -764,8 +779,19 @@ class Sim:
             # --------------------------------------------------------
             # Execute selected exit.
             # --------------------------------------------------------
+            
+            if(open_date != ""):
+                if(abs(date_diff(date, open_date)) == 3 and open_price > 0):
+                    close_price = close
+                    self.sell(i, open_price,close_price,open_date,close_date,trade_type,LEVERAGE,debug)
+
+                    open_price = 0
+                    close_price = 0
+                    qqq_open_price = 0
+                    open_date = ""
 
             if close_price > 0 and open_price > 0:
+
                 self.sell(i, open_price,close_price,open_date,close_date,trade_type,LEVERAGE,debug)
 
                 open_price = 0
@@ -802,7 +828,6 @@ class Sim:
         yearlies.append(round(100 * (self.balance / prev_equity - 1), 1))
         
         print(yearlies)
-        print(self.classA, self.classB, self.classC, self.classD)
         #print(TP, int(self.deposited),int(self.balance),round(self.lost/self.balance,3),self.dd)
         #print(start_date, end_date, self.classA, self.classB, self.classC, self.classD, self.cumulative_change, end=" ")
         #print(self.balance, self.max_equity, round(self.balance/self.max_equity, 4), self.deposited)
@@ -900,8 +925,16 @@ if __name__ == "__main__":
     sim_i = Sim()
     
     tpps = [0.007,0.02,0.05,0.05,0.05]
+
+    # Shifted cycle start:
+    # 0 = Monday    -> exits no later than Friday
+    # 1 = Tuesday   -> exits no later than next Monday
+    # 2 = Wednesday -> exits no later than next Tuesday
+    # 3 = Thursday  -> exits no later than next Wednesday
+    # 4 = Friday    -> exits no later than next Thursday
+    ENTRY_WEEKDAY = 4
     print(tpps)
-    result = sim.process(sim_i.quotes, "QQQ","20180413", "20260804", LEVERAGE, tpps, SL, BE, 0.004,0.004, 30000, False,True,True,True)
+    result = sim.process(sim_i.quotes, "QQQ", "20220103", "20260804", LEVERAGE, tpps, SL, BE, 0.004, 0.004, 30000, False, True, True, True, entry_weekday=ENTRY_WEEKDAY)
     print(result)
     
     #1,79216 125

@@ -504,7 +504,7 @@ class Sim:
             trade_type = ""
             i = 1324
 
-            new_week_entry = (date_diff(prev_date, date) > 1 and weekday_index in (0, 1))
+            new_week_entry = is_tuesday
 
             # --------------------------------------------------------
             # Close previous position at the previous session close.
@@ -755,7 +755,7 @@ class Sim:
                     close_price = close
                     trade_type = "TSL0"
 
-                elif is_friday:
+                elif is_monday:
                     i = 1324
                     close_date = date
                     close_price = close
@@ -901,7 +901,7 @@ if __name__ == "__main__":
     
     tpps = [0.007,0.02,0.05,0.05,0.05]
     print(tpps)
-    result = sim.process(sim_i.quotes, "QQQ","20180413", "20260804", LEVERAGE, tpps, SL, BE, 0.004,0.004, 30000, False,True,True,True)
+    result = sim.process(sim_i.quotes, "QQQ","20250106", "20260804", LEVERAGE, tpps, SL, BE, 0.004,0.004, 30000, False,True,True,True)
     print(result)
     
     #1,79216 125

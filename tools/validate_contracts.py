@@ -85,6 +85,7 @@ def http_json(
     expected: tuple[int, ...] = (200,),
     raw_body: bytes | None = None,
     response_headers: dict[str, str] | None = None,
+    timeout_seconds: float = 20,
 ) -> tuple[int, dict[str, Any], str]:
     body = raw_body
     if body is None and payload is not None:
@@ -96,7 +97,7 @@ def http_json(
         headers["Authorization"] = "Bearer " + token
     request = urllib.request.Request(url, data=body, headers=headers, method=method)
     try:
-        response = urllib.request.urlopen(request, timeout=20)
+        response = urllib.request.urlopen(request, timeout=timeout_seconds)
     except urllib.error.HTTPError as error:
         response = error
     status = int(response.status)
@@ -915,10 +916,20 @@ return [
                 raise AssertionError("identical analytics request did not reuse the completed response")
             if cached_analytics_raw != analytics_raw or cached_analytics != analytics:
                 raise AssertionError("cached and uncached analytics responses are not identical")
+            one_week_analytics_url = base_url + "analytics.php?account=DEMO&rolling_weeks=1"
+            _, one_week_analytics, _ = http_json("GET", one_week_analytics_url, token=access_token)
+            expected_window_end = (current_monday + timedelta(weeks=1)).replace(hour=21, minute=0) + timedelta(milliseconds=1)
+            expected_window_start = expected_window_end - timedelta(weeks=1)
+            actual_window_start = datetime.fromisoformat(one_week_analytics["filterOptions"]["windowStart"].replace("Z", "+00:00"))
+            actual_window_end = datetime.fromisoformat(one_week_analytics["filterOptions"]["windowEndExclusive"].replace("Z", "+00:00"))
+            if actual_window_start != expected_window_start.astimezone(timezone.utc) or actual_window_end != expected_window_end.astimezone(timezone.utc):
+                raise AssertionError("analytics rolling window was not the exact trailing seven-day range")
+            if {int(trade["ticket"]) for trade in one_week_analytics["recentTrades"] if trade["closed"]} != {990103, 990104}:
+                raise AssertionError("analytics rolling window included trades outside its trailing seven-day range")
             all_history_headers: dict[str, str] = {}
             _, all_history_analytics, all_history_analytics_raw = http_json(
                 "GET", base_url + "analytics.php?account=DEMO&all_history=1", token=access_token,
-                response_headers=all_history_headers,
+                response_headers=all_history_headers, timeout_seconds=30,
             )
             if not all_history_analytics["filters"].get("allHistory"):
                 raise AssertionError("analytics did not honor the explicit all-history request")
@@ -997,6 +1008,30 @@ return [
                     class_values[trade_class]["averagePreleverageReturnPercent"],
                     float(expected_return), f"analytics class {trade_class} average pre-leverage return",
                 )
+            yearly_distribution = analytics["classDistributionByYear"]
+            if any("leverage" in item for item in yearly_distribution):
+                raise AssertionError("yearly class distribution leaked leverage into its canonical payload")
+            expected_yearly_distribution: dict[tuple[int, str], dict[str, Any]] = {}
+            for trade in analytics["recentTrades"]:
+                if not trade["closed"]:
+                    continue
+                key = (int(str(trade["closedAt"])[:4]), str(trade["tradeClass"]))
+                group = expected_yearly_distribution.setdefault(key, {"trades": 0, "profit": 0.0, "tradeKeys": []})
+                group["trades"] += 1
+                group["profit"] += float(trade["profit"])
+                group["tradeKeys"].append(f"{trade['strategyKey']}:{trade['ticket']}")
+            actual_yearly_distribution = {
+                (int(item["year"]), str(item["tradeClass"])): item for item in yearly_distribution
+            }
+            if set(actual_yearly_distribution) != set(expected_yearly_distribution):
+                raise AssertionError("yearly class distribution did not contain exactly one row per year and class")
+            for key, expected_group in expected_yearly_distribution.items():
+                actual_group = actual_yearly_distribution[key]
+                if int(actual_group["trades"]) != int(expected_group["trades"]):
+                    raise AssertionError(f"yearly class distribution trade count differs for {key}")
+                assert_close(actual_group["profit"], expected_group["profit"], f"yearly class distribution profit {key}")
+                if set(actual_group["tradeKeys"]) != set(expected_group["tradeKeys"]):
+                    raise AssertionError(f"yearly class distribution trade links differ for {key}")
             quality = analytics["executionQuality"]
             if quality["decisionToSend"]["sampleCount"] != 1:
                 raise AssertionError("analytics did not reconstruct the execution lifecycle")

@@ -10,7 +10,7 @@ class AnalyticsParserTest {
             {
               "ok": true,
               "filters": {"rollingWeeks": 4, "allHistory": true},
-              "filterOptions": {"availableWeeks": 82, "effectiveRollingWeeks": 82},
+              "filterOptions": {"availableWeeks": 82, "effectiveRollingWeeks": 82, "windowStart": "2025-01-01T00:00:00Z", "windowEndExclusive": "2026-07-27T10:00:00.001Z"},
               "summary": {
                 "windowCompoundedPreleverageReturnPercent": 0.2889701,
                 "windowCompoundedLeveragedReturnPercent": 1.871,
@@ -38,6 +38,13 @@ class AnalyticsParserTest {
                 "tradeClass": "A",
                 "trades": 1,
                 "averagePreleverageReturnPercent": 1.0
+              }],
+              "classDistributionByYear": [{
+                "year": 2026,
+                "tradeClass": "A",
+                "trades": 2,
+                "profit": 150.0,
+                "tradeKeys": ["DEMO:41", "DEMO:42"]
               }],
               "drawdown": {
                 "sourceGranularity": "DAILY_CLOSE_WITH_MINUTE_LOW",
@@ -103,8 +110,17 @@ class AnalyticsParserTest {
         assertEquals(0.798, analytics.weekly.single().preleverageReturnPercent, 0.000001)
         assertEquals(7.8, analytics.weekly.single().leveragedReturnPercent, 0.000001)
         assertEquals(1.0, analytics.tradeClasses.single().averagePreleverageReturnPercent, 0.000001)
+        with(analytics.classDistributionByYear.single()) {
+            assertEquals(2026, year)
+            assertEquals("A", tradeClass)
+            assertEquals(2, trades)
+            assertEquals(150.0, profit, 0.000001)
+            assertEquals(listOf("DEMO:41", "DEMO:42"), tradeKeys)
+        }
         assertEquals(true, analytics.filters.allHistory)
         assertEquals(82, analytics.filterOptions.effectiveRollingWeeks)
+        assertEquals("2025-01-01T00:00:00Z", analytics.filterOptions.windowStart)
+        assertEquals("2026-07-27T10:00:00.001Z", analytics.filterOptions.windowEndExclusive)
         with(analytics.drawdown) {
             assertEquals("DAILY_CLOSE_WITH_MINUTE_LOW", sourceGranularity)
             assertEquals(true, cashFlowAdjusted)
@@ -120,6 +136,28 @@ class AnalyticsParserTest {
             assertEquals("MINUTE_EQUITY", episodes.single().troughSource)
             assertEquals("2026-07-27T10:00:00Z", series.single().capturedAt)
             assertEquals(listOf("DEMO:42"), series.single().tradeKeys)
+        }
+    }
+
+    @Test
+    fun mergesLegacyLeverageRowsIntoYearAndClassDistribution() {
+        val analytics = JsonParser.parseAnalytics("""
+            {
+              "ok": true,
+              "summary": {},
+              "classDistribution": [
+                {"year": 2026, "leverage": 8, "tradeClass": "C", "trades": 1, "profit": -10, "tradeKeys": ["DEMO:1"]},
+                {"year": 2026, "leverage": 10, "tradeClass": "C", "trades": 2, "profit": 25, "tradeKeys": ["DEMO:2", "DEMO:3"]}
+              ]
+            }
+        """.trimIndent())
+
+        with(analytics.classDistributionByYear.single()) {
+            assertEquals(2026, year)
+            assertEquals("C", tradeClass)
+            assertEquals(3, trades)
+            assertEquals(15.0, profit, 0.000001)
+            assertEquals(listOf("DEMO:1", "DEMO:2", "DEMO:3"), tradeKeys)
         }
     }
 

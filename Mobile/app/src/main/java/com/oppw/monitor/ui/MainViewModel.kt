@@ -173,7 +173,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             selectedAccountKey = accountKey,
             response = null,
             analytics = null,
-            analyticsFilters = AnalyticsFilters(),
+            analyticsFilters = AnalyticsFilters(allHistory = true),
             analyticsError = null,
             error = null,
         )

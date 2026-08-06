@@ -39,6 +39,7 @@ try {
     ), false);
     $assert(count($loaderCalls) === 3, 'cold segmented read did not query two completed weeks and one live range');
     $assert($firstStats['misses'] === 2 && $firstStats['hits'] === 0 && $firstStats['liveQueries'] === 1, 'cold segment statistics are incorrect');
+    $assert($firstStats['cleanupRuns'] === 1, 'one segmented read cleaned the cache directory more than once');
 
     $loaderCalls = [];
     $secondStats = oppw_analytics_segment_stats();
@@ -84,4 +85,4 @@ try {
     }
 }
 
-echo "ANALYTICS SEGMENT TESTS PASSED cases=15\n";
+echo "ANALYTICS SEGMENT TESTS PASSED cases=16\n";

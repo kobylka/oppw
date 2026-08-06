@@ -451,6 +451,8 @@ data class AnalyticsFilterOptions(
     val availableWeeks: Int = 0,
     val defaultRollingWeeks: Int = 4,
     val effectiveRollingWeeks: Int = 0,
+    val windowStart: String = "",
+    val windowEndExclusive: String = "",
     val classes: List<String> = listOf("A", "B", "C", "D"),
 )
 
@@ -475,15 +477,6 @@ data class ConfidenceInterval(
     val tradeKeys: List<String>,
 )
 
-data class ClassDistributionPoint(
-    val year: Int,
-    val leverage: Double,
-    val tradeClass: String,
-    val trades: Int,
-    val profit: Double,
-    val tradeKeys: List<String>,
-)
-
 data class DrawdownPoint(
     val index: Int,
     val tradeKey: String,
@@ -496,6 +489,14 @@ data class DrawdownPoint(
     val drawdownCurrency: Double = 0.0,
     val tradeKeys: List<String> = emptyList(),
     val sourceGranularity: String = "",
+)
+
+data class YearClassDistributionPoint(
+    val year: Int,
+    val tradeClass: String,
+    val trades: Int,
+    val profit: Double,
+    val tradeKeys: List<String>,
 )
 
 data class DrawdownEpisodeAnalytics(
@@ -638,7 +639,7 @@ data class AnalyticsResponse(
     val rolling20: List<RollingRatioPoint> = emptyList(),
     val confidenceIntervals: List<ConfidenceInterval> = emptyList(),
     val classProfitContribution: List<TradeClassAnalytics> = emptyList(),
-    val classDistribution: List<ClassDistributionPoint> = emptyList(),
+    val classDistributionByYear: List<YearClassDistributionPoint> = emptyList(),
     val drawdown: DrawdownAnalytics = DrawdownAnalytics(),
     val parameterComparison: List<ParameterComparison> = emptyList(),
     val benchmark: BenchmarkComparison = BenchmarkComparison(),
@@ -657,7 +658,7 @@ data class UiState(
     val selectedAccountKey: String? = null,
     val response: MonitorResponse? = null,
     val analytics: AnalyticsResponse? = null,
-    val analyticsFilters: AnalyticsFilters = AnalyticsFilters(),
+    val analyticsFilters: AnalyticsFilters = AnalyticsFilters(allHistory = true),
     val analyticsLoading: Boolean = false,
     val analyticsError: String? = null,
     val error: String? = null,

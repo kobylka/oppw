@@ -219,10 +219,10 @@ private fun AnalyticsContent(state: UiState, analytics: AnalyticsResponse, onFil
         }
         item {
             AppCard(Modifier.fillMaxWidth()) {
-                SectionTitle("Class distribution", "year × leverage")
-                analytics.classDistribution.sortedWith(compareByDescending<com.oppw.monitor.data.ClassDistributionPoint> { it.year }.thenBy { it.leverage }.thenBy { it.tradeClass }).forEach { value ->
+                SectionTitle("Class distribution", "year × class")
+                analytics.classDistributionByYear.sortedWith(compareByDescending<com.oppw.monitor.data.YearClassDistributionPoint> { it.year }.thenBy { it.tradeClass }).forEach { value ->
                     MetricLink(
-                        "${value.year} · ${formatLeverage(value.leverage)} · Class ${value.tradeClass}",
+                        "${value.year} · Class ${value.tradeClass}",
                         "${value.trades} trades · ${money(value.profit, currency)}",
                         value.tradeKeys,
                         openDrillDown,
@@ -378,20 +378,27 @@ private fun FiltersPanel(filters: AnalyticsFilters, analytics: AnalyticsResponse
             Text(
                 when {
                     options.availableWeeks <= 0 -> "No analytics history available"
-                    filters.allHistory -> "Using all ${options.availableWeeks} available calendar weeks"
-                    else -> "Using ${options.effectiveRollingWeeks} of ${options.availableWeeks} available calendar weeks"
+                    filters.allHistory -> "Using all available history"
+                    else -> "Trailing ${options.effectiveRollingWeeks} rolling weeks"
                 },
                 modifier = Modifier.weight(1f),
                 color = TextSecondary,
                 style = MaterialTheme.typography.labelMedium,
             )
+            if (options.windowStart.isNotBlank() && options.windowEndExclusive.isNotBlank()) {
+                Text(
+                    "${shortDateTime(options.windowStart)} to ${shortDateTime(options.windowEndExclusive)} (latest observation)",
+                    color = TextSecondary,
+                    style = MaterialTheme.typography.labelMedium,
+                )
+            }
             TextButton(
                 enabled = options.availableWeeks > 0 && !filters.allHistory,
                 onClick = { onFiltersChanged(filters.copy(allHistory = true)) },
             ) { Text(if (filters.allHistory) "All selected" else "All history") }
         }
         FilterMenu("Class", filters.tradeClass.ifBlank { "All" }, listOf("") + options.classes) { onFiltersChanged(filters.copy(tradeClass = it.takeUnless { value -> value == "All" }.orEmpty())) }
-        TextButton(onClick = { onFiltersChanged(AnalyticsFilters()) }) { Text("Reset filters") }
+        TextButton(onClick = { onFiltersChanged(AnalyticsFilters(allHistory = true)) }) { Text("Reset filters") }
     }
 }
 

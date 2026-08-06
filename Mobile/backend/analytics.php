@@ -31,7 +31,6 @@ function longest_streak(array $profits,bool $wins): int { $best=0;$run=0;foreach
 function longest_streak_trades(array $trades,bool $wins): array { $best=[];$run=[];foreach($trades as $trade){$match=$wins?(float)$trade['profit']>0:(float)$trade['profit']<0;if($match){$run[]=$trade;if(count($run)>count($best))$best=$run;}else{$run=[];}}return $best; }
 function trade_class_v13(float $returnPercent,string $reason): string { if($returnPercent>=0.7)return 'A';if($returnPercent>=0.0)return 'B';$normalized=strtoupper(str_replace('-','_',trim($reason)));if(str_starts_with($normalized,'TSL')||in_array($normalized,['BE','BH','BEO','BEPRE','BREAK_EVEN','BREAK_EVEN_EXIT'],true)||str_contains($normalized,'BREAK_EVEN'))return 'C';return 'D'; }
 function warsaw_day(string $value): string { try{return (new DateTimeImmutable($value,new DateTimeZone('UTC')))->setTimezone(new DateTimeZone('Europe/Warsaw'))->format('Y-m-d');}catch(Throwable){return substr($value,0,10);} }
-function warsaw_week_start(string $value): ?DateTimeImmutable { try{$local=(new DateTimeImmutable($value,new DateTimeZone('UTC')))->setTimezone(new DateTimeZone('Europe/Warsaw'))->setTime(0,0,0,0);return $local->modify('monday this week');}catch(Throwable){return null;} }
 
 $allowedStmt=$db->prepare('SELECT a.account_key,a.display_name,a.account_type FROM monitor_device_accounts da JOIN monitor_accounts a ON a.account_key=da.account_key WHERE da.device_id=? AND a.enabled=TRUE ORDER BY a.is_default DESC,a.sort_order,a.display_name');
 $allowedStmt->execute([$session['device_id']]);
@@ -58,7 +57,7 @@ if(strlen($leverage)>32||strlen($exitReason)>100||strlen($class)>1)json_response
 $cacheConfig=config();$cacheIdentity=null;$cacheStatus='BYPASS';
 try{
     $cacheContext=[
-        'implementation'=>'analytics-response-v1',
+        'implementation'=>'analytics-response-v3',
         'database'=>hash('sha256',(string)$cacheConfig['dsn']),
         'deviceId'=>(string)$session['device_id'],
         'allowedAccounts'=>array_values(array_map(fn($row)=>['key'=>(string)$row['account_key'],'label'=>(string)$row['display_name'],'type'=>(string)$row['account_type']],$allowed)),
@@ -86,17 +85,23 @@ $tradeBoundsStmt=$db->prepare($tradeBoundsSql);$tradeBoundsStmt->execute($accoun
 $equityBoundsSql="SELECT MIN(first_activity_at) AS first_activity_at,MAX(latest_activity_at) AS latest_activity_at FROM (SELECT MIN(captured_minute) AS first_activity_at,MAX(captured_minute) AS latest_activity_at FROM strategy_equity_points WHERE strategy_key IN ($placeholders) UNION ALL SELECT MIN(first_captured_at) AS first_activity_at,MAX(last_captured_at) AS latest_activity_at FROM strategy_equity_daily WHERE strategy_key IN ($placeholders)) equity_activity";
 $equityBoundsStmt=$db->prepare($equityBoundsSql);$equityBoundsStmt->execute(array_merge($accountKeys,$accountKeys));$equityBounds=$equityBoundsStmt->fetch()?:[];
 $activityTimes=[];foreach([$tradeBounds,$equityBounds] as $bounds)foreach(['first_activity_at','latest_activity_at'] as $field)if(!empty($bounds[$field]))$activityTimes[]=(string)$bounds[$field];
-$weekStarts=[];foreach($activityTimes as $activityAt){$week=warsaw_week_start((string)$activityAt);if($week!==null)$weekStarts[$week->format('Y-m-d')]=$week;}ksort($weekStarts);
-$firstWeek=$weekStarts?reset($weekStarts):null;$latestWeek=$weekStarts?end($weekStarts):null;$availableWeeks=0;
-if($firstWeek instanceof DateTimeImmutable&&$latestWeek instanceof DateTimeImmutable){$firstDate=new DateTimeImmutable($firstWeek->format('Y-m-d'),new DateTimeZone('UTC'));$latestDate=new DateTimeImmutable($latestWeek->format('Y-m-d'),new DateTimeZone('UTC'));$availableWeeks=max(1,intdiv((int)$firstDate->diff($latestDate)->days,7)+1);}
-$effectiveRollingWeeks=$availableWeeks>0?($allHistory?$availableWeeks:min((int)$requestedRollingWeeks,$availableWeeks)):0;$windowStartUtc=null;$windowEndUtc=null;
-if($latestWeek instanceof DateTimeImmutable&&$effectiveRollingWeeks>0){$windowStartUtc=$latestWeek->modify('-'.($effectiveRollingWeeks-1).' weeks')->setTimezone(new DateTimeZone('UTC'));$windowEndUtc=$latestWeek->modify('+1 week')->setTimezone(new DateTimeZone('UTC'));}
+$firstActivityUtc=null;$latestActivityUtc=null;$utc=new DateTimeZone('UTC');
+foreach($activityTimes as $activityAt){try{$activityUtc=(new DateTimeImmutable($activityAt,$utc))->setTimezone($utc);if($firstActivityUtc===null||$activityUtc<$firstActivityUtc)$firstActivityUtc=$activityUtc;if($latestActivityUtc===null||$activityUtc>$latestActivityUtc)$latestActivityUtc=$activityUtc;}catch(Throwable){}}
+$availableWeeks=0;$effectiveRollingWeeks=0;$windowStartUtc=null;$windowEndUtc=null;
+if($firstActivityUtc!==null&&$latestActivityUtc!==null){
+    // MySQL timestamps have millisecond precision; the exclusive end includes the latest stored observation.
+    $windowEndUtc=$latestActivityUtc->modify('+1 millisecond');
+    $availableWeeks=max(1,(int)ceil((((float)$windowEndUtc->format('U.u'))-((float)$firstActivityUtc->format('U.u')))/(7*24*60*60)));
+    $effectiveRollingWeeks=$allHistory?$availableWeeks:min((int)$requestedRollingWeeks,$availableWeeks);
+    $windowStartUtc=$allHistory?$firstActivityUtc:$windowEndUtc->modify('-'.$effectiveRollingWeeks.' weeks');
+    if($windowStartUtc<$firstActivityUtc)$windowStartUtc=$firstActivityUtc;
+}
 $activeOptionRows=[];
 if($windowStartUtc!==null&&$windowEndUtc!==null){$optionSql="SELECT DISTINCT ROUND(COALESCE(entry_leverage,0),3) AS entry_leverage,exit_reason FROM strategy_trades WHERE strategy_key IN ($placeholders) AND COALESCE(closed_at,opened_at)>=? AND COALESCE(closed_at,opened_at)<? LIMIT 501";$optionStmt=$db->prepare($optionSql);$optionStmt->execute(array_merge($accountKeys,[mysql_datetime($windowStartUtc),mysql_datetime($windowEndUtc)]));$activeOptionRows=$optionStmt->fetchAll();if(count($activeOptionRows)>500)json_response(['ok'=>false,'error'=>'Analytics filter cardinality exceeds the safe limit'],503);}
 $queryWindowEndUtc=$windowEndUtc??utc_now()->modify('+1 second');$queryWindowStartUtc=$windowStartUtc??$queryWindowEndUtc->modify('-80 weeks');
 $segmentStats=oppw_analytics_segment_stats();
 $segmentContext=[
-    'implementation'=>'analytics-input-v1',
+    'implementation'=>'analytics-input-v2',
     'database'=>hash('sha256',(string)$cacheConfig['dsn']),
     'accountKeys'=>array_values($accountKeys),
 ];
@@ -187,6 +192,9 @@ $cumulative=0.0;foreach($classGroups as &$group){$cumulative+=$group['profit'];$
 $classDistribution=[];
 foreach($closed as $trade){$distributionKey=substr($trade['closedAt'],0,4).'|'.($trade['entryLeverage']?:0).'|'.$trade['tradeClass'];if(!isset($classDistribution[$distributionKey]))$classDistribution[$distributionKey]=['year'=>(int)substr($trade['closedAt'],0,4),'leverage'=>$trade['entryLeverage'],'tradeClass'=>$trade['tradeClass'],'trades'=>0,'profit'=>0.0,'tradeKeys'=>[]];$classDistribution[$distributionKey]['trades']++;$classDistribution[$distributionKey]['profit']+=$trade['profit'];$classDistribution[$distributionKey]['tradeKeys'][]=trade_key($trade);}
 $classDistribution=array_values($classDistribution);
+$classDistributionByYear=[];
+foreach($closed as $trade){$distributionKey=substr($trade['closedAt'],0,4).'|'.$trade['tradeClass'];if(!isset($classDistributionByYear[$distributionKey]))$classDistributionByYear[$distributionKey]=['year'=>(int)substr($trade['closedAt'],0,4),'tradeClass'=>$trade['tradeClass'],'trades'=>0,'profit'=>0.0,'tradeKeys'=>[]];$classDistributionByYear[$distributionKey]['trades']++;$classDistributionByYear[$distributionKey]['profit']+=$trade['profit'];$classDistributionByYear[$distributionKey]['tradeKeys'][]=trade_key($trade);}
+$classDistributionByYear=array_values($classDistributionByYear);
 
 $exitReasons=[];$exitGroups=[];foreach($closed as $trade){$key=$trade['exitReason']?:'Unknown';$exitGroups[$key][]=$trade;}
 foreach($exitGroups as $reason=>$group){$exitReasons[]=['reason'=>$reason,'trades'=>count($group),'winRate'=>count(array_filter($group,fn($trade)=>$trade['profit']>0))/count($group)*100,'profit'=>array_sum(array_column($group,'profit')),'averageProfit'=>avg_values(array_column($group,'profit')),'averageMfePoints'=>avg_values(array_column($group,'mfePoints')),'averageMaePoints'=>avg_values(array_column($group,'maePoints')),'tradeKeys'=>metric_sample($group)];$metricSamples['exit:'.$reason]=metric_sample($group);}
@@ -237,7 +245,7 @@ foreach($lifecycleGroups as $lifecycle){
     foreach($lifecycle['stages'] as $stage){$stageName=$stage['stage'];if($stage['retcode']!==null&&in_array($stageName,['CHECKED','ACCEPTED','EXIT_CHECKED','EXIT_ACCEPTED'],true)){$retcode=(string)$stage['retcode'];$retcodes[$retcode]=($retcodes[$retcode]??0)+1;if($lifecycleTradeKey!=='')$retcodeTradeKeys[$retcode][]=$lifecycleTradeKey;}if(in_array($stageName,['CHECKED','EXIT_CHECKED'],true))$attemptCount++;if(in_array($stageName,['SENT','EXIT_SENT'],true)){$sentCount++;if($lifecycleTradeKey!=='')$sentTradeKeys[]=$lifecycleTradeKey;if($stage['fillingMode']!==''){$mode=$stage['fillingMode'];$filling[$mode]=($filling[$mode]??0)+1;if($lifecycleTradeKey!=='')$fillingTradeKeys[$mode][]=$lifecycleTradeKey;}}if($stageName==='MISSED_WINDOW'){$missed++;if($lifecycleTradeKey!=='')$missedTradeKeys[]=$lifecycleTradeKey;}if($stage['result']===false&&in_array($stageName,['CHECKED','ACCEPTED','EXIT_CHECKED','EXIT_ACCEPTED'],true)){$rejections++;if($lifecycleTradeKey!=='')$rejectionTradeKeys[]=$lifecycleTradeKey;}}
     $diff=function(string $a,string $b)use($stageMap):?float{$first=isset($stageMap[$a])?stage_millis($stageMap[$a]['eventAt']):null;$second=isset($stageMap[$b])?stage_millis($stageMap[$b]['eventAt']):null;return $first!==null&&$second!==null?max(0.0,$second-$first):null;};
     $reportedLatency=function(string $stage)use($stageMap):?float{if(!isset($stageMap[$stage]))return null;$value=$stageMap[$stage]['latencyMs'];return $value!==null&&is_finite((float)$value)&&((float)$value)>=0.0?(float)$value:null;};
-    $decisionToSend=$diff('DECISION','SENT');$ack=$reportedLatency('ACCEPTED')??$diff('SENT','ACCEPTED');$fill=$reportedLatency('FILLED')??$diff('SENT','FILLED');$protection=$diff('FILLED','PROTECTED');$publication=$diff(isset($stageMap['CLOSED'])?'CLOSED':'FILLED','PUBLISHED');$mobile=$reportedLatency('MOBILE_RECEIPT')??$diff('PUBLISHED','MOBILE_RECEIPT');
+    $decisionToSend=$diff('DECISION','SENT');$ack=$reportedLatency('ACCEPTED')??$diff('SENT','ACCEPTED');$fill=$reportedLatency('FILLED')??$diff('SENT','FILLED');$protection=$diff('FILLED','PROTECTED');$publication=$diff(isset($stageMap['FILLED'])?'FILLED':'CLOSED','PUBLISHED');$mobile=$reportedLatency('MOBILE_RECEIPT')??$diff('PUBLISHED','MOBILE_RECEIPT');
     if($decisionToSend!==null){$decisionLatencies[]=$decisionToSend;if($lifecycleTradeKey!=='')$decisionLatencyKeys[]=$lifecycleTradeKey;}
     if($ack!==null){$ackLatencies[]=$ack;if($lifecycleTradeKey!=='')$ackLatencyKeys[]=$lifecycleTradeKey;}
     if($fill!==null){$fillLatencies[]=$fill;if($lifecycleTradeKey!=='')$fillLatencyKeys[]=$lifecycleTradeKey;}
@@ -313,7 +321,7 @@ $summary=[
 
 $filterOptions=['accounts'=>array_values(array_map(fn($row)=>['key'=>(string)$row['account_key'],'label'=>(string)$row['display_name'],'type'=>(string)$row['account_type']],$allowed)),'leverages'=>array_values(array_unique(array_filter(array_map(fn($row)=>n($row['entry_leverage']??0),$activeOptionRows),fn($value)=>$value>0))),'exitReasons'=>array_values(array_unique(array_filter(array_map(fn($row)=>(string)($row['exit_reason']??''),$activeOptionRows),fn($value)=>$value!==''))),'availableWeeks'=>$availableWeeks,'defaultRollingWeeks'=>min(4,$availableWeeks),'effectiveRollingWeeks'=>$effectiveRollingWeeks,'windowStart'=>$windowStartUtc?atom_datetime($windowStartUtc):'','windowEndExclusive'=>$windowEndUtc?atom_datetime($windowEndUtc):'','classes'=>['A','B','C','D']];
 sort($filterOptions['leverages']);sort($filterOptions['exitReasons']);
-$response=['ok'=>true,'generatedAt'=>atom_datetime(new DateTimeImmutable('now',new DateTimeZone('UTC'))),'filters'=>['scope'=>$scope,'account'=>$requested,'leverage'=>$leverage,'exitReason'=>$exitReason,'rollingWeeks'=>(int)$requestedRollingWeeks,'allHistory'=>(bool)$allHistory,'tradeClass'=>$class],'filterOptions'=>$filterOptions,'summary'=>$summary,'exitReasons'=>$exitReasons,'weekly'=>$weekly,'recentTrades'=>$recent,'tradeClasses'=>$classGroups,'tradeDistribution'=>['sortOrder'=>'BEST_TO_WORST','meanReturnPercent'=>avg_values(array_column($closed,'preleverageReturnPercent')),'trades'=>$distributionPoints],'rolling20'=>$rolling,'confidenceIntervals'=>$confidence,'classProfitContribution'=>$classGroups,'classDistribution'=>$classDistribution,'drawdown'=>$drawdown,'parameterComparison'=>$buildComparison,'benchmark'=>$benchmark,'executionQuality'=>$executionQuality,'metricSamples'=>$metricSamples];
+$response=['ok'=>true,'generatedAt'=>atom_datetime(new DateTimeImmutable('now',new DateTimeZone('UTC'))),'filters'=>['scope'=>$scope,'account'=>$requested,'leverage'=>$leverage,'exitReason'=>$exitReason,'rollingWeeks'=>(int)$requestedRollingWeeks,'allHistory'=>(bool)$allHistory,'tradeClass'=>$class],'filterOptions'=>$filterOptions,'summary'=>$summary,'exitReasons'=>$exitReasons,'weekly'=>$weekly,'recentTrades'=>$recent,'tradeClasses'=>$classGroups,'tradeDistribution'=>['sortOrder'=>'BEST_TO_WORST','meanReturnPercent'=>avg_values(array_column($closed,'preleverageReturnPercent')),'trades'=>$distributionPoints],'rolling20'=>$rolling,'confidenceIntervals'=>$confidence,'classProfitContribution'=>$classGroups,'classDistribution'=>$classDistribution,'classDistributionByYear'=>$classDistributionByYear,'drawdown'=>$drawdown,'parameterComparison'=>$buildComparison,'benchmark'=>$benchmark,'executionQuality'=>$executionQuality,'metricSamples'=>$metricSamples];
 $encodedResponse=json_encode($response,JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR);
 if($cacheIdentity!==null)oppw_analytics_cache_write($cacheConfig,$cacheIdentity['slot'],$cacheIdentity['key'],$encodedResponse);
 header('X-OPPW-Analytics-Cache: '.$cacheStatus);

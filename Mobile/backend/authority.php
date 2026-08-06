@@ -52,11 +52,18 @@ function oppw_projection_exit_reason(mixed $value): string
 /**
  * Replace only a provisional close label after the executor's lifecycle event
  * arrives. A snapshot and its executor events use independent publishers, so
- * the flat snapshot can legitimately be persisted first. Exact EXIT_FILLED
- * repair remains responsible for prices and returns; this helper repairs only
- * an otherwise unknown close taxonomy.
+ * the flat snapshot can legitimately be persisted first. A stale installed
+ * hard stop can also produce a provisional SL label before the executor
+ * confirms a manual-close reason. Exact EXIT_FILLED repair remains responsible
+ * for prices and returns; this helper repairs only provisional close taxonomy.
  */
-function oppw_repair_placeholder_closed_trade_reason(PDO $db, string $accountKey, int $positionTicket, mixed $value): void
+function oppw_repair_placeholder_closed_trade_reason(
+    PDO $db,
+    string $accountKey,
+    int $positionTicket,
+    mixed $value,
+    bool $replaceProvisionalSl = false
+): void
 {
     $reason = oppw_projection_exit_reason($value);
     if ($positionTicket <= 0 || $reason === '' || strtoupper($reason) === 'POSITION_CLOSED') return;
@@ -65,9 +72,15 @@ function oppw_repair_placeholder_closed_trade_reason(PDO $db, string $accountKey
         'UPDATE strategy_trades
             SET exit_reason = ?
           WHERE strategy_key = ? AND position_ticket = ? AND closed_at IS NOT NULL
-            AND (exit_reason IS NULL OR exit_reason = ? OR exit_reason = ? OR exit_reason = ?)'
+            AND (
+                exit_reason IS NULL OR exit_reason = ? OR exit_reason = ? OR exit_reason = ?
+                OR (? = 1 AND exit_reason = ?)
+            )'
     );
-    $repair->execute([$reason, $accountKey, $positionTicket, '', 'UNKNOWN', 'POSITION_CLOSED']);
+    $repair->execute([
+        $reason, $accountKey, $positionTicket, '', 'UNKNOWN', 'POSITION_CLOSED',
+        $replaceProvisionalSl ? 1 : 0, 'SL',
+    ]);
 }
 
 function oppw_current_spec_id(PDO $db, string $accountKey): ?string
@@ -192,7 +205,8 @@ function oppw_authority_event(
                     $db,
                     $accountKey,
                     (int)($details['position_ticket'] ?? 0),
-                    $details['reason'] ?? ''
+                    $details['reason'] ?? '',
+                    true
                 );
             }
 
