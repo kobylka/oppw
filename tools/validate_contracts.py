@@ -926,6 +926,33 @@ return [
                 raise AssertionError("analytics rolling window was not the exact trailing seven-day range")
             if {int(trade["ticket"]) for trade in one_week_analytics["recentTrades"] if trade["closed"]} != {990103, 990104}:
                 raise AssertionError("analytics rolling window included trades outside its trailing seven-day range")
+            historical_end_date = (current_monday + timedelta(weeks=-1, days=4)).date().isoformat()
+            _, historical_analytics, historical_analytics_raw = http_json(
+                "GET",
+                base_url + "analytics.php?account=DEMO&rolling_weeks=1&window_end_date=" + historical_end_date,
+                token=access_token,
+            )
+            historical_expected_end = (
+                current_monday + timedelta(weeks=-1, days=5)
+            ).replace(hour=0, minute=0, second=0, microsecond=0)
+            historical_expected_start = historical_expected_end - timedelta(weeks=1)
+            historical_actual_start = datetime.fromisoformat(
+                historical_analytics["filterOptions"]["windowStart"].replace("Z", "+00:00")
+            )
+            historical_actual_end = datetime.fromisoformat(
+                historical_analytics["filterOptions"]["windowEndExclusive"].replace("Z", "+00:00")
+            )
+            if historical_actual_start != historical_expected_start.astimezone(timezone.utc) \
+                    or historical_actual_end != historical_expected_end.astimezone(timezone.utc):
+                raise AssertionError("analytics did not move the fixed one-week window to the selected date")
+            if historical_analytics["filters"].get("windowEndDate") != historical_end_date:
+                raise AssertionError("analytics did not echo the selected rolling-window end date")
+            if {int(trade["ticket"]) for trade in historical_analytics["recentTrades"] if trade["closed"]} != {990101, 990102}:
+                raise AssertionError("historical rolling window returned trades from the latest week")
+            http_json(
+                "GET", base_url + "analytics.php?account=DEMO&rolling_weeks=1&window_end_date=2026-02-30",
+                token=access_token, expected=(400,),
+            )
             all_history_headers: dict[str, str] = {}
             _, all_history_analytics, all_history_analytics_raw = http_json(
                 "GET", base_url + "analytics.php?account=DEMO&all_history=1", token=access_token,
@@ -1071,6 +1098,7 @@ return [
             (output / "status.json").write_text(status_raw, encoding="utf-8")
             (output / "analytics.json").write_text(analytics_raw, encoding="utf-8")
             (output / "analytics-all-history.json").write_text(all_history_analytics_raw, encoding="utf-8")
+            (output / "analytics-historical-window.json").write_text(historical_analytics_raw, encoding="utf-8")
             (output / "service-control.json").write_text(service_control_raw, encoding="utf-8")
             android_env = os.environ.copy()
             android_env["OPPW_CONTRACT_OUTPUT_DIR"] = str(output)

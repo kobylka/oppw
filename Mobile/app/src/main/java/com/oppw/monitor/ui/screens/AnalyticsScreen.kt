@@ -16,14 +16,19 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SelectableDates
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -63,6 +68,9 @@ import com.oppw.monitor.util.percent
 import com.oppw.monitor.util.price
 import com.oppw.monitor.util.shortDateTime
 import com.oppw.monitor.util.unsignedPercent
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneOffset
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -78,6 +86,13 @@ internal fun analyticsRollingWeeksCanApply(value: String, filters: AnalyticsFilt
     val applied = if (filters.allHistory && availableWeeks > 0) availableWeeks else filters.rollingWeeks
     return requested != applied
 }
+
+internal fun analyticsDatePickerMillis(value: String): Long? = runCatching {
+    LocalDate.parse(value).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+}.getOrNull()
+
+internal fun analyticsDatePickerValue(value: Long): String =
+    Instant.ofEpochMilli(value).atZone(ZoneOffset.UTC).toLocalDate().toString()
 
 @Composable
 fun AnalyticsScreen(state: UiState, onRetry: () -> Unit, onFiltersChanged: (AnalyticsFilters) -> Unit) {
@@ -360,12 +375,14 @@ private fun AnalyticsContent(state: UiState, analytics: AnalyticsResponse, onFil
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun FiltersPanel(filters: AnalyticsFilters, analytics: AnalyticsResponse, onFiltersChanged: (AnalyticsFilters) -> Unit) {
     val options = analytics.filterOptions
     var rollingWeeksText by remember(filters.rollingWeeks, filters.allHistory, options.availableWeeks) {
         mutableStateOf(analyticsRollingWeeksInput(filters, options.availableWeeks))
     }
+    var showWindowEndPicker by remember { mutableStateOf(false) }
     val requestedRollingWeeks = rollingWeeksText.toIntOrNull()
     AppCard(Modifier.fillMaxWidth()) {
         SectionTitle("Analytics filters", "applied server-side")
@@ -391,12 +408,33 @@ private fun FiltersPanel(filters: AnalyticsFilters, analytics: AnalyticsResponse
             color = TextSecondary,
             style = MaterialTheme.typography.labelMedium,
         )
+        Text("Window ending", color = TextSecondary)
+        OutlinedButton(
+            enabled = options.availableWeeks > 0 && requestedRollingWeeks != null && requestedRollingWeeks > 0,
+            modifier = Modifier.fillMaxWidth(),
+            onClick = { showWindowEndPicker = true },
+        ) {
+            Text(filters.windowEndDate.ifBlank { "Latest available observation" })
+        }
+        Text(
+            "Choose the last included Warsaw date, or keep Latest for the newest ${requestedRollingWeeks ?: "N"}-week window.",
+            color = TextSecondary,
+            style = MaterialTheme.typography.labelMedium,
+        )
+        if (!filters.allHistory && filters.windowEndDate.isNotBlank()) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = { onFiltersChanged(filters.copy(windowEndDate = "")) }) {
+                    Text("Use latest observation")
+                }
+            }
+        }
         Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(5.dp)) {
             Text(
                 when {
                     options.availableWeeks <= 0 -> "No analytics history available"
                     filters.allHistory -> "All ${options.availableWeeks} weeks selected"
-                    else -> "Trailing ${options.effectiveRollingWeeks} rolling weeks"
+                    filters.windowEndDate.isBlank() -> "Latest ${options.effectiveRollingWeeks}-week window"
+                    else -> "${options.effectiveRollingWeeks}-week window through ${filters.windowEndDate}"
                 },
                 color = TextSecondary,
                 style = MaterialTheme.typography.labelMedium,
@@ -411,12 +449,74 @@ private fun FiltersPanel(filters: AnalyticsFilters, analytics: AnalyticsResponse
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 OutlinedButton(
                     enabled = options.availableWeeks > 0 && !filters.allHistory,
-                    onClick = { onFiltersChanged(filters.copy(allHistory = true)) },
+                    onClick = { onFiltersChanged(filters.copy(allHistory = true, windowEndDate = "")) },
                 ) { Text(if (filters.allHistory) "All history selected" else "Show all history") }
             }
         }
         FilterMenu("Class", filters.tradeClass.ifBlank { "All" }, listOf("") + options.classes) { onFiltersChanged(filters.copy(tradeClass = it.takeUnless { value -> value == "All" }.orEmpty())) }
         TextButton(onClick = { onFiltersChanged(AnalyticsFilters(allHistory = true)) }) { Text("Reset filters") }
+    }
+    if (showWindowEndPicker) {
+        AnalyticsWindowEndDateDialog(
+            selectedDate = filters.windowEndDate,
+            availableStartDate = options.availableStartDate,
+            availableEndDate = options.availableEndDate,
+            onDismiss = { showWindowEndPicker = false },
+            onConfirm = { selectedDate ->
+                showWindowEndPicker = false
+                if (requestedRollingWeeks != null && requestedRollingWeeks > 0) {
+                    onFiltersChanged(filters.copy(
+                        rollingWeeks = requestedRollingWeeks,
+                        allHistory = false,
+                        windowEndDate = selectedDate,
+                    ))
+                }
+            },
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AnalyticsWindowEndDateDialog(
+    selectedDate: String,
+    availableStartDate: String,
+    availableEndDate: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    val firstDateMillis = analyticsDatePickerMillis(availableStartDate)
+    val lastDateMillis = analyticsDatePickerMillis(availableEndDate)
+    val selectableDates = remember(firstDateMillis, lastDateMillis) {
+        object : SelectableDates {
+            override fun isSelectableDate(utcTimeMillis: Long): Boolean =
+                (firstDateMillis == null || utcTimeMillis >= firstDateMillis) &&
+                    (lastDateMillis == null || utcTimeMillis <= lastDateMillis)
+
+            override fun isSelectableYear(year: Int): Boolean {
+                val firstYear = availableStartDate.take(4).toIntOrNull()
+                val lastYear = availableEndDate.take(4).toIntOrNull()
+                return (firstYear == null || year >= firstYear) && (lastYear == null || year <= lastYear)
+            }
+        }
+    }
+    val initialDateMillis = analyticsDatePickerMillis(selectedDate) ?: lastDateMillis
+    val pickerState = rememberDatePickerState(
+        initialSelectedDateMillis = initialDateMillis,
+        initialDisplayedMonthMillis = initialDateMillis,
+        selectableDates = selectableDates,
+    )
+    DatePickerDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(
+                enabled = pickerState.selectedDateMillis != null,
+                onClick = { pickerState.selectedDateMillis?.let { onConfirm(analyticsDatePickerValue(it)) } },
+            ) { Text("Apply date") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    ) {
+        DatePicker(state = pickerState)
     }
 }
 

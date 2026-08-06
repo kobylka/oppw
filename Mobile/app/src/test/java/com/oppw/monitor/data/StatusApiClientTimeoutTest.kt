@@ -13,7 +13,14 @@ class StatusApiClientTimeoutTest {
     @Test
     fun analyticsCanRequestExplicitOrCompleteHistory() {
         assertEquals("&rolling_weeks=82", analyticsWindowQuery(AnalyticsFilters(rollingWeeks = 82, allHistory = false)))
+        assertEquals(
+            "&rolling_weeks=12&window_end_date=2026-05-17",
+            analyticsWindowQuery(AnalyticsFilters(rollingWeeks = 12, windowEndDate = "2026-05-17")),
+        )
         assertEquals("&rolling_weeks=4", analyticsWindowQuery(AnalyticsFilters()))
-        assertEquals("&rolling_weeks=4&all_history=1", analyticsWindowQuery(UiState().analyticsFilters))
+        assertEquals(
+            "&rolling_weeks=4&all_history=1",
+            analyticsWindowQuery(UiState().analyticsFilters.copy(windowEndDate = "2026-05-17")),
+        )
     }
 }

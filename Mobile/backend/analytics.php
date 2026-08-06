@@ -3,6 +3,7 @@ declare(strict_types=1);
 require __DIR__ . '/lib.php';
 require __DIR__ . '/analytics-cache.php';
 require __DIR__ . '/analytics-drawdown.php';
+require __DIR__ . '/analytics-window.php';
 require_method('GET');
 $db = pdo();
 $requested = trim((string)($_GET['account'] ?? ''));
@@ -49,6 +50,8 @@ if(count($accountKeys)>8)json_response(['ok'=>false,'error'=>'Analytics scope ex
 
 $requestedRollingWeeks=requested_analytics_rolling_weeks($_GET['rolling_weeks']??4);
 $allHistory=filter_var($_GET['all_history']??false,FILTER_VALIDATE_BOOLEAN,FILTER_NULL_ON_FAILURE);if($allHistory===null)json_response(['ok'=>false,'error'=>'Invalid all_history filter'],400);
+try{$windowEndDate=oppw_analytics_window_end_date($_GET['window_end_date']??'');}catch(InvalidArgumentException $error){json_response(['ok'=>false,'error'=>$error->getMessage()],400);}
+if($allHistory)$windowEndDate='';
 $leverage=trim((string)($_GET['leverage']??''));
 $exitReason=trim((string)($_GET['exit_reason']??''));
 $class=strtoupper(trim((string)($_GET['class']??'')));
@@ -57,7 +60,7 @@ if(strlen($leverage)>32||strlen($exitReason)>100||strlen($class)>1)json_response
 $cacheConfig=config();$cacheIdentity=null;$cacheStatus='BYPASS';
 try{
     $cacheContext=[
-        'implementation'=>'analytics-response-v3',
+        'implementation'=>'analytics-response-v4',
         'database'=>hash('sha256',(string)$cacheConfig['dsn']),
         'deviceId'=>(string)$session['device_id'],
         'allowedAccounts'=>array_values(array_map(fn($row)=>['key'=>(string)$row['account_key'],'label'=>(string)$row['display_name'],'type'=>(string)$row['account_type']],$allowed)),
@@ -66,6 +69,7 @@ try{
         'account'=>$requested,
         'rollingWeeks'=>$requestedRollingWeeks,
         'allHistory'=>$allHistory,
+        'windowEndDate'=>$windowEndDate,
         'leverage'=>$leverage,
         'exitReason'=>$exitReason,
         'tradeClass'=>$class,
@@ -87,15 +91,9 @@ $equityBoundsStmt=$db->prepare($equityBoundsSql);$equityBoundsStmt->execute(arra
 $activityTimes=[];foreach([$tradeBounds,$equityBounds] as $bounds)foreach(['first_activity_at','latest_activity_at'] as $field)if(!empty($bounds[$field]))$activityTimes[]=(string)$bounds[$field];
 $firstActivityUtc=null;$latestActivityUtc=null;$utc=new DateTimeZone('UTC');
 foreach($activityTimes as $activityAt){try{$activityUtc=(new DateTimeImmutable($activityAt,$utc))->setTimezone($utc);if($firstActivityUtc===null||$activityUtc<$firstActivityUtc)$firstActivityUtc=$activityUtc;if($latestActivityUtc===null||$activityUtc>$latestActivityUtc)$latestActivityUtc=$activityUtc;}catch(Throwable){}}
-$availableWeeks=0;$effectiveRollingWeeks=0;$windowStartUtc=null;$windowEndUtc=null;
-if($firstActivityUtc!==null&&$latestActivityUtc!==null){
-    // MySQL timestamps have millisecond precision; the exclusive end includes the latest stored observation.
-    $windowEndUtc=$latestActivityUtc->modify('+1 millisecond');
-    $availableWeeks=max(1,(int)ceil((((float)$windowEndUtc->format('U.u'))-((float)$firstActivityUtc->format('U.u')))/(7*24*60*60)));
-    $effectiveRollingWeeks=$allHistory?$availableWeeks:min((int)$requestedRollingWeeks,$availableWeeks);
-    $windowStartUtc=$allHistory?$firstActivityUtc:$windowEndUtc->modify('-'.$effectiveRollingWeeks.' weeks');
-    if($windowStartUtc<$firstActivityUtc)$windowStartUtc=$firstActivityUtc;
-}
+try{$windowBounds=oppw_analytics_window_bounds($firstActivityUtc,$latestActivityUtc,$requestedRollingWeeks,$allHistory,$windowEndDate);}catch(OutOfRangeException $error){json_response(['ok'=>false,'error'=>$error->getMessage()],422);}
+$availableWeeks=$windowBounds['availableWeeks'];$effectiveRollingWeeks=$windowBounds['effectiveRollingWeeks'];$windowStartUtc=$windowBounds['windowStartUtc'];$windowEndUtc=$windowBounds['windowEndUtc'];
+$availableStartDate=$windowBounds['availableStartDate'];$availableEndDate=$windowBounds['availableEndDate'];
 $activeOptionRows=[];
 if($windowStartUtc!==null&&$windowEndUtc!==null){$optionSql="SELECT DISTINCT ROUND(COALESCE(entry_leverage,0),3) AS entry_leverage,exit_reason FROM strategy_trades WHERE strategy_key IN ($placeholders) AND COALESCE(closed_at,opened_at)>=? AND COALESCE(closed_at,opened_at)<? LIMIT 501";$optionStmt=$db->prepare($optionSql);$optionStmt->execute(array_merge($accountKeys,[mysql_datetime($windowStartUtc),mysql_datetime($windowEndUtc)]));$activeOptionRows=$optionStmt->fetchAll();if(count($activeOptionRows)>500)json_response(['ok'=>false,'error'=>'Analytics filter cardinality exceeds the safe limit'],503);}
 $queryWindowEndUtc=$windowEndUtc??utc_now()->modify('+1 second');$queryWindowStartUtc=$windowStartUtc??$queryWindowEndUtc->modify('-80 weeks');
@@ -319,9 +317,9 @@ $summary=[
     'ratiosAnnualized'=>true,'periodsPerYear'=>52,'ratioSampleTrades'=>count($closed),'calmarRatio'=>$calmarRatio,'omegaRatio'=>$omegaRatio,'ulcerIndexPercent'=>$ulcerIndex,'valueAtRisk95Percent'=>$var95,'expectedShortfall95Percent'=>$expectedShortfall95,'riskSampleDays'=>count($dailyReturns),
 ];
 
-$filterOptions=['accounts'=>array_values(array_map(fn($row)=>['key'=>(string)$row['account_key'],'label'=>(string)$row['display_name'],'type'=>(string)$row['account_type']],$allowed)),'leverages'=>array_values(array_unique(array_filter(array_map(fn($row)=>n($row['entry_leverage']??0),$activeOptionRows),fn($value)=>$value>0))),'exitReasons'=>array_values(array_unique(array_filter(array_map(fn($row)=>(string)($row['exit_reason']??''),$activeOptionRows),fn($value)=>$value!==''))),'availableWeeks'=>$availableWeeks,'defaultRollingWeeks'=>min(4,$availableWeeks),'effectiveRollingWeeks'=>$effectiveRollingWeeks,'windowStart'=>$windowStartUtc?atom_datetime($windowStartUtc):'','windowEndExclusive'=>$windowEndUtc?atom_datetime($windowEndUtc):'','classes'=>['A','B','C','D']];
+$filterOptions=['accounts'=>array_values(array_map(fn($row)=>['key'=>(string)$row['account_key'],'label'=>(string)$row['display_name'],'type'=>(string)$row['account_type']],$allowed)),'leverages'=>array_values(array_unique(array_filter(array_map(fn($row)=>n($row['entry_leverage']??0),$activeOptionRows),fn($value)=>$value>0))),'exitReasons'=>array_values(array_unique(array_filter(array_map(fn($row)=>(string)($row['exit_reason']??''),$activeOptionRows),fn($value)=>$value!==''))),'availableWeeks'=>$availableWeeks,'defaultRollingWeeks'=>min(4,$availableWeeks),'effectiveRollingWeeks'=>$effectiveRollingWeeks,'windowStart'=>$windowStartUtc?atom_datetime($windowStartUtc):'','windowEndExclusive'=>$windowEndUtc?atom_datetime($windowEndUtc):'','availableStartDate'=>$availableStartDate,'availableEndDate'=>$availableEndDate,'classes'=>['A','B','C','D']];
 sort($filterOptions['leverages']);sort($filterOptions['exitReasons']);
-$response=['ok'=>true,'generatedAt'=>atom_datetime(new DateTimeImmutable('now',new DateTimeZone('UTC'))),'filters'=>['scope'=>$scope,'account'=>$requested,'leverage'=>$leverage,'exitReason'=>$exitReason,'rollingWeeks'=>(int)$requestedRollingWeeks,'allHistory'=>(bool)$allHistory,'tradeClass'=>$class],'filterOptions'=>$filterOptions,'summary'=>$summary,'exitReasons'=>$exitReasons,'weekly'=>$weekly,'recentTrades'=>$recent,'tradeClasses'=>$classGroups,'tradeDistribution'=>['sortOrder'=>'BEST_TO_WORST','meanReturnPercent'=>avg_values(array_column($closed,'preleverageReturnPercent')),'trades'=>$distributionPoints],'rolling20'=>$rolling,'confidenceIntervals'=>$confidence,'classProfitContribution'=>$classGroups,'classDistribution'=>$classDistribution,'classDistributionByYear'=>$classDistributionByYear,'drawdown'=>$drawdown,'parameterComparison'=>$buildComparison,'benchmark'=>$benchmark,'executionQuality'=>$executionQuality,'metricSamples'=>$metricSamples];
+$response=['ok'=>true,'generatedAt'=>atom_datetime(new DateTimeImmutable('now',new DateTimeZone('UTC'))),'filters'=>['scope'=>$scope,'account'=>$requested,'leverage'=>$leverage,'exitReason'=>$exitReason,'rollingWeeks'=>(int)$requestedRollingWeeks,'allHistory'=>(bool)$allHistory,'windowEndDate'=>$windowEndDate,'tradeClass'=>$class],'filterOptions'=>$filterOptions,'summary'=>$summary,'exitReasons'=>$exitReasons,'weekly'=>$weekly,'recentTrades'=>$recent,'tradeClasses'=>$classGroups,'tradeDistribution'=>['sortOrder'=>'BEST_TO_WORST','meanReturnPercent'=>avg_values(array_column($closed,'preleverageReturnPercent')),'trades'=>$distributionPoints],'rolling20'=>$rolling,'confidenceIntervals'=>$confidence,'classProfitContribution'=>$classGroups,'classDistribution'=>$classDistribution,'classDistributionByYear'=>$classDistributionByYear,'drawdown'=>$drawdown,'parameterComparison'=>$buildComparison,'benchmark'=>$benchmark,'executionQuality'=>$executionQuality,'metricSamples'=>$metricSamples];
 $encodedResponse=json_encode($response,JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR);
 if($cacheIdentity!==null)oppw_analytics_cache_write($cacheConfig,$cacheIdentity['slot'],$cacheIdentity['key'],$encodedResponse);
 header('X-OPPW-Analytics-Cache: '.$cacheStatus);

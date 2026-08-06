@@ -1,6 +1,6 @@
 # ADR 0025: True rolling analytics windows
 
-- Status: Accepted
+- Status: Superseded by ADR 0027
 - Date: 2026-08-06
 - Supersedes: ADR 0019's calendar-week window selection
 

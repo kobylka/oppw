@@ -440,6 +440,7 @@ data class AnalyticsFilters(
     val exitReason: String = "",
     val rollingWeeks: Int = 4,
     val allHistory: Boolean = false,
+    val windowEndDate: String = "",
     val tradeClass: String = "",
 )
 
@@ -453,6 +454,8 @@ data class AnalyticsFilterOptions(
     val effectiveRollingWeeks: Int = 0,
     val windowStart: String = "",
     val windowEndExclusive: String = "",
+    val availableStartDate: String = "",
+    val availableEndDate: String = "",
     val classes: List<String> = listOf("A", "B", "C", "D"),
 )
 

@@ -189,5 +189,11 @@ class StatusApiClient(context: Context, private val baseUrl: String = BuildConfi
 internal fun requestReadTimeoutMillis(path: String): Int =
     if (path.substringBefore('?') == "analytics.php") 30_000 else 8_000
 
-internal fun analyticsWindowQuery(filters: AnalyticsFilters): String =
-    "&rolling_weeks=${filters.rollingWeeks.coerceAtLeast(1)}" + if (filters.allHistory) "&all_history=1" else ""
+internal fun analyticsWindowQuery(filters: AnalyticsFilters): String = buildString {
+    append("&rolling_weeks=").append(filters.rollingWeeks.coerceAtLeast(1))
+    if (filters.allHistory) {
+        append("&all_history=1")
+    } else if (filters.windowEndDate.isNotBlank()) {
+        append("&window_end_date=").append(filters.windowEndDate)
+    }
+}

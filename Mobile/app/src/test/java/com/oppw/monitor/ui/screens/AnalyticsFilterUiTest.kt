@@ -24,4 +24,12 @@ class AnalyticsFilterUiTest {
         assertFalse(analyticsRollingWeeksCanApply("12", filters, availableWeeks = 83))
         assertTrue(analyticsRollingWeeksCanApply("8", filters, availableWeeks = 83))
     }
+
+    @Test
+    fun rollingWindowDateRoundTripsThroughTheDatePicker() {
+        val date = "2026-05-17"
+
+        assertEquals(date, analyticsDatePickerValue(analyticsDatePickerMillis(date)!!))
+        assertEquals(null, analyticsDatePickerMillis("2026-02-30"))
+    }
 }

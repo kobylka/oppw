@@ -74,8 +74,14 @@ class ContractResponseParserTest {
 
         val analytics = JsonParser.parseAnalytics(response("analytics.json"))
         val allHistoryAnalytics = JsonParser.parseAnalytics(response("analytics-all-history.json"))
+        val historicalAnalytics = JsonParser.parseAnalytics(response("analytics-historical-window.json"))
         assertTrue(allHistoryAnalytics.filters.allHistory)
         assertEquals(allHistoryAnalytics.filterOptions.availableWeeks, allHistoryAnalytics.filterOptions.effectiveRollingWeeks)
+        assertFalse(historicalAnalytics.filters.allHistory)
+        assertTrue(historicalAnalytics.filters.windowEndDate.isNotBlank())
+        assertEquals(1, historicalAnalytics.filterOptions.effectiveRollingWeeks)
+        assertTrue(historicalAnalytics.filterOptions.availableStartDate.isNotBlank())
+        assertTrue(historicalAnalytics.filterOptions.availableEndDate.isNotBlank())
         analytics.summary.let { summary ->
             assertEquals(0.2889701, summary.windowCompoundedPreleverageReturnPercent, 0.000001)
             assertEquals(1.871, summary.windowCompoundedLeveragedReturnPercent, 0.000001)

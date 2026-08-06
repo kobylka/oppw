@@ -9,8 +9,8 @@ class AnalyticsParserTest {
         val analytics = JsonParser.parseAnalytics("""
             {
               "ok": true,
-              "filters": {"rollingWeeks": 4, "allHistory": true},
-              "filterOptions": {"availableWeeks": 82, "effectiveRollingWeeks": 82, "windowStart": "2025-01-01T00:00:00Z", "windowEndExclusive": "2026-07-27T10:00:00.001Z"},
+              "filters": {"rollingWeeks": 4, "allHistory": false, "windowEndDate": "2026-07-26"},
+              "filterOptions": {"availableWeeks": 82, "effectiveRollingWeeks": 4, "windowStart": "2026-06-28T22:00:00Z", "windowEndExclusive": "2026-07-26T22:00:00Z", "availableStartDate": "2025-01-01", "availableEndDate": "2026-07-27"},
               "summary": {
                 "windowCompoundedPreleverageReturnPercent": 0.2889701,
                 "windowCompoundedLeveragedReturnPercent": 1.871,
@@ -117,10 +117,13 @@ class AnalyticsParserTest {
             assertEquals(150.0, profit, 0.000001)
             assertEquals(listOf("DEMO:41", "DEMO:42"), tradeKeys)
         }
-        assertEquals(true, analytics.filters.allHistory)
-        assertEquals(82, analytics.filterOptions.effectiveRollingWeeks)
-        assertEquals("2025-01-01T00:00:00Z", analytics.filterOptions.windowStart)
-        assertEquals("2026-07-27T10:00:00.001Z", analytics.filterOptions.windowEndExclusive)
+        assertEquals(false, analytics.filters.allHistory)
+        assertEquals("2026-07-26", analytics.filters.windowEndDate)
+        assertEquals(4, analytics.filterOptions.effectiveRollingWeeks)
+        assertEquals("2026-06-28T22:00:00Z", analytics.filterOptions.windowStart)
+        assertEquals("2026-07-26T22:00:00Z", analytics.filterOptions.windowEndExclusive)
+        assertEquals("2025-01-01", analytics.filterOptions.availableStartDate)
+        assertEquals("2026-07-27", analytics.filterOptions.availableEndDate)
         with(analytics.drawdown) {
             assertEquals("DAILY_CLOSE_WITH_MINUTE_LOW", sourceGranularity)
             assertEquals(true, cashFlowAdjusted)

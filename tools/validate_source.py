@@ -405,7 +405,15 @@ def main() -> int:
         "Mobile/backend/analytics.php": (
             "requested_analytics_rolling_weeks", "$allHistory", "enforce_single_flight", "oppw_analytics_segmented_rows",
             "oppw_analytics_data_watermark", "X-OPPW-Analytics-Cache: HIT", "X-OPPW-Analytics-Segments",
-            "name='MOBILE_RECEIPT'", "AND occurred_at>=? AND occurred_at<?",
+            "name='MOBILE_RECEIPT'", "AND occurred_at>=? AND occurred_at<?", "windowEndDate",
+        ),
+        "Mobile/backend/analytics-window.php": (
+            "window_end_date must use YYYY-MM-DD", "Europe/Warsaw", "availableStartDate", "availableEndDate",
+        ),
+        "Mobile/backend/tests/analytics-window-test.php": (
+            "default rolling window did not end at the latest observation",
+            "historical window did not preserve its four-week duration",
+            "historical window ignored Warsaw daylight-saving time",
         ),
         "Mobile/backend/analytics-cache.php": (
             "OPPW_ANALYTICS_CACHE_MAX_BYTES", "OPPW_ANALYTICS_SEGMENT_MAX_BYTES", "analytics_cache_ttl_seconds",
@@ -438,13 +446,13 @@ def main() -> int:
             "current Warsaw week was cached as historical", "warm and cold segmented rows differ",
         ),
         "Mobile/app/src/main/java/com/oppw/monitor/data/Models.kt": (
-            "val allHistory: Boolean = false",
+            "val allHistory: Boolean = false", "val windowEndDate: String = \"\"",
         ),
         "Mobile/app/src/main/java/com/oppw/monitor/data/StatusApiClient.kt": (
-            "analyticsWindowQuery", "&all_history=1",
+            "analyticsWindowQuery", "&all_history=1", "&window_end_date=",
         ),
         "Mobile/app/src/main/java/com/oppw/monitor/ui/screens/AnalyticsScreen.kt": (
-            "All history", "allHistory = false", "allHistory = true",
+            "All history", "allHistory = false", "allHistory = true", "Window ending", "Latest available observation",
         ),
         "docs/decisions/0018-paired-mobile-receipts-are-diagnostic.md": (
             "Paired mobile receipts are diagnostic", "never enters an immutable strategy-authority table",
@@ -466,6 +474,10 @@ def main() -> int:
         ),
         "docs/decisions/0022-streaming-daily-equity-reduction.md": (
             "Streaming daily-equity reduction", "dedicated streaming prepass",
+            "No database migration is required",
+        ),
+        "docs/decisions/0027-movable-fixed-duration-analytics-windows.md": (
+            "Movable fixed-duration analytics windows", "window_end_date=YYYY-MM-DD",
             "No database migration is required",
         ),
     }
