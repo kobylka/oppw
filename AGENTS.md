@@ -22,14 +22,14 @@ Repeat this protocol after context compaction, after inheriting work from anothe
 
 These paths are host-local references for agents working in `D:\oppw`; they are not portable repository requirements and do not belong in the project README or release configuration.
 
-- Python 3.13.7 executable: `C:\Users\kobyl\AppData\Local\Programs\Python\Python313\python.exe`
-- Python system packages: `C:\Users\kobyl\AppData\Local\Programs\Python\Python313\Lib\site-packages`
+- Python 3.13.15 executable: `C:\Program Files\Python313\python.exe`
+- Python system packages: `C:\Program Files\Python313\Lib\site-packages`
 - Python user base: `C:\Users\kobyl\AppData\Roaming\Python` (not currently created)
 - Python user packages: `C:\Users\kobyl\AppData\Roaming\Python\Python313\site-packages` (not currently created)
 - Python user-site support: enabled
-- PHP 8.5.8 CLI executable: `C:\Users\kobyl\AppData\Local\Programs\PHP\current\php.exe`
+- PHP 8.5.9 CLI executable: `C:\Program Files\PHP\current\php.exe`
 
-Recheck runtime resolution after upgrades with `python -m site`, `(Get-Command python).Source`, and `(Get-Command php).Source`.
+Neither executable currently resolves by bare command in the Codex process environment. Recheck runtime resolution after upgrades with `& 'C:\Program Files\Python313\python.exe' -m site`, `Get-Command python -All`, and `Get-Command php -All`, using the documented absolute paths when command resolution is unavailable.
 
 ## Canonical source rules
 
