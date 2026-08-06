@@ -5,6 +5,7 @@
       <verify-signatures>false</verify-signatures>
       <trusted-artifacts>
          <trust file=".*-sources[.]jar" regex="true" reason="IDE source attachments are not executed by the build"/>
+         <trust file=".*-javadoc[.]jar" regex="true" reason="IDE documentation attachments are not executed by the build"/>
          <trust file="gradle-9.4.1-src.zip" reason="Sources for the separately checksum-pinned Gradle distribution"/>
       </trusted-artifacts>
    </configuration>
