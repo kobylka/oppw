@@ -101,7 +101,7 @@ Copy `Mobile/local.properties.example` to the ignored `Mobile/local.properties`,
 .\gradlew.bat --dependency-verification strict testDebugUnitTest assembleDebug assembleRelease
 ```
 
-The wrapper JAR and Gradle distribution are checksum-pinned, and `Mobile/gradle/verification-metadata.xml` verifies resolved plugin and dependency artifacts. `requirements_mt5` is the hash-locked Windows CPython 3.13 runtime environment; install it without removing its `--require-hashes` or binary-only controls.
+The wrapper JAR and Gradle distribution are checksum-pinned, and `Mobile/gradle/verification-metadata.xml` verifies resolved executable plugin and dependency artifacts. Android Studio's non-executable `*-sources.jar` attachments and the exact pinned Gradle source ZIP are narrowly trusted so IDE synchronization does not weaken verification of build inputs. `requirements_mt5` is the hash-locked Windows CPython 3.13 runtime environment; install it without removing its `--require-hashes` or binary-only controls.
 
 The transport boundary is `StatusApiClient.kt`, JSON compatibility belongs to `JsonParser.kt`, and `Models.kt` owns in-app API models. Cross-component payload changes must update producer, persistence, API, parser/model, fixtures, and tests together.
 

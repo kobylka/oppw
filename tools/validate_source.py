@@ -155,6 +155,12 @@ def main() -> int:
     verification_text = verification_metadata.read_text(encoding="utf-8") if verification_metadata.is_file() else ""
     if "<verify-metadata>true</verify-metadata>" not in verification_text or verification_text.count("<sha256 value=") < 100:
         fail(errors, "Gradle dependency verification metadata is missing or incomplete")
+    if ('<trust file=".*-sources[.]jar" regex="true"' not in verification_text
+            or '<trust file="gradle-9.4.1-src.zip"' not in verification_text):
+        fail(errors, "Gradle IDE source attachments are not narrowly trusted")
+    for unsafe_trust in ('<trust group=', '<trust name=', '<trust file=".*"', '<trust file=".*[.]jar"'):
+        if unsafe_trust in verification_text:
+            fail(errors, f"Gradle dependency verification contains an overly broad trust rule: {unsafe_trust}")
 
     canonical = root / "mt5" / "oppw_mt5_continuous.py"
     if not canonical.is_file():
