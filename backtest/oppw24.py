@@ -291,10 +291,14 @@ class Sim:
 
     def sell(self, time, open_price, close_price, open_date, close_date, trade_type, LEVERAGE, debug=False):
                 SL =  (100-50/LEVERAGE)/100
-                #SL = 0.9375
+                SL = 0.95
                 
-                if self.leverage_override:
-                    granular = int((self.balance/1.765/2240))*2240
+                if self.leverage_override and LEVERAGE == 10:
+                    granular = int((self.balance/1.5/2240))*2240
+                    SL = 0.9465
+                elif self.leverage_override:
+                    granular = int((self.balance/1.5/2240))*2240
+                    SL = 0.9465
                 else:
                     granular = int((self.balance/(20/LEVERAGE)/2240))*2240
                 #granular = int((self.balance/(20/LEVERAGE)/2240)+1)*2240
@@ -303,7 +307,7 @@ class Sim:
                 #if(round(20/(self.balance/granular), 2) < 3):
                  #   granular = int((self.balance/(20/LEVERAGE)/2240)+3)*2240
                 #if(LEVERAGE == 10):
-                    #granular = int((self.balance/1.765/2240))*2240
+                    #granular = int((self.balance/1.396/2240))*2240
                     
                 effective_leverage = round(20/(self.balance/granular), 2)
                     
@@ -666,10 +670,14 @@ class Sim:
                     self.prev_full_week_change = current_week_change
 
             SL = (100 - 50 / LEVERAGE) / 100
-            #SL = 0.9375
+            SL = 0.95
 
-            if self.leverage_override:
-                granular = int((self.balance/1.765/2240))*2240
+            if self.leverage_override and LEVERAGE == 10:
+                granular = int((self.balance/1.5/2240))*2240
+                SL = 0.9465
+            elif self.leverage_override:
+                granular = int((self.balance/1.5/2240))*2240
+                SL = 0.9465
             else:
                 granular = int(self.balance / (20 / LEVERAGE) / 2240) * 2240
                 granular *= 20 / LEVERAGE
@@ -894,9 +902,9 @@ class Sim:
                 #    if self.balance/self.max_equity < 0.95:
                 #        self.deposited += 3000
                 #        self.balance += 3000
-                if(self.deposited < 200000 and (self.prev_full_week_change < -0.02 or self.prev_change < -0.007)):
-                    granular = int((self.balance/1.765/2240))
-                    plus_one = int(2240*(granular+1)*1.765-self.balance+200)
+                if(self.deposited < 200000 and (self.prev_full_week_change < -0.02 or self.prev_change < -0.007) and allow_deposits):
+                    granular = int((self.balance/1.666666/2240))
+                    plus_one = int(2240*(granular+1)*1.396-self.balance+200)
                     self.deposited += plus_one
                     self.balance += plus_one
                     
@@ -1147,7 +1155,7 @@ def run_backtest(
         sim.read_quotes(files, "20180413")
         sim.read_csv_quotes(files, "20180413")
     
-    LEVERAGE = 8
+    LEVERAGE = 5.5
     SL = (100-50/LEVERAGE)/100
     BE = 0.996
     
@@ -1160,7 +1168,7 @@ def run_backtest(
     result = sim.process(
         sim_i.quotes,
         "QQQ",
-        "20250106",
+        "20180413",
         "20260804",
         LEVERAGE,
         tpps,
@@ -1168,7 +1176,7 @@ def run_backtest(
         BE,
         0.004,
         0.004,
-        initial_balance=16000,
+        initial_balance=30000,
         allow_deposits=False,
         apply_tax=True,
         debug=debug,
@@ -1211,7 +1219,7 @@ def build_parser():
     parser.add_argument(
         "--leverage_override",
         action="store_true",
-        help="Use the fixed 1.765 sizing divisor instead of 20 / LEVERAGE.",
+        help="Use the fixed 1.396 sizing divisor instead of 20 / LEVERAGE.",
     )
     parser.add_argument(
         "--arithmetic-last-two",
