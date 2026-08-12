@@ -7,3 +7,4 @@ migrate_v52_service_supervision.sql
 migrate_v52_0_2_close_contract.sql
 migrate_v54_1_current_snapshot.sql
 migrate_data_lifecycle.sql
+migrate_v55_entry_rules.sql

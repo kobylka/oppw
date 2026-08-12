@@ -126,7 +126,13 @@ private fun MonitorScaffold(viewModel: MainViewModel) {
                 1 -> PositionScreen(state, viewModel::refresh)
                 2 -> AnalyticsScreen(state, { viewModel.loadAnalytics(true) }, viewModel::setAnalyticsFilters)
                 3 -> LogsScreen(state, viewModel, viewModel::refresh)
-                else -> SettingsScreen(state, viewModel::refresh, viewModel::unpairDevice, viewModel::setServiceDesiredState)
+                else -> SettingsScreen(
+                    state,
+                    viewModel::refresh,
+                    viewModel::unpairDevice,
+                    viewModel::setServiceDesiredState,
+                    viewModel::setStrategyRuleEnabled,
+                )
             }
         }
     }

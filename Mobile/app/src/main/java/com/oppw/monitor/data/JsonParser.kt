@@ -87,6 +87,29 @@ object JsonParser {
         )
     }
 
+    fun parseStrategyControl(raw: String): StrategyControlStatus {
+        val root = JSONObject(raw)
+        requireOk(root)
+        val rules = root.optJSONArray("rules") ?: JSONArray()
+        return StrategyControlStatus(
+            generatedAt = root.optString("generatedAt"),
+            accountKey = root.optString("accountKey"),
+            canControl = root.optBoolean("canControl"),
+            revision = root.optLong("revision"),
+            changedAt = root.optString("changedAt"),
+            rules = buildList {
+                for (index in 0 until rules.length()) rules.getJSONObject(index).let { item ->
+                    add(StrategyRuleControl(
+                        key = item.optString("key"),
+                        label = item.optString("label", item.optString("key")),
+                        description = item.optString("description"),
+                        enabled = item.optBoolean("enabled", true),
+                    ))
+                }
+            },
+        )
+    }
+
     fun parseResponse(raw: String): MonitorResponse {
         val root = JSONObject(raw)
         requireOk(root)

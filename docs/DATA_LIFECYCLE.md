@@ -59,7 +59,7 @@ php .\Mobile\backend\admin\retention.php --apply --archive-dir=D:\oppw-archives
 
 Optional bounds are `--events-days`, `--equity-days`, `--batch-size`, and `--max-batches`. Retention-day overrides may lengthen the online period but cannot shorten the canonical 180/400-day minima. Production scheduling should run once daily during a low-traffic period. The archive directory must be outside the backend web root, encrypted at rest, replicated, and protected against overwrite. Only completed archive files whose SHA-256 matches the recorded retention run may be expired after the documented archive period.
 
-The command never accepts a table name. Its only purge paths are ordinary `strategy_events` rows and old `strategy_equity_points`; it cannot delete authority, `EXECUTION_STAGE` compatibility events, service-control audits, or `strategy_market_points`.
+The command never accepts a table name. Its only purge paths are ordinary `strategy_events` rows and old `strategy_equity_points`; it cannot delete authority, `EXECUTION_STAGE` compatibility events, service-control audits, entry-rule controls/audits, or `strategy_market_points`.
 
 ## Failure and recovery
 

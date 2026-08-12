@@ -121,6 +121,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun setStrategyRuleEnabled(ruleKey: String, enabled: Boolean) {
+        val current = _uiState.value
+        val account = current.selectedAccountKey ?: return
+        if (current.strategyControlLoading || current.accounts.none { it.key == account && it.canControlService }) return
+        _uiState.value = current.copy(strategyControlLoading = true, strategyControlError = null)
+        viewModelScope.launch {
+            runCatching { repository.setStrategyRuleEnabled(account, ruleKey, enabled) }
+                .onSuccess { control ->
+                    val latest = _uiState.value
+                    if (latest.selectedAccountKey == account) {
+                        _uiState.value = latest.copy(strategyControl = control, strategyControlLoading = false, strategyControlError = null)
+                    }
+                }
+                .onFailure { error ->
+                    val latest = _uiState.value
+                    if (latest.selectedAccountKey == account) {
+                        _uiState.value = latest.copy(strategyControlLoading = false, strategyControlError = error.message ?: error::class.java.simpleName)
+                    }
+                }
+        }
+    }
+
     fun requestAccountSelection(accountKey: String) {
         val current = _uiState.value
         if (current.authStatus != AuthStatus.PAIRED || accountKey == current.selectedAccountKey) return
@@ -175,6 +197,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             analytics = null,
             analyticsFilters = AnalyticsFilters(allHistory = true),
             analyticsError = null,
+            serviceControl = null,
+            serviceControlLoading = true,
+            serviceControlError = null,
+            strategyControl = null,
+            strategyControlLoading = true,
+            strategyControlError = null,
             error = null,
         )
         viewModelScope.launch { load(manual = true, forceAccounts = false) }
@@ -235,7 +263,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun load(manual: Boolean, forceAccounts: Boolean) {
         val previous = _uiState.value
         if (previous.authStatus != AuthStatus.PAIRED) return
-        _uiState.value = previous.copy(loading = previous.response == null, refreshing = manual, error = null)
+        _uiState.value = previous.copy(
+            loading = previous.response == null,
+            refreshing = manual,
+            error = null,
+            serviceControlLoading = previous.serviceControl == null,
+            strategyControlLoading = previous.strategyControl == null,
+        )
 
         var accounts = previous.accounts
         var selectedKey = previous.selectedAccountKey
@@ -246,6 +280,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.value = _uiState.value.copy(accountsLoading = false, accounts = accounts, selectedAccountKey = selectedKey)
             val response = repository.refresh(selectedKey)
             val serviceControlResult = runCatching { repository.serviceControl(selectedKey) }
+            val strategyControlResult = runCatching { repository.strategyControl(selectedKey) }
             val now = System.currentTimeMillis()
             if (response.snapshot.connection.heartbeatStatus.equals("RUNNING", true) || response.snapshot.connection.heartbeatStatus.equals("WEEKEND IDLE", true)) {
                 staleNotificationShown = false
@@ -265,6 +300,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 serviceControl = serviceControlResult.getOrNull(),
                 serviceControlLoading = false,
                 serviceControlError = serviceControlResult.exceptionOrNull()?.message,
+                strategyControl = strategyControlResult.getOrNull(),
+                strategyControlLoading = false,
+                strategyControlError = strategyControlResult.exceptionOrNull()?.message,
             )
         } catch (error: Throwable) {
             if (error is AuthenticationRequiredException) {
@@ -279,6 +317,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     accounts = accounts,
                     selectedAccountKey = selectedKey,
                     error = error.message ?: error::class.java.simpleName,
+                    serviceControlLoading = false,
+                    strategyControlLoading = false,
                 )
             }
         }

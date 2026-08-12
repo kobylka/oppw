@@ -47,6 +47,12 @@ class Config:
     loss_leverage: int = 10
     full_week_loss_trigger: float = -0.025
     previous_trade_loss_trigger: float = -0.007
+    entry_rule_arithmetic_threshold: float = 0.02
+    entry_rule_gap_threshold: float = 0.01
+    entry_rule_momentum20_threshold: float = -0.005
+    entry_rule_tuesday_normalization_tolerance: float = 0.005
+    entry_rule_premarket_minimum_range: float = 0.008
+    entry_rule_premarket_maximum_close_location: float = 0.15
     break_even_ratio: float = 0.996
     tsl_stop: float = 0.004
     leverage_stop_points: float = 50.0
@@ -112,6 +118,7 @@ class Config:
     monitor_minute_snapshot_buffer_size: int = 720
     monitor_history_file: Path = Path("oppw_monitor_equity_history.json")
     backend_latest_trade_path: str = "oppw_latest_trade.php"
+    backend_strategy_controls_path: str = "strategy-controls.php"
 
     @property
     def tpps(self) -> tuple[float, float, float, float, float]:

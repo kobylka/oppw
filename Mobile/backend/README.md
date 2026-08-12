@@ -7,7 +7,7 @@
 - `pairing-admin.php` and `push-admin.php`: optional pairing-admin browser token.
 - `market-admin.php` and `trade-admin.php`: optional manual-admin browser token.
 
-Paired-device tokens never write immutable strategy authority. `mobile-receipt.php` records only a diagnostic delivery acknowledgement; an explicit per-device grant is still required for service-control writes.
+Paired-device tokens never write immutable execution authority. `mobile-receipt.php` records only a diagnostic delivery acknowledgement; an explicit per-device operational-control grant is required for service desired-state writes and per-account entry-rule toggles. Globally fenced executors alone may record weekly entry-rule defer/skip transitions through `strategy-controls.php`.
 
 ## Endpoints
 
@@ -23,6 +23,7 @@ Paired-device tokens never write immutable strategy authority. `mobile-receipt.p
 | `analytics.php?account=DEMO` | GET | Mobile token + account grant |
 | `strategy-decisions.php?account=DEMO` | GET | Mobile token + account grant |
 | `strategy-specifications.php?account=DEMO` | GET | Mobile token + account grant |
+| `strategy-controls.php?account=DEMO` | GET/POST | Mobile operational-control grant or fenced MT5 writer |
 | `push/register.php` | POST | Mobile bearer token |
 | `push/unregister.php` | POST | Mobile bearer token |
 | `ingest.php` | POST | MT5 writer token |
@@ -38,13 +39,13 @@ For an existing database, apply only the listed migrations that have not already
 
 ## Retention and recovery
 
-Run `php admin/retention.php` for a dry-run report. Apply bounded archival and cleanup with `php admin/retention.php --apply --archive-dir=<encrypted-path-outside-web-root>`. Ordinary events are hot for 180 days and minute equity is hot for 400 days; exact gzip NDJSON archives are verified before deletion, and equity is rolled into `strategy_equity_daily` first. `EXECUTION_STAGE` events, authority ledgers, service-control audits, and all `strategy_market_points` minute OHLC rows remain online indefinitely.
+Run `php admin/retention.php` for a dry-run report. Apply bounded archival and cleanup with `php admin/retention.php --apply --archive-dir=<encrypted-path-outside-web-root>`. Ordinary events are hot for 180 days and minute equity is hot for 400 days; exact gzip NDJSON archives are verified before deletion, and equity is rolled into `strategy_equity_daily` first. `EXECUTION_STAGE` events, authority ledgers, service-control audits, entry-rule controls/audits, and all `strategy_market_points` minute OHLC rows remain online indefinitely.
 
 The full policy, scheduling guidance, archive requirements, and recovery drill are in `docs/DATA_LIFECYCLE.md`. `tools/validate_backup_restore.ps1` uses only synthetic data and two disposable MySQL containers; production restore procedures must always target a new database.
 
 ## Manual browser administration
 
-CLI pairing grants must state service-control authority explicitly:
+CLI pairing grants must state operational-control authority explicitly. The existing `can_control_service` grant covers both service desired state and entry-rule toggles:
 
 ```powershell
 php admin/create_pairing_code.php --accounts=REAL,DEMO --can-control-service=1

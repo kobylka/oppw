@@ -6,6 +6,14 @@ import numpy as np
 import math
 import random
 
+from oppw_loss_control import (
+        LOSS_CONTROL_DEFER_TUESDAY,
+        LOSS_CONTROL_ENTER,
+        arithmetic_loss_control_trigger,
+        loss_control_entry_decision,
+        normalized_tuesday_reentry,
+)
+
 def add_days(date, D):
         date_obj = datetime.strptime(date, "%Y%m%d")
         new_date = date_obj + timedelta(days=D)
@@ -51,6 +59,7 @@ class Sim:
         self.local_dd_equity = 1000000000000
         self.n=0
         self.trade_no=0
+        self.week_no=0
         self.break_even = False
         
         self.cumulative_change = 1
@@ -64,6 +73,9 @@ class Sim:
             
         self.lost = 0
         self.dd = 0
+        self.loss_control_lookback = None
+        self.loss_control_outcomes = []
+        self.loss_control_events = []
             
         self.equity_history = []
         self.deposit_history = []
@@ -121,7 +133,7 @@ class Sim:
     def read_quotes(self, files, start_date):
         for f in files:
             fname = f.split(".")
-            if fname[-1] == "txt":
+            if fname[-1] == "txt" and fname[0] != "weekly_returns":
                 stock = fname[0].upper()
                 self.stocks.append(stock)
                 self.wallet[stock] = [0,0,0,0]
@@ -193,6 +205,13 @@ class Sim:
                 granular = int((self.balance/(20/LEVERAGE)/2240))*2240
                     
                 change = round(close_price/open_price-1,4)
+                if self.loss_control_lookback is not None:
+                    self.loss_control_outcomes.append(change)
+                    self.loss_control_events.append({
+                        "date": open_date,
+                        "action": "TRADE",
+                        "outcome": change,
+                    })
                 #print(LEVERAGE, self.balance, change)
                 #print(change)
                 self.cumulative_change *= change*LEVERAGE+1
@@ -270,10 +289,18 @@ class Sim:
         apply_tax=False,
         debug=False,
         plots=False,
+        loss_control_lookback=None,
+        loss_control_threshold=0.02,
+        opening_gap_threshold=0.01,
+        momentum20_threshold=-0.005,
+        tuesday_normalization_tolerance=0.005,
     ):
         self.trade_returns = []
         self.daily_equity_points = []
         self.leverage = leverage
+        self.loss_control_lookback = loss_control_lookback
+        self.loss_control_outcomes = []
+        self.loss_control_events = []
         
         self.days_in_position = 0
         
@@ -290,6 +317,7 @@ class Sim:
         self.local_dd_equity = 1000000000000
         self.n=0
         self.trade_no=0
+        self.week_no=0
         self.break_even = False
         
         self.cumulative_change = 1
@@ -331,8 +359,21 @@ class Sim:
         prev_year = start_date
         
         prev_equity = initial_balance
-        
-        for date in self.quotes:
+
+        quote_dates = sorted(self.quotes)
+        quote_positions = {quote_date: index for index, quote_date in enumerate(quote_dates)}
+        pending_tuesday_reentry = False
+        pending_friday_close = 0.0
+        pending_monday_date = ""
+
+        if loss_control_lookback is not None:
+            arithmetic_loss_control_trigger(
+                [],
+                loss_control_lookback,
+                loss_control_threshold,
+            )
+
+        for date in quote_dates:
             if(date < start_date): continue
             if(date == end_date): break
             date_obj = datetime.strptime(date, "%Y%m%d").date()
@@ -403,7 +444,12 @@ class Sim:
                 close_price = 0
                 open_date = ""
             
-            if(date_diff(prev_date, date) > 1 and (weekday_index == 0 or weekday_index == 1)):
+            new_week_entry = (
+                date_diff(prev_date, date) > 1
+                and weekday_index in (0, 1)
+            )
+
+            if new_week_entry:
                 if(open_price > 0):
                     close_price = self.quotes[prev_date][stock][3]
                     trade_type = "TO"
@@ -416,7 +462,96 @@ class Sim:
                 #    self.balance += 500
                 #self.deposited += 1000
                 #self.balance += 1000
-                    
+
+            should_open_week = False
+
+            if (
+                loss_control_lookback is not None
+                and pending_tuesday_reentry
+                and date != pending_monday_date
+                and open_price == 0
+            ):
+                pending_tuesday_reentry = False
+                if is_tuesday and normalized_tuesday_reentry(
+                    pending_friday_close,
+                    opon,
+                    tuesday_normalization_tolerance,
+                ):
+                    should_open_week = True
+                    self.loss_control_events.append({
+                        "date": date,
+                        "action": "TUESDAY_REENTRY",
+                        "friday_close": pending_friday_close,
+                        "tuesday_open": opon,
+                    })
+                else:
+                    self.loss_control_outcomes.append(0.0)
+                    self.loss_control_events.append({
+                        "date": date,
+                        "action": "SKIP_TUESDAY_NOT_NORMALIZED",
+                        "friday_close": pending_friday_close,
+                        "tuesday_open": opon,
+                    })
+                pending_friday_close = 0.0
+                pending_monday_date = ""
+
+            elif new_week_entry and open_price == 0:
+                self.week_no += 1
+                if loss_control_lookback is None:
+                    should_open_week = True
+                else:
+                    quote_index = quote_positions[date]
+                    previous_index = quote_index - 1
+                    previous_close = 0.0
+                    momentum20 = None
+
+                    if previous_index >= 0:
+                        previous_date = quote_dates[previous_index]
+                        previous_close = self.quotes[previous_date][stock][3]
+
+                    if previous_index >= 20:
+                        momentum_base_date = quote_dates[previous_index - 20]
+                        momentum_base_close = self.quotes[momentum_base_date][stock][3]
+                        momentum20 = previous_close / momentum_base_close - 1.0
+
+                    entry_decision = loss_control_entry_decision(
+                        self.loss_control_outcomes,
+                        loss_control_lookback,
+                        opon,
+                        previous_close,
+                        momentum20,
+                        is_monday,
+                        loss_control_threshold,
+                        opening_gap_threshold,
+                        momentum20_threshold,
+                    )
+
+                    if entry_decision == LOSS_CONTROL_ENTER:
+                        should_open_week = True
+                    elif entry_decision == LOSS_CONTROL_DEFER_TUESDAY:
+                        pending_tuesday_reentry = True
+                        pending_friday_close = previous_close
+                        pending_monday_date = date
+                        self.loss_control_events.append({
+                            "date": date,
+                            "action": LOSS_CONTROL_DEFER_TUESDAY,
+                            "gap": opon / previous_close - 1.0,
+                            "momentum20": momentum20,
+                        })
+                    else:
+                        self.loss_control_outcomes.append(0.0)
+                        self.loss_control_events.append({
+                            "date": date,
+                            "action": entry_decision,
+                            "gap": (
+                                opon / previous_close - 1.0
+                                if previous_close > 0
+                                else None
+                            ),
+                            "momentum20": momentum20,
+                        })
+
+            if should_open_week and open_price == 0:
                 open_price = opon
                 open_date  = date
                 self.trade_no+=1
@@ -501,7 +636,7 @@ class Sim:
         #    trade_returns=self.trade_returns, days_in_position=self.days_in_position, start_date=start_date, end_date=end_date)
         
         total_cagr = round(self.balance/self.deposited, 2)
-        years = (self.trade_no*7)/365
+        years = (self.week_no*7)/365
         cagr = round(pow(total_cagr, 1/years), 2)
         
         return [int(self.balance), int(self.deposited), total_cagr, cagr,self.days_in_position]
@@ -537,7 +672,7 @@ def bench_weeks(weeks, sim, LEVERAGE, SL, BE):
         
         result = sim_i.process(sim_i.quotes, "QQQ", date, end_date, LEVERAGE, 0.1, SL, BE, False,False)
                         
-if __name__ == "__main__":
+def run_backtest(loss_control_lookback=None, debug=True, plots=True):
     files = os.listdir()
     
     #start_date = "20181016"
@@ -588,6 +723,40 @@ if __name__ == "__main__":
     sim_i = Sim()
     
     tpps = [0.007,0.02,0.05,0.05,0.05]
-    result = sim.process(sim_i.quotes, "QQQ", "20220103", "20260717", LEVERAGE, tpps, SL, BE, 0.005,0.015, 30000, False,True,True,True)
+    result = sim.process(
+        sim_i.quotes,
+        "QQQ",
+        "20100104",
+        "20200102",
+        LEVERAGE,
+        tpps,
+        SL,
+        BE,
+        0.005,
+        0.015,
+        initial_balance=30000,
+        allow_deposits=False,
+        apply_tax=True,
+        debug=debug,
+        plots=plots,
+        loss_control_lookback=loss_control_lookback,
+    )
     print(result)
+    if loss_control_lookback is not None:
+        print("loss-control lookback", loss_control_lookback)
+        print("loss-control events", loss_control_event_counts(sim))
     print()
+
+    return sim, result
+
+
+def loss_control_event_counts(sim):
+    counts = {}
+    for event in sim.loss_control_events:
+        action = event["action"]
+        counts[action] = counts.get(action, 0) + 1
+    return counts
+
+
+if __name__ == "__main__":
+    run_backtest()

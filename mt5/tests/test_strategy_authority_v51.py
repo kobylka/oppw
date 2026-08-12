@@ -42,6 +42,9 @@ def strategy_config():
         entry_action_lead_seconds=3.0, non_entry_action_lead_seconds=3.0, entry_window_seconds=55,
         base_leverage=8, loss_leverage=10, full_week_loss_trigger=-0.025,
         previous_trade_loss_trigger=-0.007, sizing_multiplier=20.0,
+        entry_rule_arithmetic_threshold=0.02, entry_rule_gap_threshold=0.01,
+        entry_rule_momentum20_threshold=-0.005, entry_rule_tuesday_normalization_tolerance=0.005,
+        entry_rule_premarket_minimum_range=0.008, entry_rule_premarket_maximum_close_location=0.15,
         required_balance_multiplier=1.765, legacy_required_balance_multiplier_l10=2.0,
         legacy_required_balance_multiplier_l8=2.5, use_legacy_balance_multiplier=False,
         tpps=(0.007, 0.02, 0.05, 0.05, 0.05), break_even_ratio=0.996,
@@ -58,6 +61,12 @@ class StrategySpecificationTests(unittest.TestCase):
         strategy.tz = WARSAW
         strategy.started_at = datetime(2026, 7, 21, 12, 0, tzinfo=WARSAW)
         strategy.state = MODULE.StrategyState()
+        strategy.entry_rule_controls_revision = 1
+        strategy.entry_rule_controls = {
+            "ARITHMETIC_LAST_TWO": True, "GAP_MOMENTUM": True,
+            "TUESDAY_NORMALIZATION": True, "PREMARKET_RANGE": True,
+            "PREMARKET_CLOSE_NEAR_LOW": True,
+        }
         strategy.cached_previous_full_week_change = 0.0
         strategy.cached_previous_trade_change = 0.0
         strategy.cached_previous_full_week_source = "test"
@@ -84,6 +93,8 @@ class StrategySpecificationTests(unittest.TestCase):
         self.assertIn("detach", specification["document"]["leverageSelection"]["manualRecoveryLinkRule"])
         self.assertIn("recovery leverage correction", specification["document"]["hardStopInvariant"]["allowedTightening"])
         self.assertEqual(specification["document"]["persistenceAuthority"]["events"], "diagnostic stream only")
+        self.assertEqual(specification["document"]["entryLossControl"]["arithmeticLookback"], 2)
+        self.assertEqual(specification["document"]["entryLossControl"]["momentumSessions"], 20)
 
     def test_decision_is_immutably_linked_to_specification(self):
         strategy = self.strategy()

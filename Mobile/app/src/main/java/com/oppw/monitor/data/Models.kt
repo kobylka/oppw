@@ -54,6 +54,22 @@ data class ServiceControlStatus(
     val roles: List<ServiceRoleStatus>,
 )
 
+data class StrategyRuleControl(
+    val key: String,
+    val label: String,
+    val description: String,
+    val enabled: Boolean,
+)
+
+data class StrategyControlStatus(
+    val generatedAt: String,
+    val accountKey: String,
+    val canControl: Boolean,
+    val revision: Long,
+    val changedAt: String,
+    val rules: List<StrategyRuleControl>,
+)
+
 data class MonitorResponse(
     val generatedAt: String,
     val snapshot: MonitorSnapshot,
@@ -668,6 +684,9 @@ data class UiState(
     val serviceControl: ServiceControlStatus? = null,
     val serviceControlLoading: Boolean = false,
     val serviceControlError: String? = null,
+    val strategyControl: StrategyControlStatus? = null,
+    val strategyControlLoading: Boolean = false,
+    val strategyControlError: String? = null,
     val lastSuccessfulFetchEpochMs: Long = 0L,
     val nowEpochMs: Long = System.currentTimeMillis(),
 )

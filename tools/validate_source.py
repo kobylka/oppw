@@ -274,6 +274,7 @@ def main() -> int:
             "Set-ExactPathAcl -Path $configPath",
         ),
         "Mobile/backend/service-control.php": ("setDesiredState", "strategy_service_control_events", "MASTER_ONLINE"),
+        "Mobile/backend/strategy-controls.php": ("setRule", "recordWeekState", "strategy_entry_rule_week_events"),
     }
     for relative, markers in service_files.items():
         path = root / relative
@@ -518,7 +519,11 @@ def main() -> int:
             "strategy_equity_daily", "strategy_retention_runs", "strategy_market_points_no_delete",
             "idx_event_retention_time", "idx_equity_retention_time", "ON DELETE RESTRICT",
         ),
-        "Mobile/backend/sql/migration-order.txt": ("migrate_data_lifecycle.sql",),
+        "Mobile/backend/sql/migrate_v55_entry_rules.sql": (
+            "strategy_entry_rule_controls", "strategy_entry_rule_control_events",
+            "strategy_entry_rule_week_state", "strategy_entry_rule_week_events",
+        ),
+        "Mobile/backend/sql/migration-order.txt": ("migrate_data_lifecycle.sql", "migrate_v55_entry_rules.sql"),
         "Mobile/backend/admin/retention.php": (
             "OPPW_EVENT_RETENTION_DAYS = 180", "OPPW_EQUITY_RETENTION_DAYS = 400",
             "name <> 'EXECUTION_STAGE'", "GET_LOCK", "oppw-retention-ndjson-v1",
@@ -582,8 +587,10 @@ def main() -> int:
         if migration_order.is_file()
         else []
     )
-    if not migration_names or migration_names[-1] != "migrate_data_lifecycle.sql":
-        fail(errors, "migrate_data_lifecycle.sql must be the last ordered forward migration")
+    if not migration_names or migration_names[-1] != "migrate_v55_entry_rules.sql":
+        fail(errors, "migrate_v55_entry_rules.sql must be the last ordered forward migration")
+    elif migration_names.index("migrate_data_lifecycle.sql") >= migration_names.index("migrate_v55_entry_rules.sql"):
+        fail(errors, "migrate_v55_entry_rules.sql must follow migrate_data_lifecycle.sql")
 
     retention_path = root / "Mobile" / "backend" / "admin" / "retention.php"
     retention_text = retention_path.read_text(encoding="utf-8") if retention_path.is_file() else ""
@@ -591,6 +598,8 @@ def main() -> int:
         "strategy_market_points", "strategy_service_control_events", "strategy_specifications",
         "strategy_account_spec_assignments", "strategy_decisions", "strategy_execution_stages",
         "strategy_fills", "strategy_protection_changes", "strategy_trade_ledger", "account_cash_flows",
+        "strategy_entry_rule_controls", "strategy_entry_rule_control_events",
+        "strategy_entry_rule_week_state", "strategy_entry_rule_week_events",
     )
     for table in protected_retention_tables:
         if re.search(rf"DELETE\s+FROM\s+`?{re.escape(table)}\b", retention_text, re.IGNORECASE):

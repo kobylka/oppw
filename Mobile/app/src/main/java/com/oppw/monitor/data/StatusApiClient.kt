@@ -50,6 +50,18 @@ class StatusApiClient(context: Context, private val baseUrl: String = BuildConfi
         return fetchServiceControl(accountKey)
     }
 
+    suspend fun fetchStrategyControl(accountKey: String): StrategyControlStatus =
+        JsonParser.parseStrategyControl(authenticatedRequest("GET", "strategy-controls.php?account=${encode(accountKey)}").body)
+
+    suspend fun setStrategyRuleEnabled(accountKey: String, ruleKey: String, enabled: Boolean): StrategyControlStatus =
+        JsonParser.parseStrategyControl(authenticatedRequest("POST", "strategy-controls.php", JSONObject()
+            .put("action", "setRule")
+            .put("requestId", java.util.UUID.randomUUID().toString().replace("-", ""))
+            .put("accountKey", accountKey)
+            .put("ruleKey", ruleKey)
+            .put("enabled", enabled)
+            .toString()).body)
+
     suspend fun fetchStatus(accountKey: String): MonitorResponse {
         val response = JsonParser.parseResponse(authenticatedRequest("GET", "status.php?account=${encode(accountKey)}").body)
         val execution = response.snapshot.execution

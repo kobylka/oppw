@@ -47,6 +47,8 @@ Android monitor (no trading capability)
 
 The canonical entrypoint owns CLI parsing, account selection, MT5 connection bootstrap, and the composed `OPPWContinuousStrategy` type. Its `oppw_core` modules separately own configuration, persistent models, logging/utilities, coordination, publishing, exchange sessions and market data, position lifecycle, strategy decisions, monitoring, broker execution/protection, and runtime orchestration. This is one implementation assembled through the entrypoint, not a collection of independently executable strategy variants.
 
+New-week entry loss controls are per-account MySQL authority exposed by `strategy-controls.php`. The active EXECUTOR reads the five-rule revision through its global fencing identity before a controlled entry. Enabled market-input rules evaluate at cash open inside the bounded entry window. Weekly entry approvals, Monday defers, and final skips are shared across master/backup through `strategy_entry_rule_week_state`; the backend rejects stale control revisions, and immutable control/week-event tables retain the audit. Closed-trade pre-leverage returns and zero-return skipped weeks supply the two-outcome arithmetic input.
+
 `oppw_core/settings.py` defines the only MT5 `Config` dataclass and every canonical default. Each ignored private account file contains only required connection/publishing credentials plus an optional `OVERRIDES` mapping. Effective configuration is constructed in a fixed order: canonical defaults, private overrides, `OPPW_*` environment overrides, and explicit CLI runtime flags. Startup logs the effective non-secret settings. `tools/migrate_mt5_config.py` converts legacy copied private `Config` classes only after exact reconstruction validation and atomically replaces the private source.
 
 EXECUTOR and PUBLISHER ownership is coordinated globally through MySQL-backed leases exposed by `coordination.php`. Fencing tokens protect actions after takeover. Weekly entries use database idempotency so separate machines cannot legitimately claim the same account/week twice. Local filesystem locks are not authoritative.
@@ -75,10 +77,11 @@ The LocalSystem code boundary under `%ProgramData%\OPPW` uses protected Administ
 | Immutable-record storage helpers | `authority.php` |
 | Cash-flow ingestion | `cashflow.php` |
 | Windows supervisor assignment and mobile desired state | `service-control.php` |
+| Per-account entry-rule controls and weekly defer/skip state | `strategy-controls.php` |
 
 Authentication endpoints live under `Mobile/backend/auth/`; push endpoints live under `Mobile/backend/push/`; administrative endpoints are not mobile read APIs. Strategy decision and specification history both use the paired-device session boundary and enforce the selected account grant before reading immutable authority.
 
-Paired mobile credentials cannot write strategy authority. `mobile-receipt.php` stores a fixed-name diagnostic acknowledgement in `strategy_events`; analytics may merge it into delivery-latency presentation, but it never creates a `strategy_execution_stages` row. Paired-device writes are otherwise limited to device-owned authentication/push metadata, unpairing, and explicitly granted service-control desired state.
+Paired mobile credentials cannot write specifications, decisions, execution stages, fills, protection changes, or trade transitions. `mobile-receipt.php` stores a fixed-name diagnostic acknowledgement in `strategy_events`; analytics may merge it into delivery-latency presentation, but it never creates a `strategy_execution_stages` row. Paired-device writes are otherwise limited to device-owned authentication/push metadata, unpairing, and the explicitly granted operational-control capability. That capability owns both supervised-service desired state and per-account entry-rule toggles; weekly rule outcomes still require a globally fenced EXECUTOR.
 
 Analytics accepts any positive rolling-week window and an explicit all-history request. A rolling window is exactly `N * 7 * 24 hours`. With no date selection it ends at the latest selected-account trade or equity observation (exclusive by one millisecond, matching MySQL timestamp precision); an optional `window_end_date=YYYY-MM-DD` instead moves that fixed-duration window so it ends after the selected inclusive Europe/Warsaw calendar date. The selected date must fall between the first and latest available activity dates. All-history ignores a window date and uses the exact first-to-latest activity span; it remains the Android Analytics screen's default. Android exposes the duration and a bounded date picker, and the backend returns the selected date, complete available date bounds, available/effective week counts, and exact UTC query boundaries. Resource protection uses a maximum eight-account scope, bounded trade/lifecycle result sets, per-device and per-IP request limits, one in-flight analytics request per device, and queries constrained to the selected or complete available date range. Hot minute equity remains retention-bounded while older history uses the indefinite daily projection.
 
@@ -120,6 +123,8 @@ The drawdown episode list has a distinct authority. Closed-trade returns define 
 | Minute market OHLC history | `strategy_market_points`, retained online indefinitely |
 | Desired process state and supervisor heartbeat | `strategy_service_desired_state` and `strategy_supervisor_nodes` |
 | Service-control audit | `strategy_service_control_events` |
+| Entry-rule settings and immutable setting audit | `strategy_entry_rule_controls` and `strategy_entry_rule_control_events` |
+| Weekly entry-rule projection and immutable transition audit | `strategy_entry_rule_week_state` and `strategy_entry_rule_week_events` |
 
 Immutable authority records use deterministic identifiers and reject mutation. Projections may be rebuilt or enriched; diagnostics must not become the only record of a business event.
 
@@ -127,7 +132,7 @@ Immutable authority records use deterministic identifiers and reject mutation. P
 
 `Mobile/backend/admin/retention.php` is the sole operational-history retention command. It is CLI-only, dry-run by default, takes a database advisory lock, writes and verifies bounded gzip NDJSON archives, and can delete only ordinary diagnostic events older than 180 days and complete UTC account-days of minute equity older than 400 days. Equity deletion and its indefinite daily rollup commit atomically. Hot-window drawdown analytics use minute history to retain each daily low and refine closed-trade episode troughs; older windows use the daily projection as an explicit fallback. Legacy `EXECUTION_STAGE` diagnostics remain available to the compatibility fallback.
 
-Strategy authority, cash flows, service-control audits, and every `strategy_market_points` minute OHLC record stay online indefinitely. The database rejects market-minute deletion independently of the retention command. Index changes require production-shaped measurement; existing event, equity, market, and service-control access indexes remain canonical until evidence supports a forward migration.
+Strategy authority, cash flows, service-control audits, entry-rule controls and audits, and every `strategy_market_points` minute OHLC record stay online indefinitely. The database rejects market-minute deletion independently of the retention command. Index changes require production-shaped measurement; existing event, equity, market, service-control, and entry-rule access indexes remain canonical until evidence supports a forward migration.
 
 `tools/validate_backup_restore.ps1` creates a consistent synthetic backup in one disposable MySQL instance, restores it into a second instance, compares authoritative and operational table digests, and retests immutable and market-retention triggers. The release gate runs this recovery drill after ordered migration validation. Deployment-owned encrypted archive and backup storage requirements are defined in `docs/DATA_LIFECYCLE.md` and ADR 0013.
 
@@ -135,7 +140,7 @@ The primary Windows machine also runs the `OPPW MySQL Production Backup` schedul
 
 ## Android contract
 
-`StatusApiClient.kt` is the transport boundary, `JsonParser.kt` is the JSON compatibility boundary, and `Models.kt` is the in-app model authority. The app calls the canonical account, status, analytics, events, receipt, authentication, and push endpoints. It never connects directly to MySQL and contains no trading operation.
+`StatusApiClient.kt` is the transport boundary, `JsonParser.kt` is the JSON compatibility boundary, and `Models.kt` is the in-app model authority. The app calls the canonical account, status, analytics, events, receipt, authentication, push, service-control, and strategy-control endpoints. It never connects directly to MySQL or submits orders. An explicitly privileged paired device may change per-account service desired state and entry-rule enablement.
 
 Any payload change must follow `docs/CONTRACT_POLICY.md`.
 

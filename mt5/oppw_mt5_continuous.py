@@ -4,6 +4,7 @@ Continuous MetaTrader 5 implementation of the OPPW strategy.
 Key execution rules
 -------------------
 * BUY is sent at its separately configurable entry-action lead time for a valid new-week entry.
+* Enabled entry-loss controls may instead wait for the cash-open M1 input, skip the week, or defer a Monday entry to a normalized Tuesday open.
 * OH is evaluated exactly once at cash open minus three seconds from the second actual trading session onward;
   it is never evaluated on the first trading session of the week.
 * TPP levels follow actual XNYS trading-session order within the week. If Tuesday is the first session, it receives
@@ -31,6 +32,7 @@ Key execution rules
 * EXECUTOR, PUBLISHER, and TRADE_EXECUTION ownership use MySQL leases with monotonically increasing fencing tokens.
 * Transport failures trigger fast lease-renewal retries; role activity is suspended and automatically reacquired after a longer outage.
 * Weekly BUY idempotency is enforced in MySQL before order_send; an uncertain send is never retried automatically.
+* Per-account entry-rule toggles and weekly defer/skip outcomes are MySQL-authoritative and require the active EXECUTOR fencing token.
 * No authoritative filesystem lock, heartbeat file, or cross-process event-spool lock is used.
 * Status publishes an institutional-style next-trade What-if ticket; while a position is open it assumes the current position closes first and never resizes that live position.
 * Entry volume uses the configured balance-multiplier profile. The default growth profile uses 1.765; --conservative-multiplier selects 2.0 at L10 and 2.5 at L8.
@@ -178,6 +180,22 @@ class OPPWContinuousStrategy(
         self.last_mysql_trade_error_monotonic = 0.0
         self.last_account_funding_check_monotonic = 0.0
         self.last_account_funding_signature: Optional[tuple[float, float]] = None
+        self.entry_rule_controls = {
+            "ARITHMETIC_LAST_TWO": True,
+            "GAP_MOMENTUM": True,
+            "TUESDAY_NORMALIZATION": True,
+            "PREMARKET_RANGE": True,
+            "PREMARKET_CLOSE_NEAR_LOW": True,
+        }
+        self.entry_rule_controls.update({
+            str(key): bool(value)
+            for key, value in self.state.entry_rule_controls.items()
+            if str(key) in self.entry_rule_controls
+        })
+        self.entry_rule_controls_revision = int(self.state.entry_rule_controls_revision or 0)
+        self.last_entry_rule_context: Optional[dict[str, Any]] = None
+        self.last_entry_rule_context_monotonic = 0.0
+        self.last_entry_rule_error_monotonic = 0.0
         self.weekend_idle = False
         self.started_at = datetime.now(self.tz)
         self.strategy_specification = self.build_strategy_specification()

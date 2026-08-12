@@ -16,6 +16,7 @@ import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -35,7 +36,16 @@ DB_PASSWORD = secrets.token_hex(24)
 
 
 def run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(command, text=True, check=True, **kwargs)
+    try:
+        return subprocess.run(command, text=True, check=True, **kwargs)
+    except subprocess.CalledProcessError as error:
+        stdout = str(error.stdout or "").strip()
+        stderr = str(error.stderr or "").strip()
+        detail = " | ".join(value for value in (stdout, stderr) if value)
+        raise RuntimeError(
+            f"Command failed with exit {error.returncode}: {command}"
+            + (f" | {detail}" if detail else "")
+        ) from error
 
 
 def docker_sql(
@@ -324,6 +334,7 @@ def main() -> int:
     expected = json.loads((root / "contracts/expectations.json").read_text(encoding="utf-8"))
     ingest_payload, identities = build_ingest(fixture, version)
     owner_id = uuid.uuid4().hex
+    executor_owner_id = uuid.uuid4().hex
     container = "oppw-contract-" + uuid.uuid4().hex[:12]
     php_process: subprocess.Popen[str] | None = None
     stdout_handle: Any | None = None
@@ -622,6 +633,97 @@ return [
             )
             if not service_control.get("canControl") or service_control.get("master", {}).get("online") is not True:
                 raise AssertionError("service-control status did not expose authorized master state")
+            _, strategy_control_initial, _ = http_json(
+                "GET", base_url + "strategy-controls.php?account=DEMO", token=access_token,
+            )
+            if len(strategy_control_initial.get("rules", [])) != 5 or not all(
+                rule.get("enabled") is True for rule in strategy_control_initial.get("rules", [])
+            ):
+                raise AssertionError("strategy controls did not expose five enabled defaults")
+            strategy_request_id = "9" * 32
+            for _ in range(2):
+                _, strategy_control, strategy_control_raw = http_json("POST", base_url + "strategy-controls.php", {
+                    "action": "setRule", "requestId": strategy_request_id, "accountKey": "DEMO",
+                    "ruleKey": "GAP_MOMENTUM", "enabled": False,
+                }, token=access_token)
+                gap_rule = next(rule for rule in strategy_control["rules"] if rule["key"] == "GAP_MOMENTUM")
+                if gap_rule.get("enabled") is not False:
+                    raise AssertionError("mobile strategy-rule toggle was not persisted")
+            strategy_event_count = int(docker_sql(
+                docker, container,
+                "SELECT COUNT(*) FROM strategy_entry_rule_control_events WHERE request_id='" + strategy_request_id + "'",
+                docker_env,
+            ))
+            if strategy_event_count != 1:
+                raise AssertionError("strategy-rule control request was not idempotent")
+            http_json("POST", base_url + "strategy-controls.php", {
+                "action": "setRule", "requestId": strategy_request_id, "accountKey": "DEMO",
+                "ruleKey": "GAP_MOMENTUM", "enabled": True,
+            }, token=access_token, expected=(409,))
+            http_json("POST", base_url + "strategy-controls.php", {
+                "action": "setRule", "requestId": "8" * 32, "accountKey": "DEMO",
+                "ruleKey": "GAP_MOMENTUM", "enabled": "false",
+            }, token=access_token, expected=(400,))
+
+            _, executor_lease, _ = http_json("POST", base_url + "coordination.php", {
+                "action": "acquireLease", "accountKey": "DEMO", "role": "EXECUTOR",
+                "ownerId": executor_owner_id, "leaseName": "EXECUTOR", "ttlSeconds": 120,
+                "hostname": "contract", "pid": 2, "build": "oppw-" + version,
+            }, token=WRITE_TOKEN)
+            if executor_lease.get("acquired") is not True:
+                raise AssertionError(f"executor lease was not acquired: {executor_lease}")
+            current_iso = datetime.now(timezone.utc).isocalendar()
+            entry_week = f"{current_iso.year:04d}-W{current_iso.week:02d}"
+            entry_state_request_id = "7" * 32
+            entry_state_body = {
+                "action": "recordWeekState", "requestId": entry_state_request_id,
+                "accountKey": "DEMO", "weekKey": entry_week, "status": "SKIP_ARITHMETIC",
+                "controlsRevision": int(strategy_control["revision"]),
+                "decisionId": identities["decisionId"],
+                "inputs": {"recentOutcomes": [-0.011, -0.010], "arithmeticSum": -0.021},
+                "coordination": {
+                    "role": "EXECUTOR", "ownerId": executor_owner_id,
+                    "fencingToken": int(executor_lease["fencingToken"]),
+                },
+            }
+            stale_entry_state_body = copy.deepcopy(entry_state_body)
+            stale_entry_state_body["requestId"] = "6" * 32
+            stale_entry_state_body["controlsRevision"] = int(strategy_control["revision"]) - 1
+            http_json(
+                "POST", base_url + "strategy-controls.php", stale_entry_state_body,
+                token=WRITE_TOKEN, expected=(409,),
+            )
+            for _ in range(2):
+                _, entry_state, _ = http_json(
+                    "POST", base_url + "strategy-controls.php", entry_state_body, token=WRITE_TOKEN,
+                )
+                if entry_state.get("weekState", {}).get("status") != "SKIP_ARITHMETIC":
+                    raise AssertionError("globally fenced weekly entry-rule state was not persisted")
+            http_json("POST", base_url + "strategy-controls.php", {
+                "action": "setRule", "requestId": "5" * 32, "accountKey": "DEMO",
+                "ruleKey": "PREMARKET_RANGE", "enabled": False,
+            }, token=access_token)
+            _, entry_state_after_toggle, _ = http_json(
+                "POST", base_url + "strategy-controls.php", entry_state_body, token=WRITE_TOKEN,
+            )
+            if entry_state_after_toggle.get("weekState", {}).get("status") != "SKIP_ARITHMETIC":
+                raise AssertionError("identical weekly-rule retry failed after a later control revision")
+            entry_state_event_count = int(docker_sql(
+                docker, container,
+                "SELECT COUNT(*) FROM strategy_entry_rule_week_events WHERE request_id='" + entry_state_request_id + "'",
+                docker_env,
+            ))
+            if entry_state_event_count != 1:
+                raise AssertionError("weekly entry-rule state request was not idempotent")
+            context_query = urllib.parse.urlencode({
+                "accountKey": "DEMO", "weekKey": entry_week, "role": "EXECUTOR",
+                "ownerId": executor_owner_id, "fencingToken": int(executor_lease["fencingToken"]),
+            })
+            _, entry_context, _ = http_json(
+                "GET", base_url + "strategy-controls.php?" + context_query, token=WRITE_TOKEN,
+            )
+            if entry_context.get("weekState", {}).get("status") != "SKIP_ARITHMETIC":
+                raise AssertionError("executor strategy-control context lost the weekly skip state")
             _, status, status_raw = http_json("GET", base_url + "status.php?account=DEMO", token=access_token)
             snapshot = status["snapshot"]
             if snapshot["position"]["ticket"] != expected["positionTicket"]:
@@ -1100,6 +1202,7 @@ return [
             (output / "analytics-all-history.json").write_text(all_history_analytics_raw, encoding="utf-8")
             (output / "analytics-historical-window.json").write_text(historical_analytics_raw, encoding="utf-8")
             (output / "service-control.json").write_text(service_control_raw, encoding="utf-8")
+            (output / "strategy-controls.json").write_text(strategy_control_raw, encoding="utf-8")
             android_env = os.environ.copy()
             android_env["OPPW_CONTRACT_OUTPUT_DIR"] = str(output)
             if os.name == "nt":

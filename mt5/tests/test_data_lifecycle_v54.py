@@ -15,7 +15,8 @@ class DataLifecycleStaticTests(unittest.TestCase):
             for line in (ROOT / "Mobile/backend/sql/migration-order.txt").read_text(encoding="utf-8").splitlines()
             if line.strip() and not line.lstrip().startswith("#")
         ]
-        self.assertEqual(order[-1], "migrate_data_lifecycle.sql")
+        self.assertLess(order.index("migrate_data_lifecycle.sql"), order.index("migrate_v55_entry_rules.sql"))
+        self.assertEqual(order[-1], "migrate_v55_entry_rules.sql")
         migration = (ROOT / "Mobile/backend/sql/migrate_data_lifecycle.sql").read_text(encoding="utf-8")
         self.assertIn("CREATE TABLE IF NOT EXISTS strategy_equity_daily", migration)
         self.assertIn("CREATE TABLE IF NOT EXISTS strategy_retention_runs", migration)
@@ -56,7 +57,8 @@ class DataLifecycleStaticTests(unittest.TestCase):
             "--triggers", "strategy_specifications", "strategy_account_spec_assignments",
             "strategy_decisions", "strategy_execution_stages", "strategy_fills",
             "strategy_protection_changes", "strategy_trade_ledger", "account_cash_flows",
-            "strategy_service_control_events", "strategy_market_points",
+            "strategy_service_control_events", "strategy_entry_rule_control_events",
+            "strategy_entry_rule_week_state", "strategy_entry_rule_week_events", "strategy_market_points",
         ):
             self.assertIn(marker, source)
         self.assertIn("Get-TableDigest", source)
@@ -71,6 +73,7 @@ class DataLifecycleStaticTests(unittest.TestCase):
             "Restore-And-Verify", "WINDOWS_EFS", "Start-Transcript", "KeepDaily = 35",
             "KeepMonthly = 12", "KeepLogDays = 180", "strategy_market_points",
             "strategy_service_control_events",
+            "strategy_entry_rule_week_events",
         ):
             self.assertIn(marker, source)
         self.assertNotIn("--password=", source)

@@ -72,6 +72,322 @@ class BrokerExecutionMixin:
             self.state.save(self.cfg.state_file)
         return previous is not None and (current_day - previous).days > 1
 
+    @staticmethod
+    def arithmetic_entry_rule_trigger(outcomes: list[float], threshold: float = 0.02) -> bool:
+        return len(outcomes) >= 2 and sum(outcomes[-2:]) <= -float(threshold) + 1e-12
+
+    @staticmethod
+    def gap_momentum_entry_rule_trigger(
+        cash_open: float,
+        previous_cash_close: float,
+        momentum20: Optional[float],
+        gap_threshold: float = 0.01,
+        momentum_threshold: float = -0.005,
+    ) -> bool:
+        if cash_open <= 0 or previous_cash_close <= 0 or momentum20 is None:
+            return False
+        return (
+            cash_open / previous_cash_close - 1.0 >= float(gap_threshold) - 1e-12
+            and momentum20 <= float(momentum_threshold) + 1e-12
+        )
+
+    @staticmethod
+    def normalized_tuesday_entry_rule(friday_close: float, tuesday_open: float, tolerance: float = 0.005) -> bool:
+        return (
+            friday_close > 0
+            and tuesday_open > 0
+            and abs(tuesday_open / friday_close - 1.0) <= float(tolerance) + 1e-12
+        )
+
+    @staticmethod
+    def premarket_low_entry_rule_trigger(
+        premarket_open: float,
+        premarket_high: float,
+        premarket_low: float,
+        premarket_close: float,
+        minimum_range: float = 0.008,
+        maximum_close_location: float = 0.15,
+    ) -> bool:
+        if premarket_open <= 0 or premarket_high <= premarket_low:
+            return False
+        span = premarket_high - premarket_low
+        return (
+            span / premarket_open >= float(minimum_range) - 1e-12
+            and (premarket_close - premarket_low) / span <= float(maximum_close_location) + 1e-12
+        )
+
+    def backend_strategy_controls_url(self) -> str:
+        ingest_url = str(getattr(self.cfg, "monitor_ingest_url", "") or "").strip()
+        if not ingest_url:
+            return ""
+        base = ingest_url.rsplit("/", 1)[0]
+        path = str(getattr(self.cfg, "backend_strategy_controls_path", "strategy-controls.php") or "").lstrip("/")
+        return f"{base}/{path}"
+
+    def entry_rule_backend_request(
+        self,
+        current_day: date,
+        payload: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        url = self.backend_strategy_controls_url()
+        token = str(getattr(self.cfg, "monitor_write_token", "") or "").strip()
+        if not url or not url.lower().startswith("https://") or not token:
+            raise RuntimeError("HTTPS strategy-controls endpoint and monitor write token are required")
+        actor = self.coordinator.actor_payload()
+        week_key = iso_week_key(current_day)
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "User-Agent": f"OPPW-MT5-Entry-Rules/{BUILD_ID}",
+        }
+        if payload is None:
+            query = urllib.parse.urlencode({
+                "accountKey": self.cfg.monitor_account_key,
+                "weekKey": week_key,
+                "role": actor["role"],
+                "ownerId": actor["ownerId"],
+                "fencingToken": actor["fencingToken"],
+            })
+            request = urllib.request.Request(f"{url}?{query}", method="GET", headers=headers)
+        else:
+            body = dict(payload)
+            body["accountKey"] = self.cfg.monitor_account_key
+            body["weekKey"] = week_key
+            body["coordination"] = actor
+            encoded = json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+            headers["Content-Type"] = "application/json"
+            request = urllib.request.Request(url, data=encoded, method="POST", headers=headers)
+        try:
+            with urllib.request.urlopen(request, timeout=float(self.cfg.monitor_timeout_seconds)) as response:
+                response_text = response.read().decode("utf-8", errors="replace")
+                if int(response.status) not in (200, 201):
+                    raise RuntimeError(f"HTTP {response.status}")
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")[:500]
+            raise RuntimeError(f"HTTP {exc.code}: {detail}") from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"connection failed: {exc.reason}") from exc
+        try:
+            decoded = json.loads(response_text)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Strategy-controls response was not JSON: {response_text[:200]}") from exc
+        if not isinstance(decoded, dict) or not bool(decoded.get("ok", False)):
+            raise RuntimeError(str(decoded.get("error", "strategy-controls request rejected")) if isinstance(decoded, dict) else "strategy-controls request rejected")
+        return decoded
+
+    def apply_entry_rule_context(self, payload: dict[str, Any]) -> dict[str, Any]:
+        rules = payload.get("rules")
+        if not isinstance(rules, list):
+            raise RuntimeError("Strategy-controls response did not contain rules")
+        parsed: dict[str, bool] = {}
+        for rule in rules:
+            if isinstance(rule, dict) and isinstance(rule.get("enabled"), bool):
+                parsed[str(rule.get("key", ""))] = bool(rule["enabled"])
+        required = set(self.entry_rule_controls)
+        if set(parsed) != required:
+            raise RuntimeError(f"Strategy-controls response rule set mismatch: {sorted(parsed)}")
+        revision = int(payload.get("revision", 0) or 0)
+        if revision <= 0:
+            raise RuntimeError("Strategy-controls response contained an invalid revision")
+        changed = revision != self.entry_rule_controls_revision or parsed != self.entry_rule_controls
+        self.entry_rule_controls = parsed
+        self.entry_rule_controls_revision = revision
+        self.last_entry_rule_context = payload
+        self.last_entry_rule_context_monotonic = time_module.monotonic()
+        if changed:
+            self.state.entry_rule_controls_revision = revision
+            self.state.entry_rule_controls = dict(parsed)
+            self.state.save(self.cfg.state_file)
+            self.log.info(
+                "EVENT ENTRY_RULE_CONTROLS_UPDATED revision=%s rules=%s",
+                revision, json.dumps(parsed, sort_keys=True, separators=(",", ":")),
+            )
+        return payload
+
+    def refresh_entry_rule_context(self, current_day: date) -> dict[str, Any]:
+        now_monotonic = time_module.monotonic()
+        refresh_seconds = max(1.0, float(getattr(self.cfg, "monitor_publish_interval_seconds", 5.0)))
+        elapsed = now_monotonic - self.last_entry_rule_context_monotonic
+        if elapsed < refresh_seconds:
+            if self.last_entry_rule_context is not None:
+                return self.last_entry_rule_context
+            raise RuntimeError("Strategy-controls refresh retry is rate-limited")
+        self.last_entry_rule_context_monotonic = now_monotonic
+        return self.apply_entry_rule_context(self.entry_rule_backend_request(current_day))
+
+    def record_entry_rule_week_state(
+        self,
+        current_day: date,
+        status: str,
+        inputs: dict[str, Any],
+    ) -> dict[str, Any]:
+        decision_id = self.state.active_decision_id or str((self.last_strategy_decision_payload or {}).get("decisionId", ""))
+        actor = self.coordinator.actor_payload()
+        request_source = "|".join((
+            self.account,
+            iso_week_key(current_day),
+            status,
+            decision_id,
+            str(actor["ownerId"]),
+            str(actor["fencingToken"]),
+        ))
+        response = self.entry_rule_backend_request(current_day, {
+            "action": "recordWeekState",
+            "requestId": uuid.uuid5(uuid.NAMESPACE_URL, request_source).hex,
+            "status": status,
+            "controlsRevision": self.entry_rule_controls_revision,
+            "decisionId": decision_id,
+            "inputs": inputs,
+        })
+        return self.apply_entry_rule_context(response)
+
+    def remember_entry_rule_decision(self, current_day: date, status: str, inputs: dict[str, Any]) -> None:
+        week = iso_week_key(current_day)
+        changed = (
+            self.state.entry_rule_decision_week != week
+            or self.state.entry_rule_decision_status != status
+            or self.state.entry_rule_decision_inputs != inputs
+            or self.state.entry_rule_controls_revision != self.entry_rule_controls_revision
+            or self.state.entry_rule_controls != self.entry_rule_controls
+        )
+        if not changed:
+            return
+        self.state.entry_rule_decision_week = week
+        self.state.entry_rule_decision_status = status
+        self.state.entry_rule_decision_inputs = dict(inputs)
+        self.state.entry_rule_controls_revision = self.entry_rule_controls_revision
+        self.state.entry_rule_controls = dict(self.entry_rule_controls)
+        self.state.save(self.cfg.state_file)
+        self.record_strategy_decision_if_changed(force=True)
+
+    def entry_rule_market_context(self, current_day: date) -> Optional[dict[str, Any]]:
+        session = self.session_times(current_day)
+        cash_open_time = session.cash_open.time().replace(second=0, microsecond=0)
+        cash_bar = self.m1_bar_at(self.cfg.trade_symbol, current_day, cash_open_time)
+        if cash_bar is None or cash_bar.open <= 0:
+            return None
+
+        sessions = self.calendar.sessions_in_range(
+            (current_day - timedelta(days=75)).isoformat(),
+            (current_day - timedelta(days=1)).isoformat(),
+        )
+        session_days = [value.date() for value in sessions if value.date() < current_day]
+        previous_day = session_days[-1] if session_days else None
+        momentum_base_day = session_days[-21] if len(session_days) >= 21 else None
+
+        def close_for(day_value: Optional[date]) -> float:
+            if day_value is None:
+                return 0.0
+            close_time = self.session_times(day_value).close_bar_open.time().replace(second=0, microsecond=0)
+            bar = self.m1_bar_at(self.cfg.trade_symbol, day_value, close_time)
+            return float(bar.close) if bar is not None and bar.close > 0 else 0.0
+
+        previous_close = close_for(previous_day)
+        momentum_base_close = close_for(momentum_base_day)
+        momentum20 = (
+            previous_close / momentum_base_close - 1.0
+            if previous_close > 0 and momentum_base_close > 0
+            else None
+        )
+
+        premarket_start = datetime.combine(current_day, self.cfg.premarket_start, self.tz)
+        query_start = self.local_to_mt5_bar_query_time(premarket_start)
+        query_end = self.local_to_mt5_bar_query_time(session.cash_open - timedelta(seconds=1))
+        try:
+            rates = mt5.copy_rates_range(self.cfg.trade_symbol, mt5.TIMEFRAME_M1, query_start, query_end)
+        except Exception:
+            rates = None
+        premarket_rows = []
+        for row in ([] if rates is None else rates):
+            local_at = self.mt5_bar_timestamp_to_local(int(row["time"]))
+            if premarket_start <= local_at < session.cash_open:
+                premarket_rows.append(row)
+        premarket_rows.sort(key=lambda row: int(row["time"]))
+        return {
+            "cashOpen": float(cash_bar.open),
+            "previousCashClose": previous_close,
+            "previousTradingDay": previous_day.isoformat() if previous_day else "",
+            "momentumBaseDay": momentum_base_day.isoformat() if momentum_base_day else "",
+            "momentumBaseClose": momentum_base_close,
+            "momentum20": momentum20,
+            "premarketOpen": float(premarket_rows[0]["open"]) if premarket_rows else 0.0,
+            "premarketHigh": max(float(row["high"]) for row in premarket_rows) if premarket_rows else 0.0,
+            "premarketLow": min(float(row["low"]) for row in premarket_rows) if premarket_rows else 0.0,
+            "premarketClose": float(premarket_rows[-1]["close"]) if premarket_rows else 0.0,
+            "premarketBars": len(premarket_rows),
+        }
+
+    def loss_control_entry_decision(
+        self,
+        current_day: date,
+        backend_context: dict[str, Any],
+        market: Optional[dict[str, Any]],
+    ) -> tuple[str, dict[str, Any]]:
+        raw_outcomes = backend_context.get("recentOutcomes")
+        outcomes = [
+            float(item["return"])
+            for item in (raw_outcomes if isinstance(raw_outcomes, list) else [])
+            if isinstance(item, dict) and isinstance(item.get("return"), (int, float))
+        ]
+        inputs: dict[str, Any] = {
+            "controls": dict(self.entry_rule_controls),
+            "controlsRevision": self.entry_rule_controls_revision,
+            "recentOutcomes": raw_outcomes if isinstance(raw_outcomes, list) else [],
+        }
+        if self.entry_rule_controls["ARITHMETIC_LAST_TWO"] and self.arithmetic_entry_rule_trigger(
+            outcomes,
+            self.cfg.entry_rule_arithmetic_threshold,
+        ):
+            inputs["arithmeticSum"] = sum(outcomes[-2:])
+            return "SKIP_ARITHMETIC", inputs
+
+        market_rules_required = self.entry_rule_controls["GAP_MOMENTUM"] or (
+            self.entry_rule_controls["PREMARKET_RANGE"]
+            and self.entry_rule_controls["PREMARKET_CLOSE_NEAR_LOW"]
+        )
+        if market_rules_required and market is None:
+            return "WAIT_MARKET_INPUTS", inputs
+        if market is not None:
+            inputs.update(market)
+
+        premarket_enabled = (
+            self.entry_rule_controls["PREMARKET_RANGE"]
+            and self.entry_rule_controls["PREMARKET_CLOSE_NEAR_LOW"]
+        )
+        if premarket_enabled:
+            if int(inputs.get("premarketBars", 0) or 0) <= 0:
+                return "WAIT_MARKET_INPUTS", inputs
+            if self.premarket_low_entry_rule_trigger(
+                float(inputs.get("premarketOpen", 0.0) or 0.0),
+                float(inputs.get("premarketHigh", 0.0) or 0.0),
+                float(inputs.get("premarketLow", 0.0) or 0.0),
+                float(inputs.get("premarketClose", 0.0) or 0.0),
+                self.cfg.entry_rule_premarket_minimum_range,
+                self.cfg.entry_rule_premarket_maximum_close_location,
+            ):
+                span = float(inputs["premarketHigh"]) - float(inputs["premarketLow"])
+                inputs["premarketRange"] = span / float(inputs["premarketOpen"])
+                inputs["premarketCloseLocation"] = (float(inputs["premarketClose"]) - float(inputs["premarketLow"])) / span
+                return "SKIP_PREMARKET_LOW", inputs
+
+        if self.entry_rule_controls["GAP_MOMENTUM"]:
+            if (
+                float(inputs.get("previousCashClose", 0.0) or 0.0) <= 0
+                or inputs.get("momentum20") is None
+            ):
+                return "WAIT_MARKET_INPUTS", inputs
+            gap = float(inputs["cashOpen"]) / float(inputs["previousCashClose"]) - 1.0
+            inputs["gap"] = gap
+            if self.gap_momentum_entry_rule_trigger(
+                float(inputs["cashOpen"]),
+                float(inputs["previousCashClose"]),
+                float(inputs["momentum20"]),
+                self.cfg.entry_rule_gap_threshold,
+                self.cfg.entry_rule_momentum20_threshold,
+            ):
+                return ("DEFER_TUESDAY" if current_day.weekday() == 0 else "SKIP_GAP_MOMENTUM"), inputs
+        return "ENTER", inputs
+
     def refresh_previous_full_week_change(self, previous_day: date) -> None:
         if self.state.prev_open <= 0:
             return
@@ -255,7 +571,7 @@ class BrokerExecutionMixin:
             return False
         return True
 
-    def send_buy(self, current_day: date) -> bool:
+    def send_buy(self, current_day: date, scheduled_at: Optional[datetime] = None) -> bool:
         if not self.trade_request_role_allowed("BUY"):
             return False
         account = mt5.account_info()
@@ -296,7 +612,7 @@ class BrokerExecutionMixin:
             "deviation": self.cfg.deviation_points, "magic": self.cfg.magic,
             "comment": f"{self.cfg.comment_prefix} L{leverage}"[:31], "type_time": mt5.ORDER_TIME_GTC,
         }
-        scheduled = self.session_times(current_day).buy_action
+        scheduled = scheduled_at or self.session_times(current_day).buy_action
         if not self.cfg.live_enabled:
             request = dict(request_base)
             request["type_filling"] = self.order_filling_modes(info)[0]
@@ -866,32 +1182,149 @@ class BrokerExecutionMixin:
             self.evaluate_cash_open(position, bar, now)
 
     def maybe_open_new_week(self, current_day: date, now: datetime, current_bar: Optional[M1Bar], position) -> None:
-        if position is not None or self.state.exit_latched_reason or not self.is_new_week_entry(current_day):
+        if position is not None or self.state.exit_latched_reason or current_day.weekday() not in (0, 1):
             return
+        week = iso_week_key(current_day)
         session = self.session_times(current_day)
+        context_lead_seconds = max(1.0, float(getattr(self.cfg, "monitor_publish_interval_seconds", 5.0)))
+        if now < session.buy_action - timedelta(seconds=context_lead_seconds):
+            return
+        try:
+            backend_context = self.refresh_entry_rule_context(current_day)
+        except Exception as exc:
+            now_monotonic = time_module.monotonic()
+            if now_monotonic - self.last_entry_rule_error_monotonic >= float(self.cfg.monitor_error_log_interval_seconds):
+                self.last_entry_rule_error_monotonic = now_monotonic
+                self.log.error(
+                    "EVENT ENTRY_RULE_CONTEXT_UNAVAILABLE week=%s action=none error=%s",
+                    week, shlex.quote(str(exc)),
+                )
+            return
+
+        week_state = backend_context.get("weekState") if isinstance(backend_context.get("weekState"), dict) else None
+        week_status = str((week_state or {}).get("status", ""))
+        new_week_entry = self.is_new_week_entry(current_day)
+        if not new_week_entry and week_status not in {"ENTRY_APPROVED", "DEFER_TUESDAY", "TUESDAY_REENTRY"}:
+            return
+        if week_status.startswith("SKIP_"):
+            self.remember_entry_rule_decision(current_day, week_status, dict((week_state or {}).get("inputs") or {}))
+            return
+
         latest_entry = session.cash_open + timedelta(seconds=self.cfg.entry_window_seconds)
-        if now < session.buy_action:
+        premarket_enabled = (
+            self.entry_rule_controls["PREMARKET_RANGE"]
+            and self.entry_rule_controls["PREMARKET_CLOSE_NEAR_LOW"]
+        )
+        approved_inputs = dict((week_state or {}).get("inputs") or {}) if week_status == "ENTRY_APPROVED" else {}
+        cash_open_required = (
+            bool(approved_inputs.get("cashOpenRequired"))
+            if week_status == "ENTRY_APPROVED"
+            else (
+                self.entry_rule_controls["GAP_MOMENTUM"]
+                or premarket_enabled
+                or week_status in {"DEFER_TUESDAY", "TUESDAY_REENTRY"}
+            )
+        )
+        scheduled_at = session.cash_open if cash_open_required else session.buy_action
+        if now < scheduled_at:
             return
         if now > latest_entry:
-            week = iso_week_key(current_day)
             if self.state.last_missed_entry_week != week:
                 self.state.active_execution_id = uuid.uuid4().hex
                 self.state.active_decision_id = self.state.active_decision_id or str((self.last_strategy_decision_payload or {}).get("decisionId", ""))
                 self.state.active_strategy_spec_id = self.strategy_specification["specId"]
                 self.state.active_strategy_spec_hash = self.strategy_specification["specHash"]
-                self.state.execution_scheduled_at = session.buy_action.isoformat()
+                self.state.execution_scheduled_at = scheduled_at.isoformat()
                 self.state.execution_started_at = datetime.now(UTC).isoformat()
                 self.state.last_missed_entry_week = week
                 self.state.save(self.cfg.state_file)
-                self.execution_stage("MISSED_WINDOW", result=False, scheduled_at=session.buy_action.isoformat(), reason="entry_window_elapsed")
-                self.log.error("EVENT ENTRY_WINDOW_MISSED week=%s scheduled=%s latest_entry=%s now=%s", week, session.buy_action.isoformat(), latest_entry.isoformat(), now.isoformat())
+                self.execution_stage("MISSED_WINDOW", result=False, scheduled_at=scheduled_at.isoformat(), reason="entry_window_elapsed")
+                self.log.error("EVENT ENTRY_WINDOW_MISSED week=%s scheduled=%s latest_entry=%s now=%s", week, scheduled_at.isoformat(), latest_entry.isoformat(), now.isoformat())
             return
         if int(datetime.now(UTC).timestamp()) < self.state.entry_pending_until_utc:
             return
-        previous = parse_date(self.state.last_trading_date)
+
+        if week_status == "ENTRY_APPROVED":
+            self.remember_entry_rule_decision(current_day, "ENTER", approved_inputs)
+            self.send_buy(current_day, scheduled_at=scheduled_at)
+            return
+
+        if week_status in {"DEFER_TUESDAY", "TUESDAY_REENTRY"}:
+            if current_day.weekday() != 1:
+                return
+            inputs = dict((week_state or {}).get("inputs") or {})
+            if week_status == "DEFER_TUESDAY":
+                cash_open_time = session.cash_open.time().replace(second=0, microsecond=0)
+                cash_bar = self.m1_bar_at(self.cfg.trade_symbol, current_day, cash_open_time)
+                if cash_bar is None or cash_bar.open <= 0:
+                    return
+                friday_close = float(inputs.get("previousCashClose", 0.0) or 0.0)
+                tuesday_open = float(cash_bar.open)
+                inputs["tuesdayOpen"] = tuesday_open
+                inputs["fridayClose"] = friday_close
+                normalized = (
+                    not self.entry_rule_controls["TUESDAY_NORMALIZATION"]
+                    or self.normalized_tuesday_entry_rule(
+                        friday_close,
+                        tuesday_open,
+                        self.cfg.entry_rule_tuesday_normalization_tolerance,
+                    )
+                )
+                status = "TUESDAY_REENTRY" if normalized else "SKIP_TUESDAY_NOT_NORMALIZED"
+                try:
+                    backend_context = self.record_entry_rule_week_state(current_day, status, inputs)
+                except Exception as exc:
+                    self.log.error(
+                        "EVENT ENTRY_RULE_WEEK_STATE_FAILED week=%s status=%s action=none error=%s",
+                        week, status, shlex.quote(str(exc)),
+                    )
+                    return
+                self.remember_entry_rule_decision(current_day, status, inputs)
+                self.log.info(
+                    "EVENT ENTRY_RULE_DECISION week=%s status=%s controls_revision=%s friday_close=%.5f tuesday_open=%.5f normalized=%s",
+                    week, status, self.entry_rule_controls_revision, friday_close, tuesday_open, normalized,
+                )
+                if not normalized:
+                    return
+            self.send_buy(current_day, scheduled_at=session.cash_open)
+            return
+
+        previous = self.previous_trading_date(current_day) or parse_date(self.state.last_trading_date)
         if previous is not None:
             self.refresh_previous_full_week_change(previous)
-        self.send_buy(current_day)
+        market = self.entry_rule_market_context(current_day) if cash_open_required else None
+        status, inputs = self.loss_control_entry_decision(current_day, backend_context, market)
+        if status == "WAIT_MARKET_INPUTS":
+            return
+        if status != "ENTER":
+            try:
+                self.record_entry_rule_week_state(current_day, status, inputs)
+            except Exception as exc:
+                self.log.error(
+                    "EVENT ENTRY_RULE_WEEK_STATE_FAILED week=%s status=%s action=none error=%s",
+                    week, status, shlex.quote(str(exc)),
+                )
+                return
+            self.remember_entry_rule_decision(current_day, status, inputs)
+            self.log.info(
+                "EVENT ENTRY_RULE_DECISION week=%s status=%s controls_revision=%s inputs=%s",
+                week, status, self.entry_rule_controls_revision,
+                json.dumps(inputs, sort_keys=True, separators=(",", ":")),
+            )
+            return
+
+        inputs["cashOpenRequired"] = cash_open_required
+        inputs["scheduledAt"] = scheduled_at.isoformat()
+        try:
+            self.record_entry_rule_week_state(current_day, "ENTRY_APPROVED", inputs)
+        except Exception as exc:
+            self.log.error(
+                "EVENT ENTRY_RULE_WEEK_STATE_FAILED week=%s status=ENTRY_APPROVED action=none error=%s",
+                week, shlex.quote(str(exc)),
+            )
+            return
+        self.remember_entry_rule_decision(current_day, "ENTER", inputs)
+        self.send_buy(current_day, scheduled_at=scheduled_at)
 
     def maybe_execute_open_action(self, position, now: datetime) -> bool:
         if position is None or self.state.exit_latched_reason:

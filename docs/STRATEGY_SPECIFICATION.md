@@ -15,6 +15,13 @@ Changing a trading-relevant resolved value creates a different hash and a new im
 
 ## Session-order invariants
 
+- Five per-account entry-loss controls are read from MySQL before a controlled entry: `ARITHMETIC_LAST_TWO`, combined `GAP_MOMENTUM`, `TUESDAY_NORMALIZATION`, `PREMARKET_RANGE`, and `PREMARKET_CLOSE_NEAR_LOW`.
+- Arithmetic skips when the latest two weekly outcomes sum to at most −2.00%; an explicit skipped week contributes `0.0`, while an entered week contributes its closed trade's pre-leverage price return.
+- The combined gate requires cash-open gap ≥1.00% and prior 20-session momentum ≤−0.50%. On Monday it defers to Tuesday; when Tuesday is the first actual weekly session it skips without a later re-entry.
+- A deferred Tuesday entry proceeds only when the Tuesday cash open is within ±0.50% of the prior Friday close, unless that individual rule is disabled.
+- The premarket-low skip is active only while both premarket component controls are enabled. It requires premarket range ≥0.80% and a close in the bottom 15% of that range.
+- Any enabled market-input rule moves BUY evaluation from the pre-open lead to cash open, still within the existing 55-second entry window. The fenced backend records the entry approval against the exact control revision before BUY; a stale revision, missing backend authority, or missing required market data never permits BUY.
+
 - OH is never evaluated on the first actual XNYS trading session of the week. Its cash-open-minus-lead checks begin on the second actual session, including holiday-shifted weeks and manually adopted positions.
 - Break-even can arm only after a false CH at day close, no earlier than the second actual XNYS session and never on the position opening day. Capturing a pending entry-session cash-open signal reference is not a break-even check.
 - A manually adopted position receives the same immutable hard-stop lock and broker-side protection restoration as a strategy-opened position before other cycle logic runs.
@@ -39,8 +46,10 @@ The document records instruments and sources, exchange session clocks, entry rul
 | Protection request/result | `strategy_protection_changes` |
 | Trade transition ledger | `strategy_trade_ledger` |
 | Cash flow | `account_cash_flows` |
+| Entry-rule control changes | `strategy_entry_rule_control_events` |
+| Weekly entry-rule transitions | `strategy_entry_rule_week_events` |
 
-`strategy_trades` is a mutable projection for mobile analytics. `strategy_events` is a diagnostic stream and legacy compatibility source; neither replaces the immutable audit records.
+`strategy_entry_rule_controls` and `strategy_entry_rule_week_state` are mutable current projections backed by their immutable event tables. `strategy_trades` is a mutable projection for mobile analytics and supplies closed pre-leverage outcomes to entry control. `strategy_events` is a diagnostic stream and legacy compatibility source; neither replaces the immutable audit records.
 
 ## Immutability and idempotency
 

@@ -27,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.oppw.monitor.BuildConfig
 import com.oppw.monitor.data.UiState
+import com.oppw.monitor.data.StrategyRuleControl
 import com.oppw.monitor.ui.components.AppCard
 import com.oppw.monitor.ui.components.Metric
 import com.oppw.monitor.ui.components.SectionTitle
@@ -41,9 +42,11 @@ fun SettingsScreen(
     onRefresh: () -> Unit,
     onUnpair: () -> Unit,
     onServiceDesiredState: (String, Boolean) -> Unit,
+    onStrategyRuleEnabled: (String, Boolean) -> Unit,
 ) {
     var confirmUnpair by remember { mutableStateOf(false) }
     var pendingServiceCommand by remember { mutableStateOf<Pair<String, Boolean>?>(null) }
+    var pendingRuleCommand by remember(state.selectedAccountKey) { mutableStateOf<Pair<StrategyRuleControl, Boolean>?>(null) }
     val selected = state.accounts.firstOrNull { it.key == state.selectedAccountKey }
     val retrievalAge = secondsSinceEpoch(state.lastSuccessfulFetchEpochMs, state.nowEpochMs)
 
@@ -82,6 +85,37 @@ fun SettingsScreen(
                         Text("This device is read-only. Pair it with service-control permission to enable these controls.", color = TextSecondary)
                     }
                     state.serviceControlError?.let { Text(it, color = DangerRed) }
+                }
+            }
+        }
+        item {
+            AppCard(Modifier.fillMaxWidth()) {
+                SectionTitle("Entry loss-control rules")
+                val control = state.strategyControl
+                if (state.strategyControlLoading && control == null) {
+                    CircularProgressIndicator()
+                } else if (control == null) {
+                    Text(state.strategyControlError ?: "Entry-rule controls unavailable", color = DangerRed)
+                } else {
+                    Text(
+                        "Rules apply only to new entries for ${selected?.displayName ?: control.accountKey}; existing positions are unchanged.",
+                        color = TextSecondary,
+                    )
+                    control.rules.forEach { rule ->
+                        Metric(rule.label, if (rule.enabled) "ENABLED" else "DISABLED")
+                        Text(rule.description, color = TextSecondary)
+                        OutlinedButton(
+                            onClick = { pendingRuleCommand = rule to !rule.enabled },
+                            enabled = control.canControl && !state.strategyControlLoading,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(if (rule.enabled) "Disable rule" else "Enable rule")
+                        }
+                    }
+                    if (!control.canControl) {
+                        Text("This device is read-only. Pair it with operational-control permission to change entry rules.", color = TextSecondary)
+                    }
+                    state.strategyControlError?.let { Text(it, color = DangerRed) }
                 }
             }
         }
@@ -185,6 +219,26 @@ fun SettingsScreen(
                 }) { Text(if (desiredRunning) "Start" else "Stop", color = if (desiredRunning) MaterialTheme.colorScheme.primary else DangerRed) }
             },
             dismissButton = { TextButton(onClick = { pendingServiceCommand = null }) { Text("Cancel") } },
+        )
+    }
+
+    pendingRuleCommand?.let { (rule, enabled) ->
+        AlertDialog(
+            onDismissRequest = { pendingRuleCommand = null },
+            title = { Text(if (enabled) "Enable entry rule?" else "Disable entry rule?") },
+            text = {
+                Text(
+                    "${rule.label}\n\nThis changes new-entry decisions for ${selected?.displayName ?: "the selected account"}. " +
+                        "It does not modify an existing position."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingRuleCommand = null
+                    onStrategyRuleEnabled(rule.key, enabled)
+                }) { Text(if (enabled) "Enable" else "Disable", color = if (enabled) MaterialTheme.colorScheme.primary else DangerRed) }
+            },
+            dismissButton = { TextButton(onClick = { pendingRuleCommand = null }) { Text("Cancel") } },
         )
     }
 }

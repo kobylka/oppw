@@ -5,13 +5,13 @@ from __future__ import annotations
 import json
 import os
 import time as time_module
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
 from pathlib import Path
 
 @dataclass
 class StrategyState:
-    version: int = 7
+    version: int = 8
 
     last_trading_date: str = ""
     last_close_processed_date: str = ""
@@ -78,6 +78,12 @@ class StrategyState:
     execution_position_visible: bool = False
     first_protection_confirmed: bool = False
     last_missed_entry_week: str = ""
+
+    entry_rule_controls_revision: int = 0
+    entry_rule_controls: dict[str, bool] = field(default_factory=dict)
+    entry_rule_decision_week: str = ""
+    entry_rule_decision_status: str = ""
+    entry_rule_decision_inputs: dict[str, object] = field(default_factory=dict)
 
     @classmethod
     def load(cls, path: Path) -> "StrategyState":

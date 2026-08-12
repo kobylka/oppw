@@ -559,6 +559,8 @@ class StrategyDecisionMixin:
             "hardStopRatioL10": self.hard_sl_ratio(int(self.cfg.loss_leverage)),
             "hardStopRatioL8": self.hard_sl_ratio(int(self.cfg.base_leverage)),
             "sizingMethod": "MAX_VOLUME_BY_REQUIRED_BALANCE",
+            "entryRuleControlsRevision": int(getattr(self, "entry_rule_controls_revision", 0) or 0),
+            "entryRuleControls": dict(getattr(self, "entry_rule_controls", {})),
             "strategySpecHash": str(getattr(self, "strategy_specification", {}).get("specHash", "")),
         }
         return hashlib.sha256(json.dumps(values, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
@@ -591,6 +593,29 @@ class StrategyDecisionMixin:
                 "entryWindowSeconds": int(self.cfg.entry_window_seconds),
                 "entryDayRule": "FIRST_XNYS_SESSION_OF_WEEK; Monday when open, otherwise the first later XNYS session after any closure sequence",
                 "signalOpenRule": "EXACT_ENTRY_SESSION_CASH_OPEN_M1; deferred without fill-price fallback",
+                "ruleControlledEntryTime": "cash open when an enabled market-input rule is required; otherwise the configured entry lead",
+            },
+            "entryLossControl": {
+                "controlAuthority": "per-account MySQL strategy_entry_rule_controls, changed by an explicitly authorized paired device",
+                "weeklyStateAuthority": "globally fenced strategy_entry_rule_week_state with immutable strategy_entry_rule_week_events audit",
+                "rules": [
+                    "ARITHMETIC_LAST_TWO",
+                    "GAP_MOMENTUM",
+                    "TUESDAY_NORMALIZATION",
+                    "PREMARKET_RANGE",
+                    "PREMARKET_CLOSE_NEAR_LOW",
+                ],
+                "arithmeticLookback": 2,
+                "arithmeticThreshold": float(self.cfg.entry_rule_arithmetic_threshold),
+                "gapThreshold": float(self.cfg.entry_rule_gap_threshold),
+                "momentumSessions": 20,
+                "momentumThreshold": float(self.cfg.entry_rule_momentum20_threshold),
+                "tuesdayNormalizationTolerance": float(self.cfg.entry_rule_tuesday_normalization_tolerance),
+                "premarketMinimumRange": float(self.cfg.entry_rule_premarket_minimum_range),
+                "premarketMaximumCloseLocation": float(self.cfg.entry_rule_premarket_maximum_close_location),
+                "priority": ["ARITHMETIC_LAST_TWO", "PREMARKET_RANGE_AND_CLOSE_NEAR_LOW", "GAP_MOMENTUM", "TUESDAY_NORMALIZATION"],
+                "skippedWeekOutcome": 0.0,
+                "missingInputPolicy": "do not submit BUY; retry inside the bounded entry window",
             },
             "leverageSelection": {
                 "baseLeverage": int(self.cfg.base_leverage),
@@ -672,6 +697,8 @@ class StrategyDecisionMixin:
                 "cashFlows": "immutable MySQL account_cash_flows",
                 "protection": "immutable MySQL strategy_protection_changes",
                 "lifecycle": "immutable MySQL strategy_execution_stages",
+                "entryRuleControls": "mutable per-account strategy_entry_rule_controls with immutable control-event audit",
+                "entryRuleWeekState": "globally fenced strategy_entry_rule_week_state with immutable weekly-event audit",
                 "events": "diagnostic stream only",
             },
         }
@@ -682,7 +709,7 @@ class StrategyDecisionMixin:
             "specHash": spec_hash,
             "specKey": "OPPW24",
             "specVersion": PROJECT_VERSION,
-            "effectiveFrom": "2026-07-21T00:00:00+00:00",
+            "effectiveFrom": "2026-08-11T00:00:00+00:00",
             "createdAt": self.started_at.astimezone(UTC).isoformat(),
             "build": BUILD_ID,
             "document": document,
@@ -698,21 +725,34 @@ class StrategyDecisionMixin:
     def strategy_decision_payload(self, preview: Optional[dict[str, Any]] = None) -> dict[str, Any]:
         preview = preview or self.potential_position_preview()
         recorded_at = datetime.now(self.tz).isoformat()
+        decision_week = self.strategy_decision_week_key()
+        state = getattr(self, "state", None)
+        entry_rule_status = (
+            str(getattr(state, "entry_rule_decision_status", "") or "")
+            if getattr(state, "entry_rule_decision_week", "") == decision_week
+            else ""
+        )
+        outcome = "READY" if bool(preview.get("available")) else "UNAVAILABLE"
+        if entry_rule_status == "DEFER_TUESDAY":
+            outcome = "DEFERRED_TUESDAY"
+        elif entry_rule_status.startswith("SKIP_"):
+            outcome = entry_rule_status
         decision_id_source = "|".join(str(value) for value in (
-            self.account, self.strategy_decision_week_key(), BUILD_ID, preview.get("symbol", ""),
+            self.account, decision_week, BUILD_ID, preview.get("symbol", ""),
             self.strategy_specification["specHash"],
             preview.get("strategyLeverage", 0.0), preview.get("previousFullWeekChange", 0.0),
             preview.get("previousTradeChange", 0.0), preview.get("volume", 0.0), preview.get("available", False),
             round(float(preview.get("balance") or 0.0), 2), round(float(preview.get("sizingFreeMargin", preview.get("freeMargin")) or 0.0), 2),
+            int(getattr(self, "entry_rule_controls_revision", 0) or 0), entry_rule_status,
             recorded_at,
         ))
         decision_id = uuid.uuid5(uuid.NAMESPACE_URL, decision_id_source).hex
         return {
-            "decisionId": decision_id, "decisionWeek": self.strategy_decision_week_key(), "recordedAt": recorded_at, "build": BUILD_ID,
+            "decisionId": decision_id, "decisionWeek": decision_week, "recordedAt": recorded_at, "build": BUILD_ID,
             "strategySpecId": self.strategy_specification["specId"],
             "strategySpecHash": self.strategy_specification["specHash"],
             "parameterHash": self.strategy_parameter_hash(), "account": self.account, "decision": "NEXT_WEEK_LONG_ENTRY",
-            "outcome": "READY" if bool(preview.get("available")) else "UNAVAILABLE",
+            "outcome": outcome,
             "selectedLeverage": float(preview.get("strategyLeverage", 0.0)), "leverageReason": str(preview.get("leverageReason", "")),
             "inputs": {
                 "previousFullWeekChange": float(preview.get("previousFullWeekChange", 0.0)),
@@ -721,6 +761,10 @@ class StrategyDecisionMixin:
                 "previousTradeSource": str(preview.get("previousTradeSource", "")),
                 "fullWeekTriggerPercent": float(preview.get("fullWeekTriggerPercent", -2.5)),
                 "previousTradeTriggerPercent": float(preview.get("previousTradeTriggerPercent", -0.7)),
+                "entryRuleControlsRevision": int(getattr(self, "entry_rule_controls_revision", 0) or 0),
+                "entryRuleControls": dict(getattr(self, "entry_rule_controls", {})),
+                "entryRuleDecision": entry_rule_status,
+                "entryRuleDecisionInputs": dict(getattr(state, "entry_rule_decision_inputs", {}) or {}) if entry_rule_status else {},
             },
             "sizing": {key: preview.get(key) for key in (
                 "symbol", "side", "price", "priceSource", "volume", "requiredDeposit", "requiredBalance",
@@ -751,6 +795,8 @@ class StrategyDecisionMixin:
             payload["parameterHash"], payload["outcome"], round(float(payload["selectedLeverage"]), 6),
             round(float(payload["inputs"]["previousFullWeekChange"]), 8), round(float(payload["inputs"]["previousTradeChange"]), 8),
             str(payload["inputs"].get("previousFullWeekSource", "")), str(payload["inputs"].get("previousTradeSource", "")),
+            int(payload["inputs"].get("entryRuleControlsRevision", 0)), str(payload["inputs"].get("entryRuleDecision", "")),
+            json.dumps(payload["inputs"].get("entryRuleControls", {}), sort_keys=True, separators=(",", ":")),
             round(float(payload["sizing"].get("volume") or 0.0), 8), int(payload["sizing"].get("sizingUnits") or 0),
             round(float(payload["sizing"].get("balance") or 0.0), 2), round(float(payload["sizing"].get("sizingFreeMargin", payload["sizing"].get("freeMargin")) or 0.0), 2),
             bool(payload["sizing"].get("minimumVolumeFloor")), payload["error"].split(":", 1)[0],

@@ -56,6 +56,12 @@ ENVIRONMENT_VARIABLES = {
     "loss_leverage": "OPPW_LOSS_LEVERAGE",
     "full_week_loss_trigger": "OPPW_FULL_WEEK_LOSS_TRIGGER",
     "previous_trade_loss_trigger": "OPPW_PREVIOUS_TRADE_LOSS_TRIGGER",
+    "entry_rule_arithmetic_threshold": "OPPW_ENTRY_RULE_ARITHMETIC_THRESHOLD",
+    "entry_rule_gap_threshold": "OPPW_ENTRY_RULE_GAP_THRESHOLD",
+    "entry_rule_momentum20_threshold": "OPPW_ENTRY_RULE_MOMENTUM20_THRESHOLD",
+    "entry_rule_tuesday_normalization_tolerance": "OPPW_ENTRY_RULE_TUESDAY_NORMALIZATION_TOLERANCE",
+    "entry_rule_premarket_minimum_range": "OPPW_ENTRY_RULE_PREMARKET_MINIMUM_RANGE",
+    "entry_rule_premarket_maximum_close_location": "OPPW_ENTRY_RULE_PREMARKET_MAXIMUM_CLOSE_LOCATION",
     "break_even_ratio": "OPPW_BE",
     "tsl_stop": "OPPW_TSL_STOP",
     "leverage_stop_points": "OPPW_LEVERAGE_STOP_POINTS",
@@ -106,6 +112,7 @@ ENVIRONMENT_VARIABLES = {
     "monitor_minute_snapshot_buffer_size": "OPPW_MONITOR_MINUTE_SNAPSHOT_BUFFER_SIZE",
     "monitor_history_file": "OPPW_MONITOR_HISTORY_FILE",
     "backend_latest_trade_path": "OPPW_BACKEND_LATEST_TRADE_PATH",
+    "backend_strategy_controls_path": "OPPW_BACKEND_STRATEGY_CONTROLS_PATH",
 }
 # use_legacy_balance_multiplier remains an explicit CLI-only runtime choice.
 
@@ -256,6 +263,18 @@ def validate_config(config) -> None:
         raise RuntimeError("legacy required-balance multipliers must be positive")
     if not 0 < float(config.max_account_stop_loss_fraction) <= 1:
         raise RuntimeError("max_account_stop_loss_fraction must be in (0, 1]")
+    for field_name in (
+        "entry_rule_arithmetic_threshold",
+        "entry_rule_gap_threshold",
+        "entry_rule_tuesday_normalization_tolerance",
+        "entry_rule_premarket_minimum_range",
+    ):
+        if float(getattr(config, field_name)) <= 0:
+            raise RuntimeError(f"{field_name} must be positive")
+    if float(config.entry_rule_momentum20_threshold) >= 0:
+        raise RuntimeError("entry_rule_momentum20_threshold must be negative")
+    if not 0 < float(config.entry_rule_premarket_maximum_close_location) <= 1:
+        raise RuntimeError("entry_rule_premarket_maximum_close_location must be in (0, 1]")
     for field_name in ("coordination_url", "events_ingest_url", "monitor_ingest_url"):
         value = str(getattr(config, field_name)).strip().lower()
         if not value.startswith("https://"):

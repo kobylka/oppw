@@ -31,6 +31,11 @@ class ContractResponseParserTest {
         assertTrue(serviceControl.master.online)
         assertEquals("MASTER", serviceControl.roles.first { it.role == "EXECUTOR" }.activeNodeRole)
 
+        val strategyControl = JsonParser.parseStrategyControl(response("strategy-controls.json"))
+        assertTrue(strategyControl.canControl)
+        assertEquals(5, strategyControl.rules.size)
+        assertFalse(strategyControl.rules.first { it.key == "GAP_MOMENTUM" }.enabled)
+
         val status = JsonParser.parseResponse(response("status.json"))
         val position = assertNotNull(status.snapshot.position).let { status.snapshot.position!! }
         assertEquals(990001L, position.ticket)
