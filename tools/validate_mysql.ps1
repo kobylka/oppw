@@ -57,10 +57,31 @@ try {
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
             throw "Migration listed but missing: $migration"
         }
+        if ($migration -eq 'migrate_v56_2_execution_lifecycle_links.sql') {
+            $repairFixture = @'
+INSERT INTO monitor_accounts (account_key,display_name,account_type) VALUES ('COLLATION_TEST','Collation repair test','DEMO');
+ALTER TABLE strategy_trades MODIFY decision_id CHAR(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NULL;
+ALTER TABLE strategy_execution_stages MODIFY decision_id CHAR(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL;
+INSERT INTO strategy_trades (strategy_key,position_ticket,decision_id,symbol,side,volume,opened_at,open_price)
+VALUES ('COLLATION_TEST',987654321,'22222222222222222222222222222222','US100','BUY',0.01,'2026-08-10 13:30:00.000',29797.5);
+INSERT INTO strategy_execution_stages
+    (strategy_key,stage_record_id,execution_id,decision_id,spec_id,position_ticket,stage,occurred_at,payload,payload_hash,received_at)
+VALUES
+    ('COLLATION_TEST','collation-repair-position-visible','collation-repair-execution','11111111111111111111111111111111',NULL,987654321,'POSITION_VISIBLE','2026-08-10 13:30:01.000',JSON_OBJECT(),'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','2026-08-10 13:30:01.000');
+'@
+            $repairFixture | & $docker.Source exec -i $container mysql -uroot --database=oppw_monitor
+            if ($LASTEXITCODE -ne 0) { throw 'Could not prepare mixed-collation lifecycle repair fixture.' }
+        }
         Write-Host "Applying $migration"
         Get-Content -LiteralPath $path -Raw |
             & $docker.Source exec -i $container mysql -uroot --database=oppw_monitor
         if ($LASTEXITCODE -ne 0) { throw "MySQL rejected migration: $migration" }
+    }
+
+    $repairedDecision = (& $docker.Source exec $container mysql -N -uroot --database=oppw_monitor `
+        -e "SELECT decision_id FROM strategy_trades WHERE strategy_key='COLLATION_TEST' AND position_ticket=987654321").Trim()
+    if ($LASTEXITCODE -ne 0 -or $repairedDecision -ne '11111111111111111111111111111111') {
+        throw "Mixed-collation lifecycle repair failed: $repairedDecision"
     }
 
     $tableQuery = "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='oppw_monitor' AND TABLE_NAME IN ('strategy_specifications','strategy_account_spec_assignments','strategy_decisions','strategy_execution_stages','strategy_fills','strategy_protection_changes','strategy_trade_ledger','account_cash_flows');"
@@ -118,7 +139,7 @@ try {
         mysql -N -uroot --database=oppw_monitor -e $marketForeignKeyQuery).Trim()
     if ($LASTEXITCODE -ne 0 -or [int]$marketForeignKeyCount -ne 1) { throw "Market-minute cascade protection validation failed: $marketForeignKeyCount/1" }
 
-    Write-Host "MYSQL VALIDATION PASSED authority_tables=$tableCount service_tables=$serviceTableCount lifecycle_tables=$lifecycleTableCount trade_class_columns=$tradeClassColumnCount trade_class_triggers=$tradeClassTriggerCount snapshot_unique=$snapshotUniqueCount immutable_triggers=$triggerCount market_retention_trigger=$marketRetentionTriggerCount retention_indexes=$retentionIndexCount market_fk_restrict=$marketForeignKeyCount image=$Image"
+    Write-Host "MYSQL VALIDATION PASSED authority_tables=$tableCount service_tables=$serviceTableCount lifecycle_tables=$lifecycleTableCount trade_class_columns=$tradeClassColumnCount trade_class_triggers=$tradeClassTriggerCount snapshot_unique=$snapshotUniqueCount immutable_triggers=$triggerCount market_retention_trigger=$marketRetentionTriggerCount retention_indexes=$retentionIndexCount market_fk_restrict=$marketForeignKeyCount lifecycle_repair=mixed-collation image=$Image"
 } finally {
     if ($containerStarted) {
         try {

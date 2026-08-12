@@ -63,6 +63,8 @@ import com.oppw.monitor.util.DrawdownEpisode
 import com.oppw.monitor.util.drawdownStatistics
 import com.oppw.monitor.util.duration
 import com.oppw.monitor.util.executionDateTime
+import com.oppw.monitor.util.expectedOrderLifecycleStages
+import com.oppw.monitor.util.lifecycleAbsentStageLabel
 import com.oppw.monitor.util.money
 import com.oppw.monitor.util.percent
 import com.oppw.monitor.util.price
@@ -605,15 +607,15 @@ private fun LifecycleHeader(lifecycle: ExecutionLifecycle, expanded: Boolean, on
 
 @Composable
 private fun LifecycleStages(lifecycle: ExecutionLifecycle) {
-    val expected = listOf("SIGNAL", "DECISION", "CHECKED", "SENT", "ACCEPTED", "FILLED", "POSITION_VISIBLE", "PROTECTED", "MODIFIED", "EXIT_CHECKED", "EXIT_SENT", "EXIT_ACCEPTED", "CLOSED", "PUBLISHED", "MOBILE_RECEIPT")
     val stages = lifecycle.stages.groupBy { it.stage }.mapValues { (stage, values) ->
         if (stage == "MODIFIED") values.last() else values.firstOrNull { it.result != false } ?: values.last()
     }
-    expected.forEach { name ->
+    val observedStages = stages.keys
+    expectedOrderLifecycleStages.forEach { name ->
         val stage = stages[name]
         Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(if (stage == null) "○ $name" else if (stage.result == false) "× $name" else "● $name", color = when { stage == null -> TextSecondary; stage.result == false -> DangerRed; else -> BrightGreen })
-            Text(stage?.let { executionDateTime(it.eventAt) } ?: "—", color = TextSecondary)
+            Text(stage?.let { executionDateTime(it.eventAt) } ?: lifecycleAbsentStageLabel(name, observedStages), color = TextSecondary)
         }
         if (stage != null && (stage.retcode.isNotBlank() || stage.fillingMode.isNotBlank() || stage.reason.isNotBlank())) {
             Text(listOfNotNull(stage.retcode.takeIf(String::isNotBlank)?.let { "retcode $it" }, stage.fillingMode.takeIf(String::isNotBlank), stage.reason.takeIf(String::isNotBlank)).joinToString(" · "), color = TextSecondary, style = MaterialTheme.typography.labelMedium)

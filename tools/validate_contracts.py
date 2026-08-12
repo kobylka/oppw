@@ -165,9 +165,9 @@ def build_ingest(fixture: dict[str, Any], version: str) -> tuple[dict[str, Any],
         event_at = base + timedelta(milliseconds=int(stage["offsetMs"]))
         details = {
             "execution_id": fixture["executionId"],
-            "decision_id": decision_id,
+            "decision_id": stage.get("decisionId", decision_id),
             "strategy_spec_id": spec_id,
-            "position_ticket": fixture["positionTicket"],
+            "position_ticket": stage.get("positionTicket", fixture["positionTicket"]),
             "stage": stage["stage"],
             "event_at": iso(event_at),
             "scheduled_at": iso(base),
@@ -817,9 +817,24 @@ return [
             flat_payload["snapshot"]["market"]["currentPrice"] = exact_exit_fill
             flat_payload["snapshot"]["market"]["bid"] = exact_exit_fill
             flat_payload["events"] = []
-            flat_payload.pop("strategyDecision", None)
+            next_decision = copy.deepcopy(ingest_payload["strategyDecision"])
+            next_decision["decisionId"] = hashlib.sha256(b"oppw-contract-next-decision").hexdigest()[:32]
+            next_decision["recordedAt"] = iso(close_time + timedelta(milliseconds=500))
+            flat_payload["snapshot"]["strategyDecision"] = next_decision
+            flat_payload["strategyDecision"] = next_decision
             flat_payload.pop("strategySpecification", None)
             http_json("POST", base_url + "ingest.php", flat_payload, token=WRITE_TOKEN, expected=(201,))
+            preserved_entry_decision = docker_sql(
+                docker, container,
+                "SELECT decision_id FROM strategy_trades WHERE strategy_key='DEMO' AND position_ticket="
+                + str(fixture["positionTicket"]),
+                docker_env,
+            )
+            if preserved_entry_decision != identities["decisionId"]:
+                raise AssertionError(
+                    "a later flat-account decision replaced the trade entry decision: "
+                    + preserved_entry_decision
+                )
             snapshot_count_after_close = int(docker_sql(
                 docker, container,
                 "SELECT COUNT(*) FROM strategy_snapshots WHERE strategy_key='DEMO'",
@@ -1178,6 +1193,21 @@ return [
                 if set(actual_group["tradeKeys"]) != set(expected_group["tradeKeys"]):
                     raise AssertionError(f"yearly class distribution trade links differ for {key}")
             quality = analytics["executionQuality"]
+            lifecycle_stages = {
+                stage["stage"]
+                for lifecycle in quality["lifecycles"]
+                if lifecycle["executionId"] == fixture["executionId"]
+                for stage in lifecycle["stages"]
+            }
+            expected_lifecycle_stages = {
+                "SIGNAL", "DECISION", "CHECKED", "SENT", "ACCEPTED", "FILLED",
+                "POSITION_VISIBLE", "PROTECTED", "MODIFIED", "EXIT_FILLED", "CLOSED", "PUBLISHED",
+            }
+            if not expected_lifecycle_stages.issubset(lifecycle_stages):
+                raise AssertionError(
+                    "ticket-correlated lifecycle omitted execution stages: "
+                    + ",".join(sorted(expected_lifecycle_stages - lifecycle_stages))
+                )
             if quality["decisionToSend"]["sampleCount"] != 1:
                 raise AssertionError("analytics did not reconstruct the execution lifecycle")
             assert_close(quality["decisionToSend"]["medianMs"], expected["decisionToSendMs"], "decision-to-send")

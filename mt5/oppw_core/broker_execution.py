@@ -221,7 +221,7 @@ class BrokerExecutionMixin:
         status: str,
         inputs: dict[str, Any],
     ) -> dict[str, Any]:
-        decision_id = self.state.active_decision_id or str((self.last_strategy_decision_payload or {}).get("decisionId", ""))
+        decision_id = str((self.last_strategy_decision_payload or {}).get("decisionId", "")) or self.state.active_decision_id
         actor = self.coordinator.actor_payload()
         request_source = "|".join((
             self.account,
@@ -630,9 +630,7 @@ class BrokerExecutionMixin:
             return False
 
         self.state.active_execution_id = uuid.uuid4().hex
-        self.state.active_decision_id = self.state.active_decision_id or str((self.last_strategy_decision_payload or {}).get("decisionId", ""))
-        self.state.active_strategy_spec_id = self.strategy_specification["specId"]
-        self.state.active_strategy_spec_hash = self.strategy_specification["specHash"]
+        self.bind_execution_to_latest_decision()
         self.state.execution_scheduled_at = scheduled.isoformat()
         self.state.execution_started_at = datetime.now(UTC).isoformat()
         self.state.execution_fill_confirmed = False
@@ -1225,9 +1223,7 @@ class BrokerExecutionMixin:
         if now > latest_entry:
             if self.state.last_missed_entry_week != week:
                 self.state.active_execution_id = uuid.uuid4().hex
-                self.state.active_decision_id = self.state.active_decision_id or str((self.last_strategy_decision_payload or {}).get("decisionId", ""))
-                self.state.active_strategy_spec_id = self.strategy_specification["specId"]
-                self.state.active_strategy_spec_hash = self.strategy_specification["specHash"]
+                self.bind_execution_to_latest_decision()
                 self.state.execution_scheduled_at = scheduled_at.isoformat()
                 self.state.execution_started_at = datetime.now(UTC).isoformat()
                 self.state.last_missed_entry_week = week

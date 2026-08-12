@@ -592,12 +592,14 @@ def main() -> int:
         if migration_order.is_file()
         else []
     )
-    if not migration_names or migration_names[-1] != "migrate_v56_single_premarket_low.sql":
-        fail(errors, "migrate_v56_single_premarket_low.sql must be the last ordered forward migration")
+    if not migration_names or migration_names[-1] != "migrate_v56_2_execution_lifecycle_links.sql":
+        fail(errors, "migrate_v56_2_execution_lifecycle_links.sql must be the last ordered forward migration")
     elif migration_names.index("migrate_data_lifecycle.sql") >= migration_names.index("migrate_v55_entry_rules.sql"):
         fail(errors, "migrate_v55_entry_rules.sql must follow migrate_data_lifecycle.sql")
     elif migration_names.index("migrate_v55_entry_rules.sql") >= migration_names.index("migrate_v56_single_premarket_low.sql"):
         fail(errors, "migrate_v56_single_premarket_low.sql must follow migrate_v55_entry_rules.sql")
+    elif migration_names.index("migrate_v56_single_premarket_low.sql") >= migration_names.index("migrate_v56_2_execution_lifecycle_links.sql"):
+        fail(errors, "migrate_v56_2_execution_lifecycle_links.sql must follow migrate_v56_single_premarket_low.sql")
 
     retention_path = root / "Mobile" / "backend" / "admin" / "retention.php"
     retention_text = retention_path.read_text(encoding="utf-8") if retention_path.is_file() else ""

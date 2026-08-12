@@ -134,6 +134,46 @@ class StrategySpecificationTests(unittest.TestCase):
         self.assertNotEqual(first["decisionId"], second["decisionId"])
         self.assertEqual("d" * 64, second["strategySpecHash"])
 
+    def test_next_entry_decision_does_not_replace_active_execution_link(self):
+        strategy = self.strategy()
+        strategy.is_weekend = lambda _now: False
+        strategy.is_executor = True
+        strategy.log = Mock()
+        strategy.last_strategy_decision_signature = None
+        strategy.last_strategy_decision_payload = None
+        strategy.state.active_execution_id = "execution-in-progress"
+        strategy.state.active_decision_id = "a" * 32
+        strategy.state.active_strategy_spec_id = "b" * 32
+        strategy.state.active_strategy_spec_hash = "c" * 64
+        strategy.state.save = Mock()
+        preview = {
+            "available": False, "symbol": "US100", "side": "BUY", "strategyLeverage": 8,
+            "previousFullWeekChange": 0.0, "previousTradeChange": 0.0,
+            "previousFullWeekSource": "test", "previousTradeSource": "test",
+            "volume": 0.0, "balance": 0.0, "sizingFreeMargin": 0.0,
+            "sizingUnits": 0, "minimumVolumeFloor": False, "error": "test unavailable",
+        }
+
+        next_decision = strategy.record_strategy_decision_if_changed(preview=preview)
+
+        self.assertNotEqual("a" * 32, next_decision["decisionId"])
+        self.assertEqual("a" * 32, strategy.state.active_decision_id)
+        self.assertEqual("b" * 32, strategy.state.active_strategy_spec_id)
+        self.assertEqual("c" * 64, strategy.state.active_strategy_spec_hash)
+        strategy.state.save.assert_not_called()
+
+    def test_new_execution_binds_to_latest_authoritative_decision(self):
+        strategy = self.strategy()
+        strategy.state.active_decision_id = "stale-decision"
+        strategy.last_strategy_decision_payload = {"decisionId": "d" * 32}
+
+        decision_id = strategy.bind_execution_to_latest_decision()
+
+        self.assertEqual("d" * 32, decision_id)
+        self.assertEqual("d" * 32, strategy.state.active_decision_id)
+        self.assertEqual(strategy.strategy_specification["specId"], strategy.state.active_strategy_spec_id)
+        self.assertEqual(strategy.strategy_specification["specHash"], strategy.state.active_strategy_spec_hash)
+
     def test_publisher_recalculates_decision_while_flat(self):
         strategy = object.__new__(MODULE.OPPWContinuousStrategy)
         strategy.tz = WARSAW
@@ -218,6 +258,26 @@ class BackendAuthorityStaticTests(unittest.TestCase):
             source = (root / relative).read_text(encoding="utf-8")
             self.assertIn("authority.php", source)
             self.assertIn("oppw_authority_event", source)
+
+    def test_lifecycle_link_repair_is_forward_only_and_registered(self):
+        root = Path(__file__).resolve().parents[2]
+        order = (root / "Mobile/backend/sql/migration-order.txt").read_text(encoding="utf-8")
+        migration_name = "migrate_v56_2_execution_lifecycle_links.sql"
+        migration = (root / "Mobile/backend/sql" / migration_name).read_text(encoding="utf-8")
+
+        self.assertEqual(1, order.splitlines().count(migration_name))
+        self.assertIn("stage = 'POSITION_VISIBLE'", migration)
+        self.assertIn("ROW_NUMBER() OVER", migration)
+        self.assertIn("UPDATE strategy_trades", migration)
+        self.assertIn("BINARY trade.decision_id <> BINARY lifecycle.decision_id", migration)
+        self.assertNotIn("UPDATE strategy_execution_stages", migration)
+
+    def test_trade_linking_prefers_execution_decision_and_is_write_once(self):
+        root = Path(__file__).resolve().parents[2]
+        source = (root / "Mobile/backend/ingest.php").read_text(encoding="utf-8")
+
+        self.assertIn("($execution['decisionId'] ?? null) ?: ($decision['decisionId'] ?? '')", source)
+        self.assertIn("decision_id=COALESCE(NULLIF(decision_id,\\'\\'),?)", source)
 
     def test_manual_trade_import_also_writes_immutable_ledgers(self):
         root = Path(__file__).resolve().parents[2]

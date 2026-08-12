@@ -128,6 +128,8 @@ The drawdown episode list has a distinct authority. Closed-trade returns define 
 
 Immutable authority records use deterministic identifiers and reject mutation. Projections may be rebuilt or enriched; diagnostics must not become the only record of a business event.
 
+Execution lifecycle identity is correlated at the whole-execution level before analytics filters are applied. Entry stages may legitimately carry position ticket `0` until MT5 makes the position visible; a later stage's definitive ticket links the complete execution without rewriting those immutable early rows. A trade projection keeps the entry decision that authorized the execution, while later flat-account what-if decisions remain separate immutable decisions. Broker-triggered SL/TP exits have an exact `EXIT_FILLED`/`CLOSED` path and no executor market-SELL request stages; Android labels the absent `EXIT_CHECKED`, `EXIT_SENT`, and `EXIT_ACCEPTED` stages as not applicable.
+
 ## Data lifecycle and recovery
 
 `Mobile/backend/admin/retention.php` is the sole operational-history retention command. It is CLI-only, dry-run by default, takes a database advisory lock, writes and verifies bounded gzip NDJSON archives, and can delete only ordinary diagnostic events older than 180 days and complete UTC account-days of minute equity older than 400 days. Equity deletion and its indefinite daily rollup commit atomically. Hot-window drawdown analytics use minute history to retain each daily low and refine closed-trade episode troughs; older windows use the daily projection as an explicit fallback. Legacy `EXECUTION_STAGE` diagnostics remain available to the compatibility fallback.

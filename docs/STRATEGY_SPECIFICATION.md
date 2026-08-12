@@ -61,3 +61,5 @@ The complete specification remains available in status snapshots. Its explicit p
 ## Exact and reconciled fills
 
 Market fills containing an MT5 deal ticket are stored as exact fills. A publisher flat snapshot may temporarily record a reconciliation fill with `is_exact = 0` and source `POSITION_DISAPPEARANCE_RECONCILIATION`; it is never presented as an exact broker deal. The executor does not finalize a disappeared position until completed MT5 deal history supplies the exact SELL deal. Its `EXIT_FILLED` record repairs and outranks any provisional disappearance-based trade projection.
+
+The strategy decision bound immediately before `SIGNAL` remains the execution and trade-entry decision for that lifecycle. Later next-entry or flat-account what-if calculations never replace it. Entry stages emitted before MT5 supplies a position ticket remain linked through their execution ID and the later `POSITION_VISIBLE` ticket. A broker-triggered SL/TP close does not fabricate `EXIT_CHECKED`, `EXIT_SENT`, or `EXIT_ACCEPTED`; those stages apply only to an executor-submitted market SELL.

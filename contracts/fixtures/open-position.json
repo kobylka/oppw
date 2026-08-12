@@ -209,11 +209,12 @@
     ]
   },
   "stages": [
-    {"stage": "DECISION", "offsetMs": 100, "result": true},
-    {"stage": "CHECKED", "offsetMs": 150, "result": true, "retcode": 0},
-    {"stage": "SENT", "offsetMs": 200, "result": true, "fillingMode": "FOK", "referencePrice": 29000.0},
-    {"stage": "ACCEPTED", "offsetMs": 350, "result": true, "retcode": 10009, "latencyMs": 150.0},
-    {"stage": "FILLED", "offsetMs": 500, "result": true, "retcode": 10009, "latencyMs": 300.0, "referencePrice": 29000.0, "actualPrice": 29001.0, "dealTicket": 880001, "orderTicket": 770001, "volume": 0.02, "side": "BUY"},
+    {"stage": "SIGNAL", "offsetMs": 50, "result": true, "positionTicket": 0, "decisionId": ""},
+    {"stage": "DECISION", "offsetMs": 100, "result": true, "positionTicket": 0, "decisionId": ""},
+    {"stage": "CHECKED", "offsetMs": 150, "result": true, "retcode": 0, "positionTicket": 0, "decisionId": ""},
+    {"stage": "SENT", "offsetMs": 200, "result": true, "fillingMode": "FOK", "referencePrice": 29000.0, "positionTicket": 0, "decisionId": ""},
+    {"stage": "ACCEPTED", "offsetMs": 350, "result": true, "retcode": 10009, "latencyMs": 150.0, "positionTicket": 0, "decisionId": ""},
+    {"stage": "FILLED", "offsetMs": 500, "result": true, "retcode": 10009, "latencyMs": 300.0, "referencePrice": 29000.0, "actualPrice": 29001.0, "dealTicket": 880001, "orderTicket": 770001, "volume": 0.02, "side": "BUY", "positionTicket": 0, "decisionId": ""},
     {"stage": "POSITION_VISIBLE", "offsetMs": 650, "result": true},
     {"stage": "PROTECTED", "offsetMs": 800, "result": true, "oldSl": 0.0, "newSl": 27550.0, "reason": "SL"},
     {"stage": "PUBLISHED", "offsetMs": 900, "result": true}

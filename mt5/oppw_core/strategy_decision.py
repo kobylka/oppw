@@ -37,6 +37,18 @@ from .versioning import BUILD_ID, PROJECT_VERSION
 
 
 class StrategyDecisionMixin:
+    def bind_execution_to_latest_decision(self) -> str:
+        """Bind a new execution to the decision that authorized that attempt."""
+        decision_id = str(
+            (self.last_strategy_decision_payload or {}).get("decisionId", "")
+        ).strip()
+        if not decision_id:
+            raise RuntimeError("Cannot start an execution without an authoritative strategy decision")
+        self.state.active_decision_id = decision_id
+        self.state.active_strategy_spec_id = self.strategy_specification["specId"]
+        self.state.active_strategy_spec_hash = self.strategy_specification["specHash"]
+        return decision_id
+
     def phase(self, now: datetime) -> str:
         if now.weekday() >= 5:
             return "WEEKEND"
@@ -804,11 +816,9 @@ class StrategyDecisionMixin:
         if not force and signature == self.last_strategy_decision_signature and self.last_strategy_decision_payload:
             return self.last_strategy_decision_payload
         self.last_strategy_decision_payload = payload
-        self.state.active_decision_id = str(payload.get("decisionId", ""))
-        self.state.active_strategy_spec_id = self.strategy_specification["specId"]
-        self.state.active_strategy_spec_hash = self.strategy_specification["specHash"]
-        if self.is_executor:
-            self.state.save(self.cfg.state_file)
+        # A what-if/next-entry decision is not the decision identity of an
+        # execution already in progress or recently completed. The execution
+        # is bound explicitly immediately before its SIGNAL stage instead.
         if force or signature != self.last_strategy_decision_signature:
             self.last_strategy_decision_signature = signature
             self.log.info(

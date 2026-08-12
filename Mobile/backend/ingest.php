@@ -421,14 +421,24 @@ try {
 
       // OPPW_V47_4_TRADE_DECISION_LINK_BEGIN
   $execution = is_array($snapshot['execution'] ?? null) ? $snapshot['execution'] : [];
-  $linkedDecisionId = substr(trim((string)(($decision['decisionId'] ?? null) ?: ($execution['decisionId'] ?? ''))), 0, 32);
+  // A trade belongs to the decision that authorized its execution. A later
+  // flat-account what-if decision must never replace that immutable link.
+  $linkedDecisionId = substr(trim((string)(($execution['decisionId'] ?? null) ?: ($decision['decisionId'] ?? ''))), 0, 32);
   if ($linkedDecisionId !== '') {
-      $linkedBuild = substr((string)($decision['build'] ?? ''), 0, 160);
-      $linkedParameterHash = substr((string)($decision['parameterHash'] ?? ''), 0, 64);
-      $linkedLeverage = is_numeric($decision['selectedLeverage'] ?? null) ? (float)$decision['selectedLeverage'] : null;
-      $linkedSpecId = substr((string)($decision['strategySpecId'] ?? $strategySpecificationId), 0, 32);
-      $linkedSpecHash = substr((string)($decision['strategySpecHash'] ?? $strategySpecificationHash), 0, 64);
-      if ($decision === null || $linkedBuild === '' || $linkedParameterHash === '' || $linkedLeverage === null) {
+      $decisionMatchesExecution = is_array($decision)
+          && hash_equals($linkedDecisionId, substr(trim((string)($decision['decisionId'] ?? '')), 0, 32));
+      $linkedBuild = $decisionMatchesExecution ? substr((string)($decision['build'] ?? ''), 0, 160) : '';
+      $linkedParameterHash = $decisionMatchesExecution ? substr((string)($decision['parameterHash'] ?? ''), 0, 64) : '';
+      $linkedLeverage = $decisionMatchesExecution && is_numeric($decision['selectedLeverage'] ?? null)
+          ? (float)$decision['selectedLeverage']
+          : null;
+      $linkedSpecId = $decisionMatchesExecution
+          ? substr((string)($decision['strategySpecId'] ?? $strategySpecificationId), 0, 32)
+          : '';
+      $linkedSpecHash = $decisionMatchesExecution
+          ? substr((string)($decision['strategySpecHash'] ?? $strategySpecificationHash), 0, 64)
+          : '';
+      if (!$decisionMatchesExecution || $linkedBuild === '' || $linkedParameterHash === '' || $linkedLeverage === null) {
           $linkedDecisionStmt = $db->prepare('SELECT strategy_build,parameter_hash,selected_leverage,strategy_spec_id,strategy_spec_hash FROM strategy_decisions WHERE strategy_key=? AND decision_id=? LIMIT 1');
           $linkedDecisionStmt->execute([$accountKey, $linkedDecisionId]);
           $linkedDecisionRow = $linkedDecisionStmt->fetch();
@@ -443,7 +453,16 @@ try {
       $tradePosition = $currentPosition ?? $previousPosition;
       $tradeTicket = is_array($tradePosition) ? (int)($tradePosition['ticket'] ?? 0) : 0;
       if ($tradeTicket > 0) {
-          $tradeDecisionStmt = $db->prepare('UPDATE strategy_trades SET decision_id=?,strategy_spec_id=?,strategy_spec_hash=?,strategy_build=?,parameter_hash=?,entry_leverage=? WHERE strategy_key=? AND position_ticket=?');
+          $tradeDecisionStmt = $db->prepare(
+              'UPDATE strategy_trades
+                  SET decision_id=COALESCE(NULLIF(decision_id,\'\'),?),
+                      strategy_spec_id=COALESCE(NULLIF(strategy_spec_id,\'\'),?),
+                      strategy_spec_hash=COALESCE(NULLIF(strategy_spec_hash,\'\'),?),
+                      strategy_build=COALESCE(NULLIF(strategy_build,\'\'),?),
+                      parameter_hash=COALESCE(NULLIF(parameter_hash,\'\'),?),
+                      entry_leverage=COALESCE(entry_leverage,?)
+                WHERE strategy_key=? AND position_ticket=?'
+          );
           $tradeDecisionStmt->execute([$linkedDecisionId, $linkedSpecId ?: null, $linkedSpecHash, $linkedBuild, $linkedParameterHash, $linkedLeverage, $accountKey, $tradeTicket]);
       }
   }

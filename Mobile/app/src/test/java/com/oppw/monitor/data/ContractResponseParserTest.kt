@@ -136,7 +136,10 @@ class ContractResponseParserTest {
         assertEquals(1, quality.executorToMobile.sampleCount)
         assertTrue(
             quality.lifecycles.single().stages.map { it.stage }.containsAll(
-                listOf("DECISION", "SENT", "ACCEPTED", "FILLED", "PROTECTED", "PUBLISHED"),
+                listOf(
+                    "SIGNAL", "DECISION", "CHECKED", "SENT", "ACCEPTED", "FILLED",
+                    "POSITION_VISIBLE", "PROTECTED", "EXIT_FILLED", "CLOSED", "PUBLISHED",
+                ),
             ),
         )
     }

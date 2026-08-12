@@ -16,7 +16,7 @@ class DataLifecycleStaticTests(unittest.TestCase):
             if line.strip() and not line.lstrip().startswith("#")
         ]
         self.assertLess(order.index("migrate_data_lifecycle.sql"), order.index("migrate_v55_entry_rules.sql"))
-        self.assertEqual(order[-1], "migrate_v56_single_premarket_low.sql")
+        self.assertEqual(order[-1], "migrate_v56_2_execution_lifecycle_links.sql")
         migration = (ROOT / "Mobile/backend/sql/migrate_data_lifecycle.sql").read_text(encoding="utf-8")
         self.assertIn("CREATE TABLE IF NOT EXISTS strategy_equity_daily", migration)
         self.assertIn("CREATE TABLE IF NOT EXISTS strategy_retention_runs", migration)
