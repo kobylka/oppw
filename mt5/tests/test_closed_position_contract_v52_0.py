@@ -1,4 +1,5 @@
 import importlib.util
+from datetime import UTC, datetime
 from pathlib import Path
 import sys
 import types
@@ -18,6 +19,9 @@ mt5.ORDER_TIME_GTC = 0
 mt5.TRADE_RETCODE_DONE = 10009
 mt5.TRADE_RETCODE_PLACED = 10008
 mt5.TRADE_RETCODE_DONE_PARTIAL = 10010
+mt5.DEAL_TYPE_SELL = 1
+mt5.DEAL_REASON_SL = 4
+mt5.DEAL_REASON_TP = 5
 
 SOURCE = Path(__file__).resolve().parents[1] / "oppw_mt5_continuous.py"
 SPEC = importlib.util.spec_from_file_location("oppw_closed_position_contract", SOURCE)
@@ -69,6 +73,121 @@ class ClosedPositionContractTests(unittest.TestCase):
         self.assertAlmostEqual(-0.04835, change)
         self.assertEqual("C", strategy.trade_class(change, reason))
 
+    def test_bh_reason_is_paired_with_bh_price_when_sl_is_also_installed(self):
+        strategy = self.strategy(
+            active_tp_reason="BH",
+            active_tp_price=99.6,
+            active_sl_reason="SL",
+            active_sl_price=93.75,
+        )
+
+        reason, exit_price, change = strategy.closed_position_contract()
+
+        self.assertEqual("BH", reason)
+        self.assertAlmostEqual(99.6, exit_price)
+        self.assertAlmostEqual(-0.004, change)
+
+    def test_disappeared_position_uses_exact_tp_deal_and_publishes_exit_fill(self):
+        strategy = MODULE.OPPWContinuousStrategy.__new__(MODULE.OPPWContinuousStrategy)
+        state_path = Path("state.json")
+        strategy.cfg = SimpleNamespace(state_file=state_path, tsl_stop=0.004)
+        strategy.tz = UTC
+        strategy.state = MODULE.StrategyState(
+            active_position_identifier=2184944,
+            active_position_ticket=2184944,
+            active_execution_id="execution",
+            entry_price=29_797.5,
+            open_date="2026-08-10",
+            active_tp_reason="BH",
+            active_tp_price=29_678.31,
+            active_sl_reason="SL",
+            active_sl_price=27_936.0,
+        )
+        strategy.state.save = Mock()
+        strategy.log = Mock()
+        strategy.execution_stage = Mock()
+        closed_at = datetime(2026, 8, 12, 6, 42, 1, 125000, tzinfo=UTC)
+        deal = SimpleNamespace(
+            ticket=2017001,
+            order=2184944,
+            position_id=2184944,
+            type=mt5.DEAL_TYPE_SELL,
+            reason=mt5.DEAL_REASON_TP,
+            price=29_678.31,
+            volume=0.34,
+            time=int(closed_at.timestamp()),
+            time_msc=int(closed_at.timestamp() * 1000),
+        )
+        mt5.history_deals_get = Mock(return_value=(deal,))
+
+        self.assertTrue(strategy.finalize_closed_position())
+
+        mt5.history_deals_get.assert_called_once_with(position=2184944)
+        exit_fill = next(
+            call for call in strategy.execution_stage.call_args_list
+            if call.args and call.args[0] == "EXIT_FILLED"
+        )
+        self.assertEqual("BH", exit_fill.kwargs["reason"])
+        self.assertEqual(2017001, exit_fill.kwargs["deal_ticket"])
+        self.assertAlmostEqual(29_678.31, exit_fill.kwargs["actual_price"])
+        self.assertAlmostEqual(29_678.31, exit_fill.kwargs["reference_price"])
+        self.assertEqual(closed_at.isoformat(), exit_fill.kwargs["event_at"])
+        self.assertEqual("BH", strategy.state.last_exit_reason)
+        self.assertAlmostEqual(29_678.31, strategy.state.last_exit_price)
+        self.assertEqual(2017001, strategy.state.last_exit_deal_ticket)
+        self.assertEqual(0, strategy.state.active_position_identifier)
+
+    def test_exact_deal_already_published_by_market_exit_is_not_duplicated(self):
+        strategy = MODULE.OPPWContinuousStrategy.__new__(MODULE.OPPWContinuousStrategy)
+        strategy.cfg = SimpleNamespace(state_file=Path("state.json"), tsl_stop=0.004)
+        strategy.tz = UTC
+        strategy.state = MODULE.StrategyState(
+            active_position_identifier=123,
+            active_position_ticket=123,
+            entry_price=100.0,
+            exit_latched_reason="TSL1PRE",
+            last_exit_price=95.165,
+            last_exit_deal_ticket=1994541,
+        )
+        strategy.state.save = Mock()
+        strategy.log = Mock()
+        strategy.execution_stage = Mock()
+        closed_at = datetime(2026, 7, 30, 14, 0, tzinfo=UTC)
+        mt5.history_deals_get = Mock(return_value=(SimpleNamespace(
+            ticket=1994541, order=2160777, position_id=123,
+            type=mt5.DEAL_TYPE_SELL, reason=0, price=95.165, volume=0.64,
+            time=int(closed_at.timestamp()), time_msc=int(closed_at.timestamp() * 1000),
+        ),))
+
+        self.assertTrue(strategy.finalize_closed_position())
+
+        stages = [call.args[0] for call in strategy.execution_stage.call_args_list]
+        self.assertNotIn("EXIT_FILLED", stages)
+        self.assertEqual(["CLOSED"], stages)
+
+    def test_missing_exact_deal_defers_reconciliation_without_clearing_state(self):
+        strategy = MODULE.OPPWContinuousStrategy.__new__(MODULE.OPPWContinuousStrategy)
+        strategy.cfg = SimpleNamespace(state_file=Path("state.json"), tsl_stop=0.004)
+        strategy.tz = UTC
+        strategy.state = MODULE.StrategyState(
+            active_position_identifier=777,
+            active_position_ticket=778,
+            entry_price=100.0,
+            active_tp_reason="BH",
+            active_tp_price=99.6,
+            active_sl_reason="SL",
+            active_sl_price=93.75,
+        )
+        strategy.log = Mock()
+        strategy.execution_stage = Mock()
+        mt5.history_deals_get = Mock(return_value=())
+
+        self.assertFalse(strategy.finalize_closed_position())
+
+        self.assertEqual(777, strategy.state.active_position_identifier)
+        strategy.execution_stage.assert_not_called()
+        strategy.log.warning.assert_called_once()
+
     def test_confirmed_market_exit_persists_exact_deal_price(self):
         strategy = MODULE.OPPWContinuousStrategy.__new__(MODULE.OPPWContinuousStrategy)
         strategy.cfg = SimpleNamespace(
@@ -82,6 +201,7 @@ class ClosedPositionContractTests(unittest.TestCase):
             exit_latched_reason="",
             exit_latched_at="",
             last_exit_price=0.0,
+            last_exit_deal_ticket=0,
             save=Mock(),
         )
         strategy.log = Mock()
@@ -116,6 +236,7 @@ class ClosedPositionContractTests(unittest.TestCase):
         self.assertTrue(result)
         self.assertEqual("TSL1PRE", strategy.state.exit_latched_reason)
         self.assertAlmostEqual(95.165, strategy.state.last_exit_price)
+        self.assertEqual(1994541, strategy.state.last_exit_deal_ticket)
         self.assertGreaterEqual(strategy.state.save.call_count, 2)
         self.assertTrue(any(
             call.args and call.args[0] == "EXIT_FILLED"

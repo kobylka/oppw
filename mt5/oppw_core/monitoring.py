@@ -682,13 +682,14 @@ class MonitoringMixin:
                          actual_price: float = 0.0, retcode: Optional[int] = None, filling_mode: str = "", reason: str = "",
                          scheduled_at: str = "", latency_ms: Optional[float] = None,
                          order_ticket: int = 0, deal_ticket: int = 0, side: str = "", volume: float = 0.0,
-                         old_sl: float = 0.0, new_sl: float = 0.0, old_tp: float = 0.0, new_tp: float = 0.0) -> None:
+                         old_sl: float = 0.0, new_sl: float = 0.0, old_tp: float = 0.0, new_tp: float = 0.0,
+                         event_at: str = "") -> None:
         execution_id = self.state.active_execution_id
         if not execution_id:
             execution_id = uuid.uuid4().hex
             self.state.active_execution_id = execution_id
         decision_id = self.state.active_decision_id or str((self.last_strategy_decision_payload or {}).get("decisionId", ""))
-        now = datetime.now(UTC).isoformat()
+        now = event_at or datetime.now(UTC).isoformat()
         fields = {
             "execution_id": execution_id, "decision_id": decision_id, "position_ticket": int(position_ticket or self.state.active_position_ticket or 0),
             "stage": stage, "event_at": now, "scheduled_at": scheduled_at or self.state.execution_scheduled_at,

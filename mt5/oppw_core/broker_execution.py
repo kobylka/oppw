@@ -940,6 +940,7 @@ class BrokerExecutionMixin:
                              side="SELL", volume=float(position.volume), filling_mode=self.filling_mode_name(request.get("type_filling", -1)))
         if int(getattr(result, "deal", 0) or 0) > 0:
             self.state.last_exit_price = actual_price
+            self.state.last_exit_deal_ticket = int(result.deal)
             self.state.save(self.cfg.state_file)
             self.execution_stage(
                 "EXIT_FILLED", position_ticket=int(position.ticket), reference_price=bid,

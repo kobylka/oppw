@@ -37,6 +37,7 @@ import com.oppw.monitor.util.countdown
 import com.oppw.monitor.util.dailyMarketChanges
 import com.oppw.monitor.util.humanProtection
 import com.oppw.monitor.util.liveSourceAge
+import com.oppw.monitor.util.marketReferenceDisplay
 import com.oppw.monitor.util.money
 import com.oppw.monitor.util.overviewPositionDisplay
 import com.oppw.monitor.util.optionalPercent
@@ -155,7 +156,14 @@ fun OverviewScreen(state: UiState, onRetry: () -> Unit) {
                     }
                 }
 
-                item { WeekMarketCard("US100 · current week", snapshot.marketStats.currentWeek, currentLabel = "Current price") }
+                item {
+                    val reference = marketReferenceDisplay(position?.openPrice, snapshot.marketStats.currentWeek?.weekOpen)
+                    WeekMarketCard(
+                        "US100 · current week", snapshot.marketStats.currentWeek,
+                        currentLabel = "Current price", referenceLabel = reference.label,
+                        referencePrice = reference.value,
+                    )
+                }
                 item { WeekMarketCard("US100 · previous week", snapshot.marketStats.previousWeek, currentLabel = "Final price") }
 
                 item {
@@ -184,7 +192,13 @@ fun OverviewScreen(state: UiState, onRetry: () -> Unit) {
 }
 
 @Composable
-private fun WeekMarketCard(title: String, stats: MarketWeekStats?, currentLabel: String) {
+private fun WeekMarketCard(
+    title: String,
+    stats: MarketWeekStats?,
+    currentLabel: String,
+    referenceLabel: String = "Week open",
+    referencePrice: Double? = stats?.weekOpen,
+) {
     AppCard(Modifier.fillMaxWidth()) {
         SectionTitle(title, stats?.week ?: "No history")
         if (stats == null) {
@@ -193,7 +207,7 @@ private fun WeekMarketCard(title: String, stats: MarketWeekStats?, currentLabel:
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             Metric(currentLabel, optionalPrice(stats.currentPrice), Modifier.weight(1f))
-            Metric("Week open", optionalPrice(stats.weekOpen), Modifier.weight(1f))
+            Metric(referenceLabel, optionalPrice(referencePrice), Modifier.weight(1f))
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             Metric("Weekly high", optionalPrice(stats.weeklyHigh), Modifier.weight(1f))

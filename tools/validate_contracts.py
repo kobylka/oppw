@@ -779,6 +779,7 @@ return [
             old_hard_sl = float(snapshot["position"]["stopLoss"])
             exact_exit_reference = 27_611.5
             exact_exit_fill = 27_607.0
+            exact_exit_time = close_time + timedelta(milliseconds=375)
             # Earlier market-stat assertions deliberately use small synthetic
             # index values. Restore trade-range market rows to the execution
             # instrument's scale before testing exact-fill excursion repair.
@@ -872,17 +873,32 @@ return [
             http_json("POST", base_url + "events-ingest.php", {
                 "accountKey": "DEMO", "coordination": ingest_payload["coordination"],
                 "events": [{
-                    "time": iso(close_time), "level": "INFO", "name": "EXECUTION_STAGE", "result": True,
+                    # Deliberately disagree with details.event_at: execution
+                    # authority must preserve the explicit broker fill time.
+                    "time": iso(close_time + timedelta(hours=2)),
+                    "level": "INFO", "name": "EXECUTION_STAGE", "result": True,
                     "message": "contract late exact TSL1PRE exit fill",
                     "details": {
                         "execution_id": fixture["executionId"], "decision_id": identities["decisionId"],
                         "position_ticket": fixture["positionTicket"], "stage": "EXIT_FILLED", "result": True,
+                        "event_at": iso(exact_exit_time),
                         "reference_price": exact_exit_reference, "actual_price": exact_exit_fill,
                         "retcode": 10009, "filling_mode": "FOK", "reason": "TSL1PRE",
                         "order_ticket": 770002, "deal_ticket": 880002, "side": "SELL", "volume": 0.02,
                     },
                 }],
             }, token=WRITE_TOKEN, expected=(201,))
+            exact_fill_time = docker_sql(
+                docker, container,
+                "SELECT DATE_FORMAT(filled_at,'%Y-%m-%dT%H:%i:%s.%fZ') FROM strategy_fills "
+                "WHERE strategy_key='DEMO' AND deal_ticket=880002 ORDER BY id DESC LIMIT 1",
+                docker_env,
+            )
+            expected_exact_fill_time = exact_exit_time.strftime("%Y-%m-%dT%H:%M:%S.%f")[:23] + "000Z"
+            if exact_fill_time != expected_exact_fill_time:
+                raise AssertionError(
+                    f"exact fill timestamp: expected {expected_exact_fill_time}, got {exact_fill_time}"
+                )
             close_projection = docker_sql(
                 docker, container,
                 "SELECT CONCAT(close_price,'|',exit_reference_price,'|',exit_slippage_points,'|',"

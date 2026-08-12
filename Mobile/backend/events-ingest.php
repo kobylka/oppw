@@ -40,7 +40,14 @@ foreach (array_slice($events, 0, 5000) as $event) {
         'STRATEGY_DECISION_PERSISTED',
     ], true)) continue;
 
-    $eventTime = normalize_datetime($event['time'] ?? null);
+    $details = is_array($event['details'] ?? null) ? $event['details'] : [];
+    $executionEventAt = $name === 'EXECUTION_STAGE'
+        ? trim((string)($details['event_at'] ?? ''))
+        : '';
+    // The log envelope can be generated later than an asynchronous broker
+    // fill and can also carry a workstation-local timestamp. Execution
+    // authority must retain the producer's explicit broker/stage timestamp.
+    $eventTime = normalize_datetime($executionEventAt !== '' ? $executionEventAt : ($event['time'] ?? null));
     $message = substr((string)($event['message'] ?? ''), 0, 1000);
     $normalized[] = [
         'time' => $eventTime,
@@ -48,7 +55,7 @@ foreach (array_slice($events, 0, 5000) as $event) {
         'name' => substr($name, 0, 100),
         'result' => oppw_nullable_bool($event['result'] ?? null),
         'message' => $message,
-        'details' => is_array($event['details'] ?? null) ? $event['details'] : [],
+        'details' => $details,
         'hash' => hash('sha256', $accountKey . '|' . $eventTime . '|' . $name . '|' . $message),
     ];
 }

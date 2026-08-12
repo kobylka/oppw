@@ -288,6 +288,7 @@ class PositionLifecycleMixin:
             self.state.last_exit_reason = ""
             self.state.last_exit_price = 0.0
             self.state.last_exit_time = ""
+            self.state.last_exit_deal_ticket = 0
 
     def weekday_sl_target(self, position, now: datetime) -> tuple[float, str]:
         entry = float(position.price_open)
@@ -552,11 +553,17 @@ class PositionLifecycleMixin:
             # deal price when the acknowledgement includes a deal ticket.
             reason = latched_reason
         else:
-            reason = self.state.active_tp_reason or self.state.active_sl_reason or "broker/manual"
-            if self.state.active_sl_reason and self.state.active_sl_price > 0:
-                reference_price = float(self.state.active_sl_price)
-            elif self.state.active_tp_reason and self.state.active_tp_price > 0:
+            # Keep the reason and its installed price paired. The former code
+            # preferred a TP reason but then independently preferred the SL
+            # price, producing an impossible BH-at-hard-SL close contract.
+            if self.state.active_tp_reason and self.state.active_tp_price > 0:
+                reason = self.state.active_tp_reason
                 reference_price = float(self.state.active_tp_price)
+            elif self.state.active_sl_reason and self.state.active_sl_price > 0:
+                reason = self.state.active_sl_reason
+                reference_price = float(self.state.active_sl_price)
+            else:
+                reason = "broker/manual"
 
         if str(reason).upper() == "TSL":
             reason = f"TSL_{float(self.cfg.tsl_stop) * 100.0:g}%"
@@ -565,32 +572,112 @@ class PositionLifecycleMixin:
         change = reference_price / entry_price - 1.0 if reference_price > 0 and entry_price > 0 else 0.0
         return reason, reference_price, change
 
-    def finalize_closed_position(self) -> None:
-        """Clear local open-position state without consulting MT5 deal history.
+    def exact_broker_exit_deal(self, position_identifier: int):
+        """Return the latest exact SELL deal for the disappeared long position."""
+        history = getattr(mt5, "history_deals_get", None)
+        if not callable(history):
+            raise RuntimeError("MT5 history_deals_get is unavailable")
+        deals = history(position=int(position_identifier))
+        if deals is None:
+            raise RuntimeError(f"history_deals_get(position={position_identifier}) failed: {mt5.last_error()}")
+        sell_type = int(getattr(mt5, "DEAL_TYPE_SELL", 1))
+        candidates = [
+            deal for deal in deals
+            if int(getattr(deal, "type", -1)) == sell_type
+            and float(getattr(deal, "price", 0.0) or 0.0) > 0
+            and float(getattr(deal, "volume", 0.0) or 0.0) > 0
+            and int(getattr(deal, "ticket", 0) or 0) > 0
+        ]
+        if not candidates:
+            raise RuntimeError(f"No exact closing SELL deal yet for position {position_identifier}")
+        return max(
+            candidates,
+            key=lambda deal: (
+                int(getattr(deal, "time_msc", 0) or 0),
+                int(getattr(deal, "time", 0) or 0),
+                int(getattr(deal, "ticket", 0) or 0),
+            ),
+        )
+
+    def broker_deal_exit_reason(self, deal) -> str:
+        deal_reason = int(getattr(deal, "reason", -1))
+        if deal_reason == int(getattr(mt5, "DEAL_REASON_TP", 5)):
+            return self.state.active_tp_reason or "BROKER_TP"
+        if deal_reason == int(getattr(mt5, "DEAL_REASON_SL", 4)):
+            reason = self.state.active_sl_reason or "SL"
+            return f"TSL_{float(self.cfg.tsl_stop) * 100.0:g}%" if str(reason).upper() == "TSL" else reason
+        return self.state.exit_latched_reason or "broker/manual"
+
+    @staticmethod
+    def broker_deal_time(deal) -> str:
+        time_msc = int(getattr(deal, "time_msc", 0) or 0)
+        timestamp = time_msc / 1000.0 if time_msc > 0 else float(getattr(deal, "time", 0) or 0)
+        if timestamp <= 0:
+            raise RuntimeError("Exact closing deal has no valid timestamp")
+        return datetime.fromtimestamp(timestamp, UTC).isoformat()
+
+    def finalize_closed_position(self) -> bool:
+        """Publish the exact broker close and then clear local position state.
 
         The authoritative completed-trade return, prices, reason and class are
         read from MySQL on the next normal weekday leverage-input refresh. The
-        flat snapshot transition lets ingest.php close the existing DB trade.
+        exact EXIT_FILLED event repairs any earlier flat-snapshot projection.
+        Missing deal history leaves state intact so a later cycle retries and
+        no new entry can proceed on an unverified previous-trade outcome.
         """
         identifier = int(self.state.active_position_identifier or self.state.active_position_ticket or 0)
         position_ticket = int(self.state.active_position_ticket or identifier)
         if not identifier:
-            return
+            return True
 
-        now = datetime.now(self.tz)
-        reason, exit_price, change = self.closed_position_contract()
+        try:
+            deal = self.exact_broker_exit_deal(identifier)
+            exit_price = float(deal.price)
+            reason = self.broker_deal_exit_reason(deal)
+            filled_at = self.broker_deal_time(deal)
+        except Exception as exc:
+            self.log.warning(
+                "EVENT POSITION_CLOSE_RECONCILIATION_DEFERRED position_identifier=%s ticket=%s "
+                "reason=exact_broker_deal_unavailable retry=true error=%s",
+                identifier, position_ticket, exc,
+            )
+            return False
+        entry_price = float(self.state.entry_price or 0.0)
+        change = exit_price / entry_price - 1.0 if exit_price > 0 and entry_price > 0 else 0.0
         reason_log = shlex.quote(reason)
+        deal_ticket = int(getattr(deal, "ticket", 0) or 0)
+        exit_fill_already_published = int(getattr(self.state, "last_exit_deal_ticket", 0) or 0) == deal_ticket
         self.state.last_exit_position_identifier = identifier
-        self.state.last_exit_time = now.isoformat()
+        self.state.last_exit_time = filled_at
         self.state.last_exit_reason = reason
         self.state.last_exit_price = exit_price
-        # Publish the installed strategy protection as the return reference.
-        # Realized account P/L remains sourced independently from the balance.
-        self.execution_stage("CLOSED", position_ticket=position_ticket, reference_price=float(self.state.entry_price or 0.0), reason=reason)
+        self.state.last_exit_deal_ticket = deal_ticket
+        self.state.save(self.cfg.state_file)
+        if not exit_fill_already_published:
+            self.execution_stage(
+                "EXIT_FILLED", position_ticket=position_ticket,
+                reference_price=(
+                    float(self.state.active_tp_price)
+                    if int(getattr(deal, "reason", -1)) == int(getattr(mt5, "DEAL_REASON_TP", 5))
+                    else float(self.state.active_sl_price or 0.0)
+                ),
+                actual_price=exit_price, reason=reason,
+                order_ticket=int(getattr(deal, "order", 0) or 0),
+                deal_ticket=deal_ticket,
+                side="SELL", volume=float(getattr(deal, "volume", 0.0) or 0.0),
+                event_at=filled_at,
+            )
+        self.execution_stage(
+            "CLOSED", position_ticket=position_ticket,
+            reference_price=entry_price, actual_price=exit_price,
+            deal_ticket=deal_ticket, reason=reason,
+            event_at=filled_at,
+        )
         self.log.info(
-            "EVENT POSITION_CLOSED reason=%s source=installed_strategy_protection position_identifier=%s "
+            "EVENT POSITION_CLOSED reason=%s source=exact_mt5_deal position_identifier=%s deal_ticket=%s "
             "entry=%.5f exit=%.5f change=%.10f preleverage_return=%.10f trade_class=%s",
-            reason_log, identifier, float(self.state.entry_price or 0.0), exit_price, change, change,
+            reason_log, identifier, deal_ticket,
+            entry_price, exit_price, change, change,
             self.trade_class(change, reason),
         )
 
@@ -607,3 +694,4 @@ class PositionLifecycleMixin:
         self.state.entry_pending_until_utc = 0
         self.clear_current_position_exit_state(clear_last_exit=False)
         self.state.save(self.cfg.state_file)
+        return True

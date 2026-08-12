@@ -29,6 +29,7 @@ Changing a trading-relevant resolved value creates a different hash and a new im
 - The current-week monitoring summary aggregates live MT5 M1 candles from the first actual XNYS cash open. While a current-week manual position is adopted, its opening timestamp becomes the observation boundary and its fill price is included in weekly open/high/low, including positions opened before or exactly at cash open. The exact cash-open M1 price remains a separate strategy reference.
 - The unified 0.4% TSL becomes active at the Thursday date change. If the Thursday premarket bid is already through that threshold, the globally fenced market exit is labeled `TSL1PRE`; other crossed-threshold TSL market exits retain `TSL`.
 - A market exit initially retains its request bid, then replaces it with the confirmed MT5 deal price. That exact fill outranks any older broker SL/TP when producing the close record.
+- When a broker SL or TP removes the position, the executor reads the completed MT5 SELL deal for that position before clearing local state. The deal reason selects the matching SL/TP label, and its exact price and timestamp are published as `EXIT_FILLED`. Missing deal history defers reconciliation and prevents another entry.
 
 ## Authoritative contents
 
@@ -59,4 +60,4 @@ The complete specification remains available in status snapshots. Its explicit p
 
 ## Exact and reconciled fills
 
-Market fills containing an MT5 deal ticket are stored as exact fills. If a broker-side SL closes a position and the loop observes only that the position disappeared, the loop records a reconciliation fill with `is_exact = 0` and source `POSITION_DISAPPEARANCE_RECONCILIATION`. It is never presented as an exact broker deal. When delivery order differs between executor events and publisher snapshots, an exact `EXIT_FILLED` record always repairs and outranks the provisional disappearance-based trade projection.
+Market fills containing an MT5 deal ticket are stored as exact fills. A publisher flat snapshot may temporarily record a reconciliation fill with `is_exact = 0` and source `POSITION_DISAPPEARANCE_RECONCILIATION`; it is never presented as an exact broker deal. The executor does not finalize a disappeared position until completed MT5 deal history supplies the exact SELL deal. Its `EXIT_FILLED` record repairs and outranks any provisional disappearance-based trade projection.

@@ -664,6 +664,7 @@ class StrategyDecisionMixin:
                 "entry": "MARKET BUY using current ask in TRADE_ACTION_DEAL",
                 "strategyExit": "MARKET SELL using current bid in TRADE_ACTION_DEAL",
                 "marketExitPriceAuthority": "confirmed MT5 deal fill; request bid is retained only until an exact deal is available",
+                "brokerProtectionExitAuthority": "exact completed MT5 SELL deal history; disappearance reconciliation retries without clearing state until the deal is available",
                 "weeklyTimeout": "MARKET SELL at final XNYS session close minus non-entry lead",
                 "protection": "TRADE_ACTION_SLTP broker-side SL; no pending entry or exit orders",
                 "deviationPoints": int(self.cfg.deviation_points),

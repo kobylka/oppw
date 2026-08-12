@@ -11,7 +11,7 @@ from pathlib import Path
 
 @dataclass
 class StrategyState:
-    version: int = 8
+    version: int = 9
 
     last_trading_date: str = ""
     last_close_processed_date: str = ""
@@ -69,6 +69,7 @@ class StrategyState:
     last_exit_trade_class: str = ""
     last_exit_preleverage_return: float = 0.0
     last_exit_position_identifier: int = 0
+    last_exit_deal_ticket: int = 0
 
     active_execution_id: str = ""
     active_decision_id: str = ""

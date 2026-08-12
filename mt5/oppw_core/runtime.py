@@ -280,7 +280,8 @@ class RuntimeMixin:
         now = datetime.now(self.tz)
         position = self.managed_position()
         if position is None and self.state.active_position_identifier:
-            self.finalize_closed_position()
+            if not self.finalize_closed_position():
+                raise RuntimeError("Exact broker close deal is not available yet")
         elif position is not None:
             self.recover_position_state(position, now, force=True)
             self.apply_standard_protection(position, now)
@@ -309,7 +310,8 @@ class RuntimeMixin:
         position = self.managed_position()
 
         if position is None and self.state.active_position_identifier:
-            self.finalize_closed_position()
+            if not self.finalize_closed_position():
+                return
         elif position is not None and self.recover_position_state(position, now):
             # A manually adopted position may have no broker protection. Attach
             # the immutable hard stop before any bar or scheduled-exit logic can
@@ -324,7 +326,8 @@ class RuntimeMixin:
 
         position = self.managed_position()
         if position is None and self.state.active_position_identifier:
-            self.finalize_closed_position()
+            if not self.finalize_closed_position():
+                return
 
         if position is not None:
             self.capture_entry_signal_open(position, now)

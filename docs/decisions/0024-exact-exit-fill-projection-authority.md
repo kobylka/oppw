@@ -1,6 +1,6 @@
 # ADR 0024: Exact exit fills outrank close-projection fallbacks
 
-- Status: Accepted
+- Status: Superseded in part by ADR 0030
 - Date: 2026-07-30
 - Extends: ADR 0002 and ADR 0003
 
