@@ -9,15 +9,13 @@ $ruleColumns = [
     'ARITHMETIC_LAST_TWO' => 'arithmetic_last_two_enabled',
     'GAP_MOMENTUM' => 'gap_momentum_enabled',
     'TUESDAY_NORMALIZATION' => 'tuesday_normalization_enabled',
-    'PREMARKET_RANGE' => 'premarket_range_enabled',
-    'PREMARKET_CLOSE_NEAR_LOW' => 'premarket_close_low_enabled',
+    'PREMARKET_LOW' => 'premarket_low_enabled',
 ];
 $ruleMetadata = [
     'ARITHMETIC_LAST_TWO' => ['label' => 'Last two weeks ≤ −2.00%', 'description' => 'Skip when the arithmetic sum of the last two weekly outcomes is −2.00% or lower.'],
     'GAP_MOMENTUM' => ['label' => 'Gap ≥ 1.00% + momentum 20 ≤ −0.50%', 'description' => 'Treat the gap and 20-session momentum conditions as one rule; Monday defers to Tuesday.'],
     'TUESDAY_NORMALIZATION' => ['label' => 'Tuesday within ±0.50% of Friday', 'description' => 'After a Monday gap-momentum defer, re-enter only when Tuesday opens within ±0.50% of Friday.'],
-    'PREMARKET_RANGE' => ['label' => 'Premarket range ≥ 0.80%', 'description' => 'Require a premarket range of at least 0.80% for the premarket-low skip.'],
-    'PREMARKET_CLOSE_NEAR_LOW' => ['label' => 'Premarket close in bottom 15%', 'description' => 'Require the premarket close to be in the bottom 15% of its range.'],
+    'PREMARKET_LOW' => ['label' => 'Premarket range ≥ 0.80% + close in bottom 15%', 'description' => 'Skip only when the premarket range is at least 0.80% and its close is in the bottom 15% of that range.'],
 ];
 $finalSkipStatuses = [
     'SKIP_ARITHMETIC',

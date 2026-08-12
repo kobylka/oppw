@@ -429,8 +429,45 @@ class Sim:
         premarket_low_enabled=False,
         premarket_minimum_range=0.008,
         premarket_maximum_close_location=0.15,
+        arithmetic_loss_control_enabled=None,
+        gap_momentum_enabled=None,
+        tuesday_normalization_enabled=None,
+        premarket_range_enabled=None,
+        premarket_close_near_low_enabled=None,
         leverage_override=False,
     ):
+        legacy_loss_controls = loss_control_lookback is not None
+        arithmetic_loss_control_enabled = (
+            legacy_loss_controls
+            if arithmetic_loss_control_enabled is None
+            else bool(arithmetic_loss_control_enabled)
+        )
+        gap_momentum_enabled = (
+            legacy_loss_controls
+            if gap_momentum_enabled is None
+            else bool(gap_momentum_enabled)
+        )
+        tuesday_normalization_enabled = (
+            legacy_loss_controls
+            if tuesday_normalization_enabled is None
+            else bool(tuesday_normalization_enabled)
+        )
+        premarket_range_enabled = (
+            premarket_low_enabled
+            if premarket_range_enabled is None
+            else bool(premarket_range_enabled)
+        )
+        premarket_close_near_low_enabled = (
+            premarket_low_enabled
+            if premarket_close_near_low_enabled is None
+            else bool(premarket_close_near_low_enabled)
+        )
+        premarket_low_enabled = (
+            premarket_range_enabled and premarket_close_near_low_enabled
+        )
+        if arithmetic_loss_control_enabled and loss_control_lookback is None:
+            loss_control_lookback = 2
+
         self.trade_returns = []
         self.daily_equity_points = []
         self.leverage = leverage
@@ -515,7 +552,7 @@ class Sim:
         pending_friday_close = 0.0
         pending_monday_date = ""
 
-        if loss_control_lookback is not None:
+        if arithmetic_loss_control_enabled:
             arithmetic_loss_control_trigger(
                 [],
                 loss_control_lookback,
@@ -714,17 +751,21 @@ class Sim:
             should_open_week = False
 
             if (
-                loss_control_lookback is not None
+                gap_momentum_enabled
                 and pending_tuesday_reentry
                 and date != pending_monday_date
                 and open_price == 0
             ):
                 pending_tuesday_reentry = False
-                if is_tuesday and normalized_tuesday_reentry(
-                    pending_friday_close,
-                    qqq_open,
-                    tuesday_normalization_tolerance,
-                ):
+                normalized = (
+                    not tuesday_normalization_enabled
+                    or normalized_tuesday_reentry(
+                        pending_friday_close,
+                        qqq_open,
+                        tuesday_normalization_tolerance,
+                    )
+                )
+                if is_tuesday and normalized:
                     should_open_week = True
                     self.loss_control_events.append({
                         "date": date,
@@ -733,7 +774,8 @@ class Sim:
                         "tuesday_open": qqq_open,
                     })
                 else:
-                    self.loss_control_outcomes.append(0.0)
+                    if arithmetic_loss_control_enabled:
+                        self.loss_control_outcomes.append(0.0)
                     self.loss_control_events.append({
                         "date": date,
                         "action": "SKIP_TUESDAY_NOT_NORMALIZED",
@@ -745,7 +787,11 @@ class Sim:
 
             elif new_week_entry and open_price == 0:
                 self.week_no += 1
-                if loss_control_lookback is None and not premarket_low_enabled:
+                if not (
+                    arithmetic_loss_control_enabled
+                    or gap_momentum_enabled
+                    or premarket_low_enabled
+                ):
                     should_open_week = True
                 else:
                     quote_index = quote_positions[date]
@@ -806,6 +852,7 @@ class Sim:
                         opening_gap_threshold,
                         momentum20_threshold,
                         premarket_low,
+                        gap_momentum_enabled=gap_momentum_enabled,
                     )
 
                     if entry_decision == LOSS_CONTROL_ENTER:
@@ -821,7 +868,8 @@ class Sim:
                             "momentum20": momentum20,
                         })
                     else:
-                        self.loss_control_outcomes.append(0.0)
+                        if arithmetic_loss_control_enabled:
+                            self.loss_control_outcomes.append(0.0)
                         self.loss_control_events.append({
                             "date": date,
                             "action": entry_decision,
@@ -1053,6 +1101,11 @@ def run_backtest(
     debug=True,
     plots=True,
     premarket_low_enabled=False,
+    arithmetic_loss_control_enabled=None,
+    gap_momentum_enabled=None,
+    tuesday_normalization_enabled=None,
+    premarket_range_enabled=None,
+    premarket_close_near_low_enabled=None,
     leverage_override=False,
 ):
     files = os.listdir()
@@ -1121,7 +1174,12 @@ def run_backtest(
         debug=debug,
         plots=plots,
         loss_control_lookback=loss_control_lookback,
-        premarket_low_enabled=False,
+        premarket_low_enabled=premarket_low_enabled,
+        arithmetic_loss_control_enabled=arithmetic_loss_control_enabled,
+        gap_momentum_enabled=gap_momentum_enabled,
+        tuesday_normalization_enabled=tuesday_normalization_enabled,
+        premarket_range_enabled=premarket_range_enabled,
+        premarket_close_near_low_enabled=premarket_close_near_low_enabled,
         leverage_override=leverage_override,
     )
     print(result)
@@ -1146,12 +1204,58 @@ def loss_control_event_counts(sim):
     return counts
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
+def build_parser():
+    parser = argparse.ArgumentParser(
+        description="Run the OPPW24 research backtest with selected entry loss protections.",
+    )
     parser.add_argument(
         "--leverage_override",
         action="store_true",
         help="Use the fixed 1.765 sizing divisor instead of 20 / LEVERAGE.",
     )
+    parser.add_argument(
+        "--arithmetic-last-two",
+        action="store_true",
+        help="Skip when the arithmetic sum of the last two weekly outcomes is -2.00% or lower.",
+    )
+    parser.add_argument(
+        "--gap-momentum",
+        action="store_true",
+        help="Defer/skip when cash gap is >=1.00% and momentum 20 is <=-0.50%.",
+    )
+    parser.add_argument(
+        "--tuesday-normalization",
+        action="store_true",
+        help="After a gap-momentum defer, require Tuesday within +/-0.50% of Friday.",
+    )
+    parser.add_argument(
+        "--premarket-low",
+        action="store_true",
+        help="Skip when premarket range is >=0.80% and its close is in the bottom 15%.",
+    )
+    parser.add_argument(
+        "--all-protections",
+        "--all-protection",
+        action="store_true",
+        help="Enable every available entry loss protection.",
+    )
+    return parser
+
+
+def loss_protection_options(args):
+    all_protections = bool(args.all_protections)
+    return {
+        "loss_control_lookback": 2 if (all_protections or args.arithmetic_last_two) else None,
+        "arithmetic_loss_control_enabled": all_protections or args.arithmetic_last_two,
+        "gap_momentum_enabled": all_protections or args.gap_momentum,
+        "tuesday_normalization_enabled": all_protections or args.tuesday_normalization,
+        "premarket_low_enabled": all_protections or args.premarket_low,
+    }
+
+
+if __name__ == "__main__":
+    parser = build_parser()
     args = parser.parse_args()
-    run_backtest(leverage_override=args.leverage_override)
+    options = loss_protection_options(args)
+    print("loss protections", {key: value for key, value in options.items() if key != "loss_control_lookback"})
+    run_backtest(leverage_override=args.leverage_override, **options)

@@ -341,20 +341,16 @@ class BrokerExecutionMixin:
             inputs["arithmeticSum"] = sum(outcomes[-2:])
             return "SKIP_ARITHMETIC", inputs
 
-        market_rules_required = self.entry_rule_controls["GAP_MOMENTUM"] or (
-            self.entry_rule_controls["PREMARKET_RANGE"]
-            and self.entry_rule_controls["PREMARKET_CLOSE_NEAR_LOW"]
+        market_rules_required = (
+            self.entry_rule_controls["GAP_MOMENTUM"]
+            or self.entry_rule_controls["PREMARKET_LOW"]
         )
         if market_rules_required and market is None:
             return "WAIT_MARKET_INPUTS", inputs
         if market is not None:
             inputs.update(market)
 
-        premarket_enabled = (
-            self.entry_rule_controls["PREMARKET_RANGE"]
-            and self.entry_rule_controls["PREMARKET_CLOSE_NEAR_LOW"]
-        )
-        if premarket_enabled:
+        if self.entry_rule_controls["PREMARKET_LOW"]:
             if int(inputs.get("premarketBars", 0) or 0) <= 0:
                 return "WAIT_MARKET_INPUTS", inputs
             if self.premarket_low_entry_rule_trigger(
@@ -1211,10 +1207,7 @@ class BrokerExecutionMixin:
             return
 
         latest_entry = session.cash_open + timedelta(seconds=self.cfg.entry_window_seconds)
-        premarket_enabled = (
-            self.entry_rule_controls["PREMARKET_RANGE"]
-            and self.entry_rule_controls["PREMARKET_CLOSE_NEAR_LOW"]
-        )
+        premarket_enabled = self.entry_rule_controls["PREMARKET_LOW"]
         approved_inputs = dict((week_state or {}).get("inputs") or {}) if week_status == "ENTRY_APPROVED" else {}
         cash_open_required = (
             bool(approved_inputs.get("cashOpenRequired"))

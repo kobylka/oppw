@@ -1,6 +1,7 @@
 import sys
 import types
 import unittest
+from pathlib import Path
 
 
 sys.modules.setdefault("matplotlib", types.ModuleType("matplotlib"))
@@ -19,6 +20,13 @@ from oppw_loss_control import (
     opening_gap_momentum_trigger,
     premarket_closes_near_low,
 )
+
+
+def load_oppw24_module():
+    source = Path(__file__).with_name("oppw24.py")
+    namespace = {"__name__": "oppw24_cli_test", "__file__": str(source)}
+    exec(compile(source.read_text(encoding="utf-8"), str(source), "exec"), namespace)
+    return namespace
 
 
 class ArithmeticLossControlTests(unittest.TestCase):
@@ -148,6 +156,46 @@ class PremarketLowTests(unittest.TestCase):
         self.assertTrue(normalized_tuesday_reentry(100.0, 99.5))
         self.assertFalse(normalized_tuesday_reentry(100.0, 100.51))
         self.assertFalse(normalized_tuesday_reentry(100.0, 99.49))
+
+
+class Oppw24CommandLineTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.module = load_oppw24_module()
+
+    def test_each_loss_protection_is_independently_selectable(self):
+        parser = self.module["build_parser"]()
+        options_for = self.module["loss_protection_options"]
+        cases = {
+            "--arithmetic-last-two": "arithmetic_loss_control_enabled",
+            "--gap-momentum": "gap_momentum_enabled",
+            "--tuesday-normalization": "tuesday_normalization_enabled",
+            "--premarket-low": "premarket_low_enabled",
+        }
+        for argument, selected in cases.items():
+            options = options_for(parser.parse_args([argument]))
+            self.assertTrue(options[selected], argument)
+            self.assertEqual(
+                2 if selected == "arithmetic_loss_control_enabled" else None,
+                options["loss_control_lookback"],
+                argument,
+            )
+
+    def test_all_protections_enables_every_protection(self):
+        parser = self.module["build_parser"]()
+        options = self.module["loss_protection_options"](
+            parser.parse_args(["--all-protections"])
+        )
+        self.assertEqual(2, options["loss_control_lookback"])
+        self.assertTrue(all(value for key, value in options.items() if key != "loss_control_lookback"))
+
+    def test_singular_all_protection_alias_matches_plural(self):
+        parser = self.module["build_parser"]()
+        options_for = self.module["loss_protection_options"]
+        self.assertEqual(
+            options_for(parser.parse_args(["--all-protections"])),
+            options_for(parser.parse_args(["--all-protection"])),
+        )
 
 
 if __name__ == "__main__":

@@ -64,8 +64,7 @@ class StrategySpecificationTests(unittest.TestCase):
         strategy.entry_rule_controls_revision = 1
         strategy.entry_rule_controls = {
             "ARITHMETIC_LAST_TWO": True, "GAP_MOMENTUM": True,
-            "TUESDAY_NORMALIZATION": True, "PREMARKET_RANGE": True,
-            "PREMARKET_CLOSE_NEAR_LOW": True,
+            "TUESDAY_NORMALIZATION": True, "PREMARKET_LOW": True,
         }
         strategy.cached_previous_full_week_change = 0.0
         strategy.cached_previous_trade_change = 0.0

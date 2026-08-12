@@ -33,7 +33,7 @@ class ContractResponseParserTest {
 
         val strategyControl = JsonParser.parseStrategyControl(response("strategy-controls.json"))
         assertTrue(strategyControl.canControl)
-        assertEquals(5, strategyControl.rules.size)
+        assertEquals(4, strategyControl.rules.size)
         assertFalse(strategyControl.rules.first { it.key == "GAP_MOMENTUM" }.enabled)
 
         val status = JsonParser.parseResponse(response("status.json"))

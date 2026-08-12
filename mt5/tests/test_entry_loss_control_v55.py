@@ -49,8 +49,7 @@ class EntryLossControlTests(unittest.TestCase):
             "ARITHMETIC_LAST_TWO": True,
             "GAP_MOMENTUM": True,
             "TUESDAY_NORMALIZATION": True,
-            "PREMARKET_RANGE": True,
-            "PREMARKET_CLOSE_NEAR_LOW": True,
+            "PREMARKET_LOW": True,
         }
         return strategy
 
@@ -92,7 +91,7 @@ class EntryLossControlTests(unittest.TestCase):
 
     def test_gap_and_momentum_are_one_combined_rule(self):
         strategy = self.strategy()
-        strategy.entry_rule_controls["PREMARKET_RANGE"] = False
+        strategy.entry_rule_controls["PREMARKET_LOW"] = False
         market = self.quiet_market() | {"cashOpen": 101.0, "momentum20": -0.005}
         status, _ = strategy.loss_control_entry_decision(MONDAY, self.backend([0.0, 0.0]), market)
         self.assertEqual("DEFER_TUESDAY", status)
@@ -104,14 +103,14 @@ class EntryLossControlTests(unittest.TestCase):
 
     def test_holiday_tuesday_gap_momentum_skips_without_another_defer(self):
         strategy = self.strategy()
-        strategy.entry_rule_controls["PREMARKET_RANGE"] = False
+        strategy.entry_rule_controls["PREMARKET_LOW"] = False
         market = self.quiet_market() | {"cashOpen": 101.0, "momentum20": -0.005}
         self.assertEqual(
             "SKIP_GAP_MOMENTUM",
             strategy.loss_control_entry_decision(TUESDAY, self.backend([0.0, 0.0]), market)[0],
         )
 
-    def test_premarket_skip_requires_both_independently_controlled_components(self):
+    def test_premarket_skip_is_one_control_requiring_both_thresholds(self):
         strategy = self.strategy()
         strategy.entry_rule_controls["GAP_MOMENTUM"] = False
         market = self.quiet_market() | {
@@ -121,10 +120,13 @@ class EntryLossControlTests(unittest.TestCase):
             "premarketClose": 100.12,
         }
         self.assertEqual("SKIP_PREMARKET_LOW", strategy.loss_control_entry_decision(MONDAY, self.backend([0.0, 0.0]), market)[0])
-        strategy.entry_rule_controls["PREMARKET_RANGE"] = False
+        strategy.entry_rule_controls["PREMARKET_LOW"] = False
         self.assertEqual("ENTER", strategy.loss_control_entry_decision(MONDAY, self.backend([0.0, 0.0]), market)[0])
-        strategy.entry_rule_controls["PREMARKET_RANGE"] = True
-        strategy.entry_rule_controls["PREMARKET_CLOSE_NEAR_LOW"] = False
+        strategy.entry_rule_controls["PREMARKET_LOW"] = True
+        market["premarketHigh"] = 100.79
+        self.assertEqual("ENTER", strategy.loss_control_entry_decision(MONDAY, self.backend([0.0, 0.0]), market)[0])
+        market["premarketHigh"] = 100.8
+        market["premarketClose"] = 100.121
         self.assertEqual("ENTER", strategy.loss_control_entry_decision(MONDAY, self.backend([0.0, 0.0]), market)[0])
 
     def test_tuesday_normalization_is_symmetric_from_friday(self):

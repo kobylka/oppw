@@ -82,13 +82,16 @@ def loss_control_entry_decision(
     gap_threshold=0.01,
     momentum_threshold=-0.005,
     premarket_low=False,
+    gap_momentum_enabled=None,
 ):
     """Apply arithmetic, premarket-low, then gap/momentum priorities."""
     if arithmetic_loss_control_trigger(outcomes, lookback, arithmetic_threshold):
         return LOSS_CONTROL_SKIP_ARITHMETIC
     if premarket_low:
         return LOSS_CONTROL_SKIP_PREMARKET_LOW
-    if lookback is None:
+    if gap_momentum_enabled is None:
+        gap_momentum_enabled = lookback is not None
+    if not gap_momentum_enabled:
         return LOSS_CONTROL_ENTER
     if opening_gap_momentum_trigger(
         cash_open,

@@ -636,10 +636,10 @@ return [
             _, strategy_control_initial, _ = http_json(
                 "GET", base_url + "strategy-controls.php?account=DEMO", token=access_token,
             )
-            if len(strategy_control_initial.get("rules", [])) != 5 or not all(
+            if len(strategy_control_initial.get("rules", [])) != 4 or not all(
                 rule.get("enabled") is True for rule in strategy_control_initial.get("rules", [])
             ):
-                raise AssertionError("strategy controls did not expose five enabled defaults")
+                raise AssertionError("strategy controls did not expose four enabled defaults")
             strategy_request_id = "9" * 32
             for _ in range(2):
                 _, strategy_control, strategy_control_raw = http_json("POST", base_url + "strategy-controls.php", {
@@ -701,7 +701,7 @@ return [
                     raise AssertionError("globally fenced weekly entry-rule state was not persisted")
             http_json("POST", base_url + "strategy-controls.php", {
                 "action": "setRule", "requestId": "5" * 32, "accountKey": "DEMO",
-                "ruleKey": "PREMARKET_RANGE", "enabled": False,
+                "ruleKey": "PREMARKET_LOW", "enabled": False,
             }, token=access_token)
             _, entry_state_after_toggle, _ = http_json(
                 "POST", base_url + "strategy-controls.php", entry_state_body, token=WRITE_TOKEN,

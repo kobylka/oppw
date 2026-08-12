@@ -184,8 +184,7 @@ class OPPWContinuousStrategy(
             "ARITHMETIC_LAST_TWO": True,
             "GAP_MOMENTUM": True,
             "TUESDAY_NORMALIZATION": True,
-            "PREMARKET_RANGE": True,
-            "PREMARKET_CLOSE_NEAR_LOW": True,
+            "PREMARKET_LOW": True,
         }
         self.entry_rule_controls.update({
             str(key): bool(value)

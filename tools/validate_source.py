@@ -523,7 +523,12 @@ def main() -> int:
             "strategy_entry_rule_controls", "strategy_entry_rule_control_events",
             "strategy_entry_rule_week_state", "strategy_entry_rule_week_events",
         ),
-        "Mobile/backend/sql/migration-order.txt": ("migrate_data_lifecycle.sql", "migrate_v55_entry_rules.sql"),
+        "Mobile/backend/sql/migrate_v56_single_premarket_low.sql": (
+            "premarket_low_enabled", "premarket_range_enabled AND premarket_close_low_enabled",
+        ),
+        "Mobile/backend/sql/migration-order.txt": (
+            "migrate_data_lifecycle.sql", "migrate_v55_entry_rules.sql", "migrate_v56_single_premarket_low.sql",
+        ),
         "Mobile/backend/admin/retention.php": (
             "OPPW_EVENT_RETENTION_DAYS = 180", "OPPW_EQUITY_RETENTION_DAYS = 400",
             "name <> 'EXECUTION_STAGE'", "GET_LOCK", "oppw-retention-ndjson-v1",
@@ -587,10 +592,12 @@ def main() -> int:
         if migration_order.is_file()
         else []
     )
-    if not migration_names or migration_names[-1] != "migrate_v55_entry_rules.sql":
-        fail(errors, "migrate_v55_entry_rules.sql must be the last ordered forward migration")
+    if not migration_names or migration_names[-1] != "migrate_v56_single_premarket_low.sql":
+        fail(errors, "migrate_v56_single_premarket_low.sql must be the last ordered forward migration")
     elif migration_names.index("migrate_data_lifecycle.sql") >= migration_names.index("migrate_v55_entry_rules.sql"):
         fail(errors, "migrate_v55_entry_rules.sql must follow migrate_data_lifecycle.sql")
+    elif migration_names.index("migrate_v55_entry_rules.sql") >= migration_names.index("migrate_v56_single_premarket_low.sql"):
+        fail(errors, "migrate_v56_single_premarket_low.sql must follow migrate_v55_entry_rules.sql")
 
     retention_path = root / "Mobile" / "backend" / "admin" / "retention.php"
     retention_text = retention_path.read_text(encoding="utf-8") if retention_path.is_file() else ""

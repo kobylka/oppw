@@ -1,6 +1,6 @@
 # ADR 0028: Mobile-controlled, globally fenced entry-loss rules
 
-- Status: Accepted
+- Status: Superseded in part by ADR 0029
 - Date: 2026-08-11
 
 ## Context
