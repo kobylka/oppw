@@ -95,7 +95,7 @@ The LocalSystem code boundary under `%ProgramData%\OPPW` uses protected Administ
 | Strategy decision history | `strategy-decisions.php` |
 | Strategy specification history | `strategy-specifications.php` |
 | Immutable-record storage helpers | `authority.php` |
-| Cash-flow ingestion | `cashflow.php` |
+| Cash-flow and manual-tax ingestion | `cashflow.php` |
 | Windows supervisor assignment and mobile desired state | `service-control.php` |
 | Per-account entry-rule controls and weekly defer/skip state | `strategy-controls.php` |
 
@@ -110,6 +110,8 @@ After those authentication, authorization, request-validation, throttling, and s
 On a whole-response miss, analytics separately caches ordered raw input rows for completed Europe/Warsaw weeks. Segment identity includes the database, account scope, dataset, exact UTC boundaries, and applicable trade filters. The latest requested week is never a historical segment, and any range reaching the actual current week is queried live from that boundary onward. A 24-hour default segment TTL bounds stale late corrections to older weeks. Segment files share the response cache's protected, HMAC-verified, locked storage boundary; they do not bypass authentication or authorization. A calculation-specific streaming reducer consumes cached historical rows followed by live rows and retains only cash-flow-adjusted daily first/low/close points, provenance counts, portfolio entry flows, and exact minute refinement state for closed-trade episodes. It avoids constructing minute chart/episode state that the daily authority discards, while leaving the API payload and Android contract unchanged.
 
 Filtered-performance return metrics compound every closed trade in the effective window as `product(1 + trade return) - 1`, independently for pre-leverage price returns and leveraged account returns. Their weekly geometric equivalents use `pow(compounded growth factor, 1 / closed trade count) - 1`; only filtered closed trades participate in the numerator and denominator, while open trades are excluded. The API and Android model expose these values as percentage points.
+
+Manual tax charges use the existing immutable `account_cash_flows` authority with flow type `TAX` and are written only through `cashflow.php`. The endpoint stores tax as a negative amount, makes identical stable-reference retries idempotent, and rejects a reference reused with different content. Tax is accounting-only: it does not change top-ups, withdrawals, net contributions, broker-equity cash-flow adjustment, or trading drawdown. Analytics exposes its positive magnitude together with pre-tax trading profit/return and explicit after-tax net profit/return; Android shows all of them in its Capital, cash flows and tax card. A separate observed broker balance movement remains `TOP_UP`, `WITHDRAWAL`, or `ADJUSTMENT` authority.
 
 The Analytics yearly class-distribution panel groups filtered closed trades by closing year and trade class only. Leverage remains a global analytics filter but is not a dimension inside that panel. The canonical additive `classDistributionByYear` payload contains no leverage field; the older leverage-split `classDistribution` field remains temporarily for installed-app compatibility, and the current parser can merge that legacy shape when connected to an older backend.
 
@@ -135,7 +137,7 @@ The drawdown episode list has a distinct authority. Closed-trade returns define 
 | Fill | `strategy_fills` |
 | Protection change | `strategy_protection_changes` |
 | Trade transition | `strategy_trade_ledger` |
-| Cash flow | `account_cash_flows` |
+| Cash flow and manual tax charge | `account_cash_flows`; `TAX` is accounting-only while `TOP_UP`, `WITHDRAWAL`, and `ADJUSTMENT` represent broker-equity movements |
 | Current mobile snapshot | `strategy_snapshots`, exactly one mutable projection row per account |
 | Mobile analytics trade projection | `strategy_trades`; exact market-exit and broker-protection close price/reason comes from completed MT5 deal history published to `strategy_fills`/`EXIT_FILLED` and outranks snapshot or protection fallbacks |
 | Diagnostics, mobile delivery receipts, and low-volume operational messages | `strategy_events` |

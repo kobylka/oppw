@@ -6,7 +6,7 @@ The validator runs this boundary with real components:
 
 ```text
 fixture → coordination.php / service-control.php / strategy-controls.php → ingest.php → disposable MySQL
-        → status.php / analytics.php / mobile-receipt.php / service-control.php / strategy-controls.php
+        → status.php / analytics.php / cashflow.php / mobile-receipt.php / service-control.php / strategy-controls.php
         → Android JsonParser JVM test
 ```
 

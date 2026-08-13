@@ -97,6 +97,24 @@ Backend authentication is capability-specific:
 - Mobile reads use short-lived paired-device access tokens and per-account grants.
 - Pairing and manual administration use separate optional tokens and remain disabled unless needed.
 
+Record a manual tax charge through the canonical cash-flow endpoint with the publisher write token. Supply the tax as a positive magnitude and use a stable reference key so retrying the same request is idempotent:
+
+```powershell
+$tax = @{
+    accountKey = 'REAL'
+    type = 'TAX'
+    amount = 123.45
+    balanceAfter = 10000.00
+    occurredAt = '2026-08-13T12:00:00Z'
+    referenceKey = 'tax:REAL:2026-08-13'
+    note = 'Manual tax charge'
+} | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri 'https://monitor.example/cashflow.php' `
+    -Headers @{ Authorization = "Bearer $writeToken" } -ContentType 'application/json' -Body $tax
+```
+
+Set `balanceAfter` to the broker balance observed when the charge is recorded; for `TAX` it is contextual and does not assert a balance movement. The backend stores `TAX` as a negative immutable accounting amount. Analytics reports its positive magnitude and after-tax profit/return without changing investor contributions or broker-equity drawdown. If the broker balance also moves, record or retain that movement separately as a withdrawal or adjustment.
+
 The ordered migration labels the existing stable keys as `DEMO BOSSA` and `REAL BOSSA`, and prepares `DEMO_TMS` and `REAL_TMS` as disabled backend accounts. After replacing every TMS private-config placeholder on both nodes, enable them with:
 
 ```powershell
@@ -141,6 +159,8 @@ The service runs as LocalSystem and launches canonical MT5 children in the confi
 ## Analytics and data lifecycle
 
 Portfolio drawdown metrics use a cash-flow-adjusted daily equity curve containing each Warsaw weekday's first point, true lowest minute point, and close. Maximum percentage and currency drawdown, duration, time underwater, Recovery factor, the Calmar denominator, and Ulcer index share that authority. The episode list is separate: closed trades define its peaks and recoveries, minute equity refines each starting point, trough, recovery length, and ongoing length, and only episodes lasting at least 24 hours are transferred and shown. Fixed-duration analytics windows default to the latest selected-account trade or equity observation, so a quiet trading week cannot hide newer minute-equity troughs, and the Android date picker can move the same N-week window to an earlier inclusive Warsaw end date.
+
+Tax charges are manual accounting entries shown separately in Analytics. They reduce the explicit after-tax net profit and after-tax capital-adjusted return, while the established pre-tax trading metrics, net contributions, and drawdown authority remain unchanged.
 
 Minute equity remains hot for 400 days. Retention atomically creates indefinite `strategy_equity_daily` projections before removing eligible minute rows, and older analytics explicitly report daily fallback granularity. `strategy_market_points` minute OHLC history and immutable strategy authority remain online indefinitely.
 

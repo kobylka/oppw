@@ -2,6 +2,7 @@
 declare(strict_types=1);
 require __DIR__ . '/lib.php';
 require __DIR__ . '/analytics-cache.php';
+require __DIR__ . '/analytics-cashflow.php';
 require __DIR__ . '/analytics-drawdown.php';
 require __DIR__ . '/analytics-window.php';
 require_method('GET');
@@ -60,7 +61,7 @@ if(strlen($leverage)>32||strlen($exitReason)>100||strlen($class)>1)json_response
 $cacheConfig=config();$cacheIdentity=null;$cacheStatus='BYPASS';
 try{
     $cacheContext=[
-        'implementation'=>'analytics-response-v4',
+        'implementation'=>'analytics-response-v5',
         'database'=>hash('sha256',(string)$cacheConfig['dsn']),
         'deviceId'=>(string)$session['device_id'],
         'allowedAccounts'=>array_values(array_map(fn($row)=>['key'=>(string)$row['account_key'],'label'=>(string)$row['display_name'],'type'=>(string)$row['account_type']],$allowed)),
@@ -270,14 +271,16 @@ $cashLoader=static function(DateTimeImmutable $segmentStartUtc,DateTimeImmutable
     $stmt=$db->prepare($sql);$stmt->execute(array_merge($accountKeys,[mysql_datetime($segmentStartUtc),mysql_datetime($segmentEndUtc)]));return $stmt->fetchAll();
 };
 if($windowStartUtc!==null&&$windowEndUtc!==null){
-    try{$cashFlows=iterator_to_array(oppw_analytics_segmented_rows($cacheConfig,$segmentContext+['dataset'=>'cash-flows-v1'],$queryWindowStartUtc,$queryWindowEndUtc,$cashLoader,$segmentStats,100000),false);}catch(OppwAnalyticsSegmentLimitException){json_response(['ok'=>false,'error'=>'Analytics cash-flow sample exceeds the safe limit'],503);}
+    $cashRevisionStmt=$db->prepare("SELECT COUNT(*) AS row_count,COALESCE(MAX(id),0) AS max_id FROM account_cash_flows WHERE strategy_key IN ($placeholders)");$cashRevisionStmt->execute($accountKeys);$cashRevision=$cashRevisionStmt->fetch()?:[];
+    $cashRevisionKey=hash('sha256',(string)($cashRevision['row_count']??0).'|'.(string)($cashRevision['max_id']??0));
+    try{$cashFlows=iterator_to_array(oppw_analytics_segmented_rows($cacheConfig,$segmentContext+['dataset'=>'cash-flows-v2','cashFlowRevision'=>$cashRevisionKey],$queryWindowStartUtc,$queryWindowEndUtc,$cashLoader,$segmentStats,100000),false);}catch(OppwAnalyticsSegmentLimitException){json_response(['ok'=>false,'error'=>'Analytics cash-flow sample exceeds the safe limit'],503);}
 }else{
     $cashSql="SELECT strategy_key,flow_type,amount,occurred_at FROM account_cash_flows WHERE strategy_key IN ($placeholders) ORDER BY occurred_at,id";$cashStmt=$db->prepare($cashSql);$cashStmt->execute($accountKeys);$cashFlows=$cashStmt->fetchAll();
 }
-$initialByAccount=[];$topUps=0.0;$withdrawals=0.0;$cashByDay=[];
-foreach($cashFlows as $row){$key=(string)$row['strategy_key'];$type=strtoupper((string)$row['flow_type']);$amount=n($row['amount']);$day=warsaw_day((string)$row['occurred_at']);if($type==='INITIAL'&&!isset($initialByAccount[$key])){$initialByAccount[$key]=abs($amount);continue;}if($type==='TOP_UP'){$value=abs($amount);$topUps+=$value;$cashByDay[$day]=($cashByDay[$day]??0.0)+$value;}elseif($type==='WITHDRAWAL'){$value=abs($amount);$withdrawals+=$value;$cashByDay[$day]=($cashByDay[$day]??0.0)-$value;}elseif($type==='ADJUSTMENT'){$cashByDay[$day]=($cashByDay[$day]??0.0)+$amount;}}
+$cashFlowSummary=oppw_analytics_cash_flow_summary($cashFlows,'warsaw_day');
+$initialByAccount=$cashFlowSummary['initialByAccount'];$topUps=(float)$cashFlowSummary['topUps'];$withdrawals=(float)$cashFlowSummary['withdrawals'];$taxes=(float)$cashFlowSummary['taxes'];$cashByDay=$cashFlowSummary['cashByDay'];
 foreach($accountKeys as $key){if(isset($initialByAccount[$key]))continue;foreach($closed as $trade){if($trade['strategyKey']===$key&&$trade['balanceBefore']>0){$initialByAccount[$key]=$trade['balanceBefore'];break;}}}
-$initial=array_sum($initialByAccount);$netContributions=$initial+$topUps-$withdrawals;
+$initial=array_sum($initialByAccount);$netContributions=$initial+$topUps-$withdrawals;$netProfit=array_sum($profits);$afterTaxPerformance=oppw_after_tax_performance($netProfit,$taxes,$netContributions);
 $equityLoader=static function(DateTimeImmutable $segmentStartUtc,DateTimeImmutable $segmentEndUtc,int $limit)use($db,$placeholders,$accountKeys):iterable{
     $minuteSql="SELECT p.strategy_key,p.captured_minute,p.equity,p.position_ticket,'MINUTE' AS source_granularity FROM strategy_equity_points p WHERE p.strategy_key IN ($placeholders) AND p.captured_minute>=? AND p.captured_minute<?";
     $dailySql="SELECT d.strategy_key,d.last_captured_at AS captured_minute,d.close_equity AS equity,NULL AS position_ticket,'DAILY_FALLBACK' AS source_granularity FROM strategy_equity_daily d WHERE d.strategy_key IN ($placeholders) AND d.last_captured_at>=? AND d.last_captured_at<? AND NOT EXISTS (SELECT 1 FROM strategy_equity_points p WHERE p.strategy_key=d.strategy_key AND p.captured_minute>=d.equity_day AND p.captured_minute<d.equity_day+INTERVAL 1 DAY)";
@@ -306,7 +309,8 @@ $recent=$trades;usort($recent,fn($a,$b)=>strcmp($b['closedAt']?:$b['openedAt'],$
 
 $summary=[
     'totalTrades'=>count($trades),'closedTrades'=>count($closed),'openTrades'=>count($open),'wins'=>count($wins),'losses'=>count($losses),'winRate'=>count($closed)?count($wins)/count($closed)*100:0,
-    'netProfit'=>array_sum($profits),'initialBalance'=>$initial,'topUps'=>$topUps,'withdrawals'=>$withdrawals,'netContributions'=>$netContributions,'capitalAdjustedReturnPercent'=>abs($netContributions)>1e-15?array_sum($profits)/$netContributions*100:0,
+    'netProfit'=>$netProfit,'initialBalance'=>$initial,'topUps'=>$topUps,'withdrawals'=>$withdrawals,'taxes'=>$taxes,'netContributions'=>$netContributions,'capitalAdjustedReturnPercent'=>abs($netContributions)>1e-15?$netProfit/$netContributions*100:0,
+    'afterTaxNetProfit'=>$afterTaxPerformance['afterTaxNetProfit'],'afterTaxCapitalAdjustedReturnPercent'=>$afterTaxPerformance['afterTaxCapitalAdjustedReturnPercent'],
     'positiveWeeksPercent'=>$weekly?$positiveWeeks/count($weekly)*100:0,'averageWeeklyProfit'=>avg_values(array_column($weekly,'profit')),
     'windowCompoundedPreleverageReturnPercent'=>compounded_return_percent(array_map(fn($trade)=>(float)$trade['preleverageReturnPercent']/100.0,$closed)),'windowCompoundedLeveragedReturnPercent'=>compounded_return_percent($returns),
     'weeklyGeometricPreleverageReturnPercent'=>geometric_return_percent(array_map(fn($trade)=>(float)$trade['preleverageReturnPercent']/100.0,$closed)),'weeklyGeometricLeveragedReturnPercent'=>geometric_return_percent($returns),

@@ -1083,6 +1083,52 @@ return [
                 raise AssertionError("identical analytics request did not reuse the completed response")
             if cached_analytics_raw != analytics_raw or cached_analytics != analytics:
                 raise AssertionError("cached and uncached analytics responses are not identical")
+
+            tax_fixture = fixture["analytics"]["tax"]
+            tax_at = (current_monday + timedelta(
+                weeks=int(tax_fixture["weekOffset"]), days=int(tax_fixture["dayOffset"]),
+            )).replace(hour=int(tax_fixture["hour"]), minute=int(tax_fixture["minute"]))
+            tax_payload = {
+                "accountKey": fixture["accountKey"],
+                "type": "TAX",
+                "amount": float(tax_fixture["amount"]),
+                "balanceAfter": float(tax_fixture["balanceAfter"]),
+                "occurredAt": iso(tax_at),
+                "referenceKey": tax_fixture["referenceKey"],
+                "note": tax_fixture["note"],
+            }
+            _, created_tax, _ = http_json(
+                "POST", base_url + "cashflow.php", tax_payload, token=WRITE_TOKEN, expected=(201,),
+            )
+            if not created_tax.get("created") or float(created_tax["cashFlow"]["amount"]) != -float(tax_fixture["amount"]):
+                raise AssertionError("manual tax was not normalized to one negative immutable accounting charge")
+            _, repeated_tax, _ = http_json(
+                "POST", base_url + "cashflow.php", tax_payload, token=WRITE_TOKEN,
+            )
+            if repeated_tax.get("created"):
+                raise AssertionError("repeated identical manual tax delivery was not idempotent")
+            http_json(
+                "POST", base_url + "cashflow.php", tax_payload | {"amount": float(tax_fixture["amount"]) + 1.0},
+                token=WRITE_TOKEN, expected=(409,),
+            )
+            tax_rows = docker_sql(
+                docker, container,
+                "SELECT COUNT(*),MIN(amount),MAX(flow_type) FROM account_cash_flows WHERE strategy_key="
+                + sql_text(fixture["accountKey"]) + " AND reference_key=" + sql_text(tax_fixture["referenceKey"]),
+                docker_env,
+            ).split("\t")
+            if tax_rows != ["1", "-25.0000", "TAX"]:
+                raise AssertionError(f"manual tax persistence mismatch: {tax_rows}")
+
+            tax_headers: dict[str, str] = {}
+            _, analytics, analytics_raw = http_json(
+                "GET", analytics_url, token=access_token, response_headers=tax_headers,
+            )
+            if tax_headers.get("x-oppw-analytics-cache") != "MISS":
+                raise AssertionError("manual tax did not invalidate the completed analytics response")
+            for key in ("taxes", "afterTaxNetProfit", "afterTaxCapitalAdjustedReturnPercent"):
+                assert_close(analytics["summary"][key], float(expected[key]), "analytics " + key)
+
             one_week_analytics_url = base_url + "analytics.php?account=DEMO&rolling_weeks=1"
             _, one_week_analytics, _ = http_json("GET", one_week_analytics_url, token=access_token)
             expected_window_end = (current_monday + timedelta(weeks=1)).replace(hour=21, minute=0) + timedelta(milliseconds=1)

@@ -137,6 +137,12 @@ object JsonParser {
         val summary = root.getJSONObject("summary")
         val filters = root.optJSONObject("filters") ?: JSONObject()
         val options = root.optJSONObject("filterOptions") ?: JSONObject()
+        val netProfit = summary.optDoubleAny("netProfit")
+        val taxes = summary.optDoubleAny("taxes")
+        val capitalAdjustedReturnPercent = summary.optDoubleAny("capitalAdjustedReturnPercent")
+        val afterTaxNetProfit = summary.optionalFiniteDouble("afterTaxNetProfit") ?: (netProfit - taxes)
+        val afterTaxCapitalAdjustedReturnPercent = summary.optionalFiniteDouble("afterTaxCapitalAdjustedReturnPercent")
+            ?: capitalAdjustedReturnPercent
         return AnalyticsResponse(
             generatedAt = root.optString("generatedAt"),
             filters = AnalyticsFilters(
@@ -161,9 +167,11 @@ object JsonParser {
             ),
             summary = AnalyticsSummary(
                 totalTrades = summary.optInt("totalTrades"), closedTrades = summary.optInt("closedTrades"), openTrades = summary.optInt("openTrades"),
-                wins = summary.optInt("wins"), losses = summary.optInt("losses"), winRate = summary.optDouble("winRate"), netProfit = summary.optDouble("netProfit"),
+                wins = summary.optInt("wins"), losses = summary.optInt("losses"), winRate = summary.optDouble("winRate"), netProfit = netProfit,
                 initialBalance = summary.optDouble("initialBalance"), topUps = summary.optDouble("topUps"), withdrawals = summary.optDouble("withdrawals"),
-                netContributions = summary.optDouble("netContributions"), capitalAdjustedReturnPercent = summary.optDouble("capitalAdjustedReturnPercent"),
+                taxes = taxes, netContributions = summary.optDouble("netContributions"),
+                capitalAdjustedReturnPercent = capitalAdjustedReturnPercent, afterTaxNetProfit = afterTaxNetProfit,
+                afterTaxCapitalAdjustedReturnPercent = afterTaxCapitalAdjustedReturnPercent,
                 positiveWeeksPercent = summary.optDouble("positiveWeeksPercent"), averageWeeklyProfit = summary.optDouble("averageWeeklyProfit"),
                 windowCompoundedPreleverageReturnPercent = summary.optDoubleAny("windowCompoundedPreleverageReturnPercent"),
                 windowCompoundedLeveragedReturnPercent = summary.optDoubleAny("windowCompoundedLeveragedReturnPercent"),
@@ -652,7 +660,11 @@ object JsonParser {
     private fun requireOk(root: JSONObject) { if (!root.optBoolean("ok", false)) throw IllegalStateException(root.optString("error", "API returned an error")) }
     private fun JSONObject.optNullableDouble(name: String): Double? = if (!has(name) || isNull(name)) null else optDouble(name)
     private fun JSONObject.optBooleanAny(vararg names: String): Boolean = names.firstNotNullOfOrNull { name -> if (has(name) && !isNull(name)) optBoolean(name) else null } ?: false
-    private fun JSONObject.optDoubleAny(vararg names: String): Double = names.firstNotNullOfOrNull { name -> if (has(name) && !isNull(name)) optDouble(name).takeIf { it.isFinite() } else null } ?: 0.0
+    private fun JSONObject.optionalFiniteDouble(name: String): Double? =
+        if (has(name) && !isNull(name)) optDouble(name).takeIf { it.isFinite() } else null
+
+    private fun JSONObject.optDoubleAny(vararg names: String): Double =
+        names.firstNotNullOfOrNull { name -> optionalFiniteDouble(name) } ?: 0.0
     private fun JSONObject.optIntAny(vararg names: String): Int = names.firstNotNullOfOrNull { name -> if (has(name) && !isNull(name)) optInt(name) else null } ?: 0
     private fun JSONObject.optStringAny(vararg names: String): String = names.firstNotNullOfOrNull { name -> if (has(name) && !isNull(name)) optString(name).takeIf { it.isNotBlank() } else null } ?: ""
     private fun JSONObject.optNullableFiniteDouble(name: String): Double? = if (!has(name) || isNull(name)) null else optDouble(name).takeIf { it.isFinite() }

@@ -233,6 +233,7 @@
     {"stage": "PUBLISHED", "offsetMs": 900, "result": true}
   ],
   "analytics": {
+    "tax": {"weekOffset": -1, "dayOffset": 2, "hour": 19, "minute": 0, "amount": 25.0, "balanceAfter": 8000.0, "referenceKey": "tax:DEMO:2026-contract", "note": "Contract tax charge"},
     "closedTrades": [
       {"ticket": 990101, "weekOffset": -1, "dayOffset": 0, "openPrice": 100.0, "closePrice": 101.0, "profit": 100.0, "balanceBefore": 1000.0, "exitReason": "TP", "entryLeverage": 10.0},
       {"ticket": 990102, "weekOffset": -1, "dayOffset": 3, "openPrice": 100.0, "closePrice": 99.8, "profit": -20.0, "balanceBefore": 1000.0, "exitReason": "TSL", "entryLeverage": 10.0},

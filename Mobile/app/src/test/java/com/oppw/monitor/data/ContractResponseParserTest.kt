@@ -92,6 +92,9 @@ class ContractResponseParserTest {
         assertTrue(historicalAnalytics.filterOptions.availableStartDate.isNotBlank())
         assertTrue(historicalAnalytics.filterOptions.availableEndDate.isNotBlank())
         analytics.summary.let { summary ->
+            assertEquals(25.0, summary.taxes, 0.000001)
+            assertEquals(5.0, summary.afterTaxNetProfit, 0.000001)
+            assertEquals(0.0625, summary.afterTaxCapitalAdjustedReturnPercent, 0.000001)
             assertEquals(0.2889701, summary.windowCompoundedPreleverageReturnPercent, 0.000001)
             assertEquals(1.871, summary.windowCompoundedLeveragedReturnPercent, 0.000001)
             assertEquals(0.072164372, summary.weeklyGeometricPreleverageReturnPercent, 0.000001)

@@ -54,6 +54,7 @@ import com.oppw.monitor.data.UiState
 import com.oppw.monitor.ui.components.AppCard
 import com.oppw.monitor.ui.components.ErrorPanel
 import com.oppw.monitor.ui.components.LoadingPanel
+import com.oppw.monitor.ui.components.Metric
 import com.oppw.monitor.ui.components.SectionTitle
 import com.oppw.monitor.ui.theme.BrightGreen
 import com.oppw.monitor.ui.theme.DangerRed
@@ -119,6 +120,42 @@ private fun AnalyticsContent(state: UiState, analytics: AnalyticsResponse, onFil
 
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { FiltersPanel(state.analyticsFilters, analytics, onFiltersChanged) }
+        item {
+            AppCard(Modifier.fillMaxWidth()) {
+                SectionTitle("Capital, cash flows and tax", if (analytics.filters.allHistory) "all retained history" else "selected window")
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Metric("Initial balance", money(summary.initialBalance, currency), Modifier.weight(1f))
+                    Metric("Net contributions", money(summary.netContributions, currency), Modifier.weight(1f))
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Metric("Top-ups", money(summary.topUps, currency), Modifier.weight(1f), BrightGreen)
+                    Metric("Withdrawals", money(summary.withdrawals, currency), Modifier.weight(1f), DangerRed)
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Metric("Tax", money(summary.taxes, currency), Modifier.weight(1f), DangerRed)
+                    Metric(
+                        "After-tax net profit",
+                        money(summary.afterTaxNetProfit, currency),
+                        Modifier.weight(1f),
+                        if (summary.afterTaxNetProfit >= 0.0) BrightGreen else DangerRed,
+                    )
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Metric("Capital-adjusted return", percent(summary.capitalAdjustedReturnPercent), Modifier.weight(1f))
+                    Metric(
+                        "After-tax return",
+                        percent(summary.afterTaxCapitalAdjustedReturnPercent),
+                        Modifier.weight(1f),
+                        if (summary.afterTaxCapitalAdjustedReturnPercent >= 0.0) BrightGreen else DangerRed,
+                    )
+                }
+                Text(
+                    "Tax is a manual accounting charge. It reduces after-tax profit but does not change broker equity, investor contributions, or trading drawdown. Separate broker balance movements remain top-ups, withdrawals, or adjustments.",
+                    color = TextSecondary,
+                    style = MaterialTheme.typography.labelMedium,
+                )
+            }
+        }
         item {
             AppCard(Modifier.fillMaxWidth()) {
                 SectionTitle("Filtered performance", "${summary.closedTrades} closed · ${summary.openTrades} open")

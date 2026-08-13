@@ -12,6 +12,9 @@ class AnalyticsParserTest {
               "filters": {"rollingWeeks": 4, "allHistory": false, "windowEndDate": "2026-07-26"},
               "filterOptions": {"availableWeeks": 82, "effectiveRollingWeeks": 4, "windowStart": "2026-06-28T22:00:00Z", "windowEndExclusive": "2026-07-26T22:00:00Z", "availableStartDate": "2025-01-01", "availableEndDate": "2026-07-27"},
               "summary": {
+                "taxes": 25.0,
+                "afterTaxNetProfit": 75.0,
+                "afterTaxCapitalAdjustedReturnPercent": 6.5217391304,
                 "windowCompoundedPreleverageReturnPercent": 0.2889701,
                 "windowCompoundedLeveragedReturnPercent": 1.871,
                 "weeklyGeometricPreleverageReturnPercent": 0.072164372,
@@ -90,6 +93,9 @@ class AnalyticsParserTest {
         """.trimIndent())
 
         with(analytics.summary) {
+            assertEquals(25.0, taxes, 0.000001)
+            assertEquals(75.0, afterTaxNetProfit, 0.000001)
+            assertEquals(6.5217391304, afterTaxCapitalAdjustedReturnPercent, 0.000001)
             assertEquals(0.2889701, windowCompoundedPreleverageReturnPercent, 0.000001)
             assertEquals(1.871, windowCompoundedLeveragedReturnPercent, 0.000001)
             assertEquals(0.072164372, weeklyGeometricPreleverageReturnPercent, 0.000001)
@@ -169,7 +175,7 @@ class AnalyticsParserTest {
         val analytics = JsonParser.parseAnalytics("""
             {
               "ok": true,
-              "summary": {},
+              "summary": {"netProfit": 100.0, "capitalAdjustedReturnPercent": 10.0},
               "drawdown": {
                 "maxDrawdownPercent": 4.5,
                 "averageMaePercent": -1.2,
@@ -194,6 +200,9 @@ class AnalyticsParserTest {
         assertEquals(0.0, summary.averageWeeklyLeveragedReturnPercent, 0.0)
         assertEquals(0.0, summary.averageWinPreleverageReturnPercent, 0.0)
         assertEquals(0.0, summary.averageLossLeveragedReturnPercent, 0.0)
+        assertEquals(0.0, summary.taxes, 0.0)
+        assertEquals(100.0, summary.afterTaxNetProfit, 0.0)
+        assertEquals(10.0, summary.afterTaxCapitalAdjustedReturnPercent, 0.0)
         assertEquals(4.5, analytics.drawdown.maxDrawdownPercent, 0.0)
         assertEquals(0.0, analytics.drawdown.maxDrawdownCurrency, 0.0)
         assertEquals(0.0, analytics.drawdown.averageDepthPercent, 0.0)

@@ -149,6 +149,7 @@ $cashFlowAdjusted = oppw_drawdown_analyze([
 ]);
 $assertClose(10.0, $cashFlowAdjusted['maxDrawdownPercent'], 'cash-flow-adjusted drawdown percent');
 $assertClose(12.0, $cashFlowAdjusted['maxDrawdownCurrency'], 'cash-flow-adjusted drawdown currency');
+$assertClose(0.0, oppw_external_flow_amount(['flow_type' => 'TAX', 'amount' => -25.0]), 'tax accounting entry drawdown adjustment');
 
 $equivalenceRows = [
     $row('2026-03-27T08:00:00Z', 100.0, 31),
