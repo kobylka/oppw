@@ -61,6 +61,7 @@ class Config:
     break_even_ratio: float = 0.996
     tsl_stop: float = 0.004
     leverage_stop_points: float = 50.0
+    hard_stop_ratio_override: float = 0.0
 
     # OH/CH targets by actual trading-session index
     tpp_monday: float = 0.007

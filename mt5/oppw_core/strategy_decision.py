@@ -577,6 +577,7 @@ class StrategyDecisionMixin:
             "requiredBalanceMultiplier": self.required_balance_multiplier(self.leverage_decision()[0]),
             "balanceMultiplierProfile": self.balance_multiplier_profile(),
             "accountLossCapPolicy": self.account_loss_cap_policy(),
+            "hardStopRatioOverride": float(getattr(self.cfg, "hard_stop_ratio_override", 0.0) or 0.0),
             "hardStopRatioL10": self.hard_sl_ratio(int(self.cfg.loss_leverage)),
             "hardStopRatioL8": self.hard_sl_ratio(int(self.cfg.base_leverage)),
             "sizingMethod": "MAX_VOLUME_BY_REQUIRED_BALANCE",
@@ -678,6 +679,7 @@ class StrategyDecisionMixin:
                 "thursdayTslFormula": "position fill price * (1 - thursdayTslDistance), active from Thursday date change",
                 "thursdayPremarketCrossedTslExitReason": "TSL1PRE",
                 "hardStopPointsOverLeverage": float(self.cfg.leverage_stop_points),
+                "hardStopRatioOverride": float(getattr(self.cfg, "hard_stop_ratio_override", 0.0) or 0.0),
                 "hardStopRatioL10": float(self.hard_sl_ratio(int(self.cfg.loss_leverage))),
                 "hardStopRatioL8": float(self.hard_sl_ratio(int(self.cfg.base_leverage))),
                 "accountLossCapPolicy": self.account_loss_cap_policy(),
@@ -699,6 +701,7 @@ class StrategyDecisionMixin:
                 "persistence": "immutable per position",
                 "allowedTightening": ["post-fill correction", "recovery leverage correction", "Thursday TSL", "explicit break-even/exit protection", "restoration"],
                 "wholePointRounding": "round positive SL upward to nearest whole index point",
+                "ratioSelection": "use hardStopRatioOverride when positive; otherwise use the leverage-dependent hardStopPointsOverLeverage formula",
             },
             "exitHierarchy": [
                 "broker hard SL",

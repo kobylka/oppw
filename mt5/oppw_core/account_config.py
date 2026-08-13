@@ -70,6 +70,7 @@ ENVIRONMENT_VARIABLES = {
     "break_even_ratio": "OPPW_BE",
     "tsl_stop": "OPPW_TSL_STOP",
     "leverage_stop_points": "OPPW_LEVERAGE_STOP_POINTS",
+    "hard_stop_ratio_override": "OPPW_HARD_STOP_RATIO_OVERRIDE",
     "tpp_monday": "OPPW_TPP_MONDAY",
     "tpp_tuesday": "OPPW_TPP_TUESDAY",
     "tpp_wednesday": "OPPW_TPP_WEDNESDAY",
@@ -302,6 +303,9 @@ def validate_config(config) -> None:
         raise RuntimeError("legacy required-balance multipliers must be positive")
     if not 0 < float(config.max_account_stop_loss_fraction) <= 1:
         raise RuntimeError("max_account_stop_loss_fraction must be in (0, 1]")
+    hard_stop_override = float(config.hard_stop_ratio_override)
+    if hard_stop_override != 0.0 and not 0 < hard_stop_override < 1:
+        raise RuntimeError("hard_stop_ratio_override must be 0 or in (0, 1)")
     for field_name in (
         "entry_rule_arithmetic_threshold",
         "entry_rule_gap_threshold",

@@ -22,6 +22,7 @@ from oppw_core.account_config import (  # noqa: E402
     load_private_overrides,
     normalize_account_key,
     scope_config_to_account,
+    validate_config,
 )
 from oppw_core.settings import Config  # noqa: E402
 
@@ -87,6 +88,7 @@ class AccountConfigAuthorityTests(unittest.TestCase):
                 {
                     "base_leverage": 10,
                     "required_balance_multiplier": 1.5,
+                    "hard_stop_ratio_override": 0.9465,
                     "trade_symbol": "US100.pro",
                     "signal_symbol": "US100.pro",
                     "market_order_priority_delay_seconds": 0.5,
@@ -108,6 +110,8 @@ class AccountConfigAuthorityTests(unittest.TestCase):
             self.assertEqual(10, beta.base_leverage)
             self.assertEqual(1.765, alpha.required_balance_multiplier)
             self.assertEqual(1.5, beta.required_balance_multiplier)
+            self.assertEqual(0.0, alpha.hard_stop_ratio_override)
+            self.assertEqual(0.9465, beta.hard_stop_ratio_override)
             self.assertEqual("US100", alpha.trade_symbol)
             self.assertEqual("US100.pro", beta.trade_symbol)
             self.assertEqual("US100.pro", beta.signal_symbol)
@@ -153,6 +157,13 @@ class AccountConfigAuthorityTests(unittest.TestCase):
         self.assertNotIn("password", summary)
         self.assertNotIn("monitor_write_token", summary)
         self.assertEqual("US100", summary["trade_symbol"])
+
+    def test_hard_stop_ratio_override_validation_accepts_disabled_or_fraction_only(self):
+        validate_config(Config(hard_stop_ratio_override=0.0))
+        validate_config(Config(hard_stop_ratio_override=0.9465))
+        for invalid in (-0.1, 1.0, 1.1):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(RuntimeError, "hard_stop_ratio_override"):
+                validate_config(Config(hard_stop_ratio_override=invalid))
 
     def test_legacy_private_config_is_migrated_without_value_changes(self):
         with tempfile.TemporaryDirectory() as directory:

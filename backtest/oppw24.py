@@ -902,11 +902,9 @@ class Sim:
                 #        self.deposited += 3000
                 #        self.balance += 3000
                 if(self.deposited < 200000 and (self.prev_full_week_change < -0.02 or self.prev_change < -0.007) and allow_deposits):
-                    granular = int((self.balance/1.5/115))
-                    plus_one = int(115*(granular+1)*1.5-self.balance+20)
                     
-                    self.deposited += plus_one
-                    self.balance += plus_one
+                    self.deposited += 115
+                    self.balance += 115
                     
                 z += 1
             # --------------------------------------------------------
@@ -1168,8 +1166,8 @@ def run_backtest(
     result = sim.process(
         sim_i.quotes,
         "QQQ",
-        "20250102",
-        "20260813",
+        "20201019",
+        "20221015",
         LEVERAGE,
         tpps,
         SL,
@@ -1177,8 +1175,8 @@ def run_backtest(
         0.004,
         0.004,
         initial_balance=580,
-        allow_deposits=False,
-        apply_tax=True,
+        allow_deposits=True,
+        apply_tax=False,
         debug=debug,
         plots=plots,
         loss_control_lookback=loss_control_lookback,

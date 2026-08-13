@@ -2,7 +2,7 @@
 
 This runbook adds `DEMO_TMS` and `REAL_TMS` beside the existing `DEMO` and `REAL` account identities on both supervised Windows nodes. The stable Bossa keys remain unchanged so historical leases, claims, trades, analytics, and audit links stay attached to the same accounts; only their display names become `DEMO BOSSA` and `REAL BOSSA`.
 
-The prepared TMS private configurations use `required_balance_multiplier = 1.5` and remain `live_enabled = False` through initial deployment. With the canonical `sizing_multiplier = 20`, this permits a theoretical maximum effective exposure of `20 / 1.5 = 13.333x`, subject to broker volume steps and available margin. Bossa retains `1.765`, or approximately `11.331x` under the same simplifying limit.
+The prepared TMS private configurations use `required_balance_multiplier = 1.5`, fixed `hard_stop_ratio_override = 0.9465`, and remain `live_enabled = False` through initial deployment. With the canonical `sizing_multiplier = 20`, this permits a theoretical maximum effective exposure of `20 / 1.5 = 13.333x`, subject to broker volume steps and available margin. Bossa retains `1.765`, or approximately `11.331x` under the same simplifying limit, and leaves the hard-stop override disabled so its leverage-dependent stop logic is unchanged.
 
 ## 1. Build and back up
 
@@ -79,6 +79,7 @@ OVERRIDES = {
     "high_risk_warning_timeout_seconds": 120.0,
     "separate_mt5_login_after_initialize": True,
     "required_balance_multiplier": 1.5,
+    "hard_stop_ratio_override": 0.9465,
     "trade_symbol": "US100.pro",
     "signal_symbol": "US100.pro",
     "live_enabled": False,
@@ -89,7 +90,7 @@ Do not copy the canonical `Config` class and never commit or transmit these file
 
 `auto_acknowledge_high_risk_warning` is an explicit authorization to tick and confirm the exact Polish leveraged-instrument risk warning during MT5 startup. It is disabled by default and must not be enabled for an account unless its operator is authorized to make that acknowledgement. Successful use is logged as `HIGH_RISK_WARNING_ACKNOWLEDGED`.
 
-Because environment values outrank private overrides and are shared by every child of a supervisor, check the runtime user's User and Machine environment scopes. Remove stale account-specific `OPPW_*` overrides, especially `OPPW_REQUIRED_BALANCE_MULTIPLIER`, `OPPW_LIVE`, `OPPW_TERMINAL_PATH`, and `OPPW_LOGIN`. Per-account differences belong in the private files.
+Because environment values outrank private overrides and are shared by every child of a supervisor, check the runtime user's User and Machine environment scopes. Remove stale account-specific `OPPW_*` overrides, especially `OPPW_REQUIRED_BALANCE_MULTIPLIER`, `OPPW_HARD_STOP_RATIO_OVERRIDE`, `OPPW_LIVE`, `OPPW_TERMINAL_PATH`, and `OPPW_LOGIN`. A global hard-stop override would also alter Bossa. Per-account differences belong in the private files.
 
 ## 5. Coordinate backend enablement and the supervisor-list change
 
@@ -146,6 +147,7 @@ The first rollout keeps TMS trading disabled. On Master, inspect `%ProgramData%\
 - `DEMO_TMS` and `REAL_TMS` report the expected broker login and account type;
 - TMS logs contain `CONFIG_PROFILE ... GROWTH_1_500`, `default_multiplier=1.500`, and `EVENT DRY_RUN live_enabled=false`;
 - Bossa logs still contain `GROWTH_1_765` and `default_multiplier=1.765`;
+- TMS `CONFIG_EFFECTIVE` reports `hard_stop_ratio_override: 0.9465`, while both Bossa accounts report `hard_stop_ratio_override: 0.0`;
 - Mobile/API account lists show `DEMO BOSSA`, `REAL BOSSA`, `DEMO TMS`, and `REAL TMS` separately;
 - the latest TMS strategy specification contains `growthRequiredBalanceMultiplier: 1.5` and `activeProfile: GROWTH_1_500`;
 - no account shows login mismatch, symbol-selection failure, readiness timeout, or assignment-list mismatch.
@@ -164,7 +166,7 @@ Live activation is a second, explicit operation after dry-run acceptance:
 
 1. Ensure neither TMS account has an unmanaged open position.
 2. Stop both supervisors so Master and Backup cannot load different live settings during failover.
-3. Change only `live_enabled` to `True` in both TMS private files on both nodes. Keep `required_balance_multiplier = 1.5`.
+3. Change only `live_enabled` to `True` in both TMS private files on both nodes. Keep `required_balance_multiplier = 1.5` and `hard_stop_ratio_override = 0.9465`.
 4. As the runtime user on both nodes, confirm that each TMS terminal is connected to the expected login and that MT5 Algo Trading is enabled.
 5. Start Master and wait for all eight children to become ready. TMS Executors must report `live=ENABLED autotrading=ENABLED`.
 6. Start Backup and confirm that it remains unassigned while Master is healthy.

@@ -33,5 +33,7 @@ OVERRIDES = {
     # "market_order_priority_delay_seconds": 0.0,
     # "separate_mt5_login_after_initialize": True,
     # "entry_action_lead_seconds": 3.0,
+    # Optional fixed hard-stop ratio; 0 keeps the leverage-dependent formula:
+    # "hard_stop_ratio_override": 0.9465,
     # "monitor_enabled": True,
 }

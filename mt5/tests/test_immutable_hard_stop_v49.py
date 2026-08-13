@@ -62,6 +62,7 @@ class ImmutableHardStopTests(unittest.TestCase):
             base_leverage=8,
             loss_leverage=10,
             leverage_stop_points=50.0,
+            hard_stop_ratio_override=0.0,
             full_week_loss_trigger=-0.025,
             previous_trade_loss_trigger=-0.002,
             magic=240024,
@@ -72,6 +73,16 @@ class ImmutableHardStopTests(unittest.TestCase):
         )
         strategy.tz = WARSAW
         return strategy
+
+    def test_fixed_hard_stop_override_uses_same_ratio_for_l8_and_l10(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            strategy = self.strategy(Path(temp_dir) / "state.json")
+            strategy.cfg.hard_stop_ratio_override = 0.9465
+            MT5.symbol_info = lambda _symbol: SimpleNamespace(trade_tick_size=0.25, point=0.25)
+
+            self.assertEqual(0.9465, strategy.hard_sl_ratio(8))
+            self.assertEqual(0.9465, strategy.hard_sl_ratio(10))
+            self.assertEqual(27_449.0, strategy.hard_sl_price(self.position()))
 
     def test_definitive_stop_is_locked_once_and_ignores_later_balance(self):
         with tempfile.TemporaryDirectory() as temp_dir:

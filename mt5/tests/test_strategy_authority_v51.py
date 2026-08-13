@@ -49,7 +49,8 @@ def strategy_config():
         required_balance_multiplier=1.765, legacy_required_balance_multiplier_l10=2.0,
         legacy_required_balance_multiplier_l8=2.5, use_legacy_balance_multiplier=False,
         tpps=(0.007, 0.02, 0.05, 0.05, 0.05), break_even_ratio=0.996,
-        tsl_stop=0.004, leverage_stop_points=50.0, max_account_stop_loss_fraction=0.5,
+        tsl_stop=0.004, leverage_stop_points=50.0, hard_stop_ratio_override=0.0,
+        max_account_stop_loss_fraction=0.5,
         deviation_points=20, filling_mode="AUTO",
     )
 
@@ -98,6 +99,20 @@ class StrategySpecificationTests(unittest.TestCase):
         self.assertIn("pre-open entry action", specification["document"]["calendarAndTime"]["ruleControlledEntryTime"])
         self.assertIn("fresh MT5 BUY price", specification["document"]["entryLossControl"]["entryPriceReference"])
         self.assertEqual("GROWTH_1_765", specification["document"]["sizing"]["activeProfile"])
+        self.assertEqual(0.9375, strategy.hard_sl_ratio(8))
+        self.assertEqual(0.95, strategy.hard_sl_ratio(10))
+
+    def test_account_hard_stop_ratio_override_is_leverage_independent_and_audited(self):
+        strategy = self.strategy()
+        strategy.cfg.hard_stop_ratio_override = 0.9465
+
+        specification = strategy.build_strategy_specification()
+
+        self.assertEqual(0.9465, strategy.hard_sl_ratio(8))
+        self.assertEqual(0.9465, strategy.hard_sl_ratio(10))
+        self.assertEqual(0.9465, specification["document"]["thresholds"]["hardStopRatioOverride"])
+        self.assertEqual(0.9465, specification["document"]["thresholds"]["hardStopRatioL8"])
+        self.assertEqual(0.9465, specification["document"]["thresholds"]["hardStopRatioL10"])
 
     def test_account_required_balance_override_is_effective_and_audited(self):
         strategy = self.strategy()

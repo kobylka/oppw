@@ -51,6 +51,9 @@ class BrokerExecutionMixin:
         return self.leverage_decision()[0]
 
     def hard_sl_ratio(self, leverage: int) -> float:
+        override = float(getattr(self.cfg, "hard_stop_ratio_override", 0.0) or 0.0)
+        if override > 0:
+            return override
         return (100.0 - self.cfg.leverage_stop_points / leverage) / 100.0
 
     def hard_sl_price(self, position) -> float:
