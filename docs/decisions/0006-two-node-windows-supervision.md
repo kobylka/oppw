@@ -1,6 +1,6 @@
 # ADR 0006: Two-node Windows supervision with backend assignment
 
-- Status: Accepted
+- Status: Accepted; fixed four-child portion superseded by ADR 0032
 - Date: 2026-07-22
 
 ## Context

@@ -640,7 +640,7 @@ class Sim:
 
                 tax = self.gained * 0.19
 
-                if tax > 0 and apply_tax:
+                if tax > 10000 and apply_tax:
                     #print()
                     #print(date)
                     #print(self.balance)
@@ -903,7 +903,7 @@ class Sim:
                 #        self.balance += 3000
                 if(self.deposited < 200000 and (self.prev_full_week_change < -0.02 or self.prev_change < -0.007) and allow_deposits):
                     granular = int((self.balance/1.5/200))
-                    plus_one = int(200*(granular+1)*1.5-self.balance+200)
+                    plus_one = int(200*(granular+1)*1.5-self.balance+20)
                     
                     self.deposited += plus_one
                     self.balance += plus_one
@@ -1168,7 +1168,7 @@ def run_backtest(
     result = sim.process(
         sim_i.quotes,
         "QQQ",
-        "20240102",
+        "20220103",
         "20260813",
         LEVERAGE,
         tpps,

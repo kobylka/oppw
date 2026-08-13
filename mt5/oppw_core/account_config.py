@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import shutil
 import sys
 import uuid
@@ -17,6 +18,7 @@ from .settings import Config
 from .versioning import (
     ACCOUNT_CONFIG_FILES,
     ACCOUNT_DEMO,
+    ACCOUNT_TYPES,
     BASE_DIR,
     PROJECT_VERSION,
 )
@@ -119,6 +121,37 @@ ENVIRONMENT_VARIABLES = {
 CONFIG_FIELD_NAMES = tuple(field.name for field in fields(Config))
 REQUIRED_CONFIG_FIELDS = CONFIG_FIELD_NAMES + ("tpps", "tsl_ratio")
 SENSITIVE_CONFIG_FIELDS = frozenset({"password", "monitor_write_token"})
+ACCOUNT_KEY_PATTERN = re.compile(r"^[A-Z0-9][A-Z0-9_-]{0,63}$")
+
+
+def normalize_account_type(account_type: str) -> str:
+    normalized = str(account_type).strip().upper()
+    if normalized not in ACCOUNT_TYPES:
+        raise RuntimeError("Account type must be DEMO or REAL")
+    return normalized
+
+
+def normalize_account_key(account_key: str) -> str:
+    normalized = str(account_key).strip().upper()
+    if not ACCOUNT_KEY_PATTERN.fullmatch(normalized):
+        raise RuntimeError(
+            "Account key must contain 1-64 uppercase letters, digits, underscores, or hyphens"
+        )
+    return normalized
+
+
+def account_config_path(account_type: str, account_key: str, base_dir: Path = BASE_DIR) -> Path:
+    normalized_type = normalize_account_type(account_type)
+    normalized_key = normalize_account_key(account_key)
+    if normalized_key in ACCOUNT_TYPES and normalized_key != normalized_type:
+        raise RuntimeError(f"Reserved account key {normalized_key} must use type {normalized_key}")
+    account_dir = base_dir / normalized_type.lower()
+    filename = (
+        ACCOUNT_CONFIG_FILES[normalized_type]
+        if normalized_key == normalized_type
+        else f"{normalized_key.lower()}_mt5_config.py"
+    )
+    return account_dir / filename
 
 
 def default_config(account: str, account_dir: Path) -> Config:
@@ -226,14 +259,17 @@ def build_account_config(
     return apply_config_overrides(config, environment_overrides, "environment")
 
 
-def load_account_config(account: str):
-    account = account.upper()
-    account_dir = BASE_DIR / account.lower()
-    config_path = account_dir / ACCOUNT_CONFIG_FILES[account]
+def load_account_config(account_type: str, account_key: str | None = None):
+    normalized_type = normalize_account_type(account_type)
+    normalized_key = normalize_account_key(account_key or normalized_type)
+    account_dir = BASE_DIR / normalized_type.lower()
+    config_path = account_config_path(normalized_type, normalized_key)
     if not config_path.is_file():
-        raise RuntimeError(f"Missing {account} configuration: {config_path}")
+        raise RuntimeError(
+            f"Missing {normalized_type} account configuration for {normalized_key}: {config_path}"
+        )
     private_overrides = load_private_overrides(config_path)
-    return build_account_config(account, account_dir, private_overrides), config_path
+    return build_account_config(normalized_key, account_dir, private_overrides), config_path
 
 
 def effective_config_summary(config: Config) -> dict[str, Any]:
@@ -299,8 +335,9 @@ def apply_runtime_flags(config, conservative_multiplier: bool):
 
 def account_scoped_file(path: Path, account: str) -> Path:
     account_label = account.lower()
-    normalized_tokens = path.stem.lower().replace("_", "-").replace(".", "-").split("-")
-    if account_label in normalized_tokens:
+    normalized_stem = re.sub(r"[^a-z0-9]+", "-", path.stem.lower()).strip("-")
+    normalized_label = re.sub(r"[^a-z0-9]+", "-", account_label).strip("-")
+    if normalized_stem == normalized_label or normalized_stem.endswith("-" + normalized_label):
         return path
     return path.with_name(f"{path.stem}.{account_label}{path.suffix}")
 

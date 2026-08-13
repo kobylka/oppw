@@ -1,6 +1,6 @@
 # OPPW24 strategy specification authority
 
-The running loop stores one canonical, hash-addressed strategy specification in MySQL for every resolved configuration. The runtime document—not this prose summary—is the authoritative record of the strategy that produced a decision.
+The running loop stores one canonical, hash-addressed strategy specification in MySQL for every resolved account configuration. Named Demo and Real accounts may resolve different private `OVERRIDES`; each account key adopts its own resulting specification. The runtime document—not this prose summary—is the authoritative record of the strategy that produced a decision.
 
 ## Identity and versioning
 
@@ -12,6 +12,8 @@ The specification version is read from the repository root `VERSION` file. The l
 - project version, effective time, build ID, instruments, and the complete JSON document.
 
 Changing a trading-relevant resolved value creates a different hash and a new immutable specification row. Credentials, account numbers, local paths, and tokens are excluded.
+
+The resolved sizing document includes the active required-balance multiplier and profile. Bossa uses the canonical `1.765`; the prepared TMS account overrides use `1.5`. With `brokerExposureMultiplier = 20`, the latter permits a theoretical maximum effective exposure of `20 / 1.5 = 13.333x`, subject to broker volume steps and available margin. Each TMS account therefore produces and adopts a specification hash distinct from Bossa.
 
 ## Session-order invariants
 

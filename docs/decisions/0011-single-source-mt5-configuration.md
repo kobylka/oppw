@@ -1,6 +1,6 @@
 # ADR 0011: Single-source MT5 configuration
 
-- Status: Accepted
+- Status: Accepted; fixed two-file portion superseded by ADR 0032
 - Date: 2026-07-27
 - Supersedes: the copied private-configuration format described by ADR 0005
 

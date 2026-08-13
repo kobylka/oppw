@@ -412,6 +412,26 @@ return [
             php_env = os.environ.copy()
             php_env["OPPW_MONITOR_CONFIG"] = str(config_path)
 
+            for account_key, account_type, display_name, broker_id, sort_order in (
+                ("DEMO_ALPHA", "DEMO", "Demo Alpha", "10101", "30"),
+                ("DEMO_BETA", "DEMO", "Demo Beta", "20202", "40"),
+                ("REAL_PROP", "REAL", "Real Prop", "30303", "50"),
+            ):
+                run([
+                    php, str(root / "Mobile/backend/admin/register_account.php"),
+                    "--account=" + account_key, "--type=" + account_type,
+                    "--display-name=" + display_name, "--broker-account-id=" + broker_id,
+                    "--sort-order=" + sort_order,
+                ], env=php_env, capture_output=True)
+            registered_account_count = int(docker_sql(
+                docker, container,
+                "SELECT COUNT(*) FROM monitor_accounts WHERE enabled=TRUE "
+                "AND account_key IN ('DEMO_ALPHA','DEMO_BETA','REAL_PROP')",
+                docker_env,
+            ))
+            if registered_account_count != 3:
+                raise AssertionError("CLI multi-account registration did not persist all named accounts")
+
             pairing_hash = hmac.new(PAIRING_SECRET.encode(), PAIRING_CODE.encode(), hashlib.sha256).hexdigest()
             docker_sql(docker, container, f"""
                 INSERT INTO monitor_pairing_codes(id,code_hash,label,expires_at)
@@ -483,7 +503,11 @@ return [
                 {"account": account, "role": role, "running": True, "pid": index + 10,
                  "startedAt": iso(datetime.now(timezone.utc)), "restartCount": 1, "lastExitCode": None}
                 for index, (account, role) in enumerate(
-                    (("DEMO", "EXECUTOR"), ("DEMO", "PUBLISHER"), ("REAL", "EXECUTOR"), ("REAL", "PUBLISHER"))
+                    tuple(
+                        (account, role)
+                        for account in ("DEMO", "DEMO_ALPHA", "DEMO_BETA", "REAL", "REAL_PROP")
+                        for role in ("EXECUTOR", "PUBLISHER")
+                    )
                 )
             ]
             _, backup_first, _ = http_json("POST", base_url + "service-control.php", {

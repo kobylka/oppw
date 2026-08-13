@@ -133,7 +133,8 @@ if ($action === 'heartbeat') {
     $build = substr(trim((string)($data['build'] ?? '')), 0, 160);
     $startedAt = normalize_datetime((string)($data['startedAt'] ?? ''));
     $rawProcesses = $data['processes'] ?? [];
-    if (!is_array($rawProcesses) || count($rawProcesses) > 8) {
+    // At most eight configured accounts, each with EXECUTOR and PUBLISHER.
+    if (!is_array($rawProcesses) || count($rawProcesses) > 16) {
         json_response(['ok' => false, 'error' => 'invalid processes payload'], 400);
     }
     $processes = [];

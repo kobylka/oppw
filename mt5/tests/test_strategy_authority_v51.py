@@ -10,7 +10,7 @@ import unittest
 from datetime import datetime, time
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from zoneinfo import ZoneInfo
 
 
@@ -94,6 +94,41 @@ class StrategySpecificationTests(unittest.TestCase):
         self.assertEqual(specification["document"]["persistenceAuthority"]["events"], "diagnostic stream only")
         self.assertEqual(specification["document"]["entryLossControl"]["arithmeticLookback"], 2)
         self.assertEqual(specification["document"]["entryLossControl"]["momentumSessions"], 20)
+        self.assertEqual("GROWTH_1_765", specification["document"]["sizing"]["activeProfile"])
+
+    def test_account_required_balance_override_is_effective_and_audited(self):
+        strategy = self.strategy()
+        strategy.cfg.required_balance_multiplier = 1.5
+
+        specification = strategy.build_strategy_specification()
+        sizing = specification["document"]["sizing"]
+
+        self.assertEqual(1.5, strategy.required_balance_multiplier(8))
+        self.assertEqual("GROWTH_1_500", strategy.balance_multiplier_profile())
+        self.assertEqual("DISABLED_FOR_GROWTH_1_500", strategy.account_loss_cap_policy())
+        self.assertEqual(1.5, sizing["growthRequiredBalanceMultiplier"])
+        self.assertEqual("GROWTH_1_500", sizing["activeProfile"])
+        self.assertEqual("growthRequiredBalanceMultiplier", sizing["activeRequiredBalanceMultiplierRule"])
+
+    def test_required_balance_override_changes_maximum_effective_exposure(self):
+        strategy = self.strategy()
+        strategy.cfg.required_balance_multiplier = 1.5
+        info = SimpleNamespace(volume_min=0.1, volume_step=0.1, volume_max=2.0)
+
+        with patch.object(
+            MODULE.mt5,
+            "order_calc_margin",
+            create=True,
+            side_effect=lambda _side, _symbol, volume, _price: float(volume) * 100.0,
+        ):
+            sizing = strategy.required_balance_sizing(150.0, 150.0, info, 20_000.0, 8)
+        effective_leverage = sizing["requiredDeposit"] * strategy.cfg.sizing_multiplier / 150.0
+
+        self.assertEqual(1.0, sizing["volume"])
+        self.assertEqual(100.0, sizing["requiredDeposit"])
+        self.assertEqual(150.0, sizing["requiredBalance"])
+        self.assertEqual(1.5, sizing["requiredBalanceMultiplier"])
+        self.assertAlmostEqual(20.0 / 1.5, effective_leverage)
 
     def test_decision_is_immutably_linked_to_specification(self):
         strategy = self.strategy()

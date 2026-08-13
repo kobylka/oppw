@@ -5,7 +5,9 @@ import inspect
 from pathlib import Path
 import sys
 import types
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 
 def load_strategy_module():
@@ -15,6 +17,8 @@ def load_strategy_module():
     mt5.ORDER_TYPE_SELL = 1
     mt5.POSITION_TYPE_BUY = 0
     mt5.POSITION_TYPE_SELL = 1
+    mt5.ACCOUNT_TRADE_MODE_DEMO = 0
+    mt5.ACCOUNT_TRADE_MODE_REAL = 2
     source = Path(__file__).resolve().parents[1] / "oppw_mt5_continuous.py"
     spec = importlib.util.spec_from_file_location("oppw_v53_module_boundary_test", source)
     assert spec is not None and spec.loader is not None
@@ -34,6 +38,29 @@ class ModuleBoundaryTests(unittest.TestCase):
         self.assertIn("class OPPWContinuousStrategy(", source)
         self.assertNotIn("class BackendLeaseCoordinator", source)
         self.assertNotIn("class MobileMonitorPublisher", source)
+
+    def test_named_account_type_must_match_the_connected_mt5_trade_mode(self):
+        self.assertTrue(MODULE.account_trade_mode_matches("DEMO", 0))
+        self.assertTrue(MODULE.account_trade_mode_matches("REAL", 2))
+        self.assertFalse(MODULE.account_trade_mode_matches("DEMO", 2))
+        self.assertFalse(MODULE.account_trade_mode_matches("REAL", 0))
+        strategy = MODULE.OPPWContinuousStrategy.__new__(MODULE.OPPWContinuousStrategy)
+        strategy.account_type = "DEMO"
+        strategy.cfg = SimpleNamespace(login=123)
+        with patch.object(
+            MODULE.mt5,
+            "account_info",
+            return_value=SimpleNamespace(login=123, trade_mode=2),
+            create=True,
+        ):
+            self.assertFalse(strategy.selected_account_matches())
+
+    def test_named_account_cli_preserves_legacy_default_and_accepts_a_key(self):
+        legacy = MODULE.parse_arguments(["--account", "demo"])
+        named = MODULE.parse_arguments(["--account", "real", "--account-key", "REAL_PROP"])
+        self.assertEqual("", legacy.account_key)
+        self.assertEqual("real", named.account)
+        self.assertEqual("REAL_PROP", named.account_key)
 
     def test_strategy_methods_are_owned_by_cohesive_modules(self):
         strategy = MODULE.OPPWContinuousStrategy

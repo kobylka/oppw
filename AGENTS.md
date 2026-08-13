@@ -38,8 +38,8 @@ Neither executable currently resolves by bare command in the Codex process envir
 - The sole MT5 entrypoint and strategy composition root is `mt5/oppw_mt5_continuous.py`; its canonical cohesive implementation modules are the fixed `mt5/oppw_core/` package.
 - The sole committed MT5 config template is `mt5/oppw_mt5_config.example.py`.
 - The sole MT5 configuration schema and default authority is `mt5/oppw_core/settings.py`.
-- Private Demo/Real configuration files contain only the five required credential constants and an `OVERRIDES` mapping; they never define `Config` or copy defaults.
-- `mt5/oppw_mt5_continuous.py` is the sole MT5 entrypoint; account selection always uses `--account demo|real`.
+- Private Demo/Real account configuration files contain only the five required credential constants and an `OVERRIDES` mapping; they never define `Config` or copy defaults. Named keys use `mt5/<type>/<account-key-lower>_mt5_config.py`; the legacy `DEMO` and `REAL` keys retain `demo_mt5_config.py` and `real_mt5_config.py`.
+- `mt5/oppw_mt5_continuous.py` is the sole MT5 entrypoint; account type selection uses `--account demo|real` and named identity uses optional `--account-key`, defaulting to `DEMO` or `REAL`.
 - Files under `mt5/demo/` and `mt5/real/` are ignored private runtime/configuration files only. Do not add account launchers or copied strategy sources.
 - Never create version-suffixed implementation copies, copied backend endpoints, patcher-generated backups, parallel installers, or source trees inside release folders.
 - Behavioral tests must import the canonical entrypoint, never a historical copy or an internal module as an alternate strategy assembly.

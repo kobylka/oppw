@@ -6,6 +6,7 @@ param(
     [string]$ControlUrl = 'https://eloski.eu/oppw-backend/service-control.php',
     [string]$WriteToken = '',
     [string]$RuntimeUser = '',
+    [string[]]$Accounts = @(),
     [PSCredential]$ServiceCredential,
     [switch]$Uninstall
 )
@@ -107,7 +108,7 @@ if ($PythonPath -eq '') {
     $PythonPath = $python.Source
 }
 $PythonPath = (Resolve-Path -LiteralPath $PythonPath -ErrorAction Stop).Path
-foreach ($relative in @('VERSION','mt5\oppw_mt5_continuous.py','mt5\demo\demo_mt5_config.py','mt5\real\real_mt5_config.py','service\oppw_windows_supervisor.py')) {
+foreach ($relative in @('VERSION','mt5\oppw_mt5_continuous.py','service\oppw_windows_supervisor.py')) {
     if (-not (Test-Path -LiteralPath (Join-Path $root $relative) -PathType Leaf)) { throw "Required runtime file missing: $relative" }
 }
 if (-not $ControlUrl.StartsWith('https://', [StringComparison]::OrdinalIgnoreCase)) { throw 'ControlUrl must use HTTPS.' }
@@ -158,6 +159,50 @@ if (Test-Path -LiteralPath $packagedHost -PathType Leaf) {
 }
 Set-ExactPathAcl -Path $hostPath -RuntimeSid $runtimeSecurityIdentifier
 $existing = if (Test-Path -LiteralPath $configPath) { Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json } else { $null }
+$accountSpecifications = if ($Accounts.Count -gt 0) {
+    @($Accounts)
+} elseif ($existing -and $existing.managedAccounts) {
+    @($existing.managedAccounts | ForEach-Object { "$($_.accountType):$($_.accountKey)" })
+} else {
+    @('DEMO:DEMO', 'REAL:REAL')
+}
+if ($accountSpecifications.Count -lt 1 -or $accountSpecifications.Count -gt 8) {
+    throw 'Accounts must configure between 1 and 8 account descriptors.'
+}
+$seenAccountKeys = @{}
+$managedAccounts = @(
+    foreach ($specification in $accountSpecifications) {
+        $parts = @("$specification" -split ':', 2)
+        if ($parts.Count -ne 2) {
+            throw "Invalid account descriptor '$specification'. Use DEMO:ACCOUNT_KEY or REAL:ACCOUNT_KEY."
+        }
+        $accountType = $parts[0].Trim().ToUpperInvariant()
+        $accountKey = $parts[1].Trim().ToUpperInvariant()
+        if ($accountType -notin @('DEMO', 'REAL')) {
+            throw "Invalid account type in '$specification'. Use DEMO or REAL."
+        }
+        if ($accountKey -notmatch '^[A-Z0-9][A-Z0-9_-]{0,63}$') {
+            throw "Invalid account key in '$specification'. Use 1-64 letters, digits, underscores, or hyphens."
+        }
+        if ($accountKey -in @('DEMO', 'REAL') -and $accountKey -ne $accountType) {
+            throw "Reserved account key $accountKey must use account type $accountKey."
+        }
+        if ($seenAccountKeys.ContainsKey($accountKey)) {
+            throw "Duplicate account key in Accounts: $accountKey"
+        }
+        $seenAccountKeys[$accountKey] = $true
+        $fileName = if ($accountKey -eq $accountType) {
+            "$($accountType.ToLowerInvariant())_mt5_config.py"
+        } else {
+            "$($accountKey.ToLowerInvariant())_mt5_config.py"
+        }
+        $relativeConfig = "mt5\$($accountType.ToLowerInvariant())\$fileName"
+        if (-not (Test-Path -LiteralPath (Join-Path $root $relativeConfig) -PathType Leaf)) {
+            throw "Required private account configuration missing: $relativeConfig"
+        }
+        [ordered]@{ accountKey = $accountKey; accountType = $accountType }
+    }
+)
 $nodeId = if ($existing -and "$($existing.nodeRole)" -eq $NodeRole.ToUpperInvariant() -and "$($existing.nodeId)" -match '^[a-f0-9]{32}$') { "$($existing.nodeId)" } else { [Guid]::NewGuid().ToString('N') }
 $config = [ordered]@{
     nodeId = $nodeId
@@ -166,6 +211,7 @@ $config = [ordered]@{
     pythonPath = $PythonPath
     controlUrl = $ControlUrl
     writeToken = $WriteToken
+    managedAccounts = $managedAccounts
     pollSeconds = 3
     assignmentTtlSeconds = 15
     stopGraceSeconds = 15
@@ -186,7 +232,7 @@ if ($PSCmdlet.ShouldProcess($serviceName, 'Create and start Windows service')) {
         Remove-ServiceRegistration $serviceName
     }
     New-Service -Name $serviceName -BinaryPathName $binaryPath -DisplayName 'OPPW Continuous Supervisor' `
-        -Description 'Maintains the assigned DEMO/REAL executor and publisher processes with global master/backup fencing.' `
+        -Description 'Maintains configured OPPW account executor and publisher processes with global master/backup fencing.' `
         -StartupType Automatic | Out-Null
     Invoke-ScCommand @('config', $serviceName, 'start=', 'delayed-auto')
     Invoke-ScCommand @('failure', $serviceName, 'reset=', '86400', 'actions=', 'restart/5000/restart/15000/restart/30000')

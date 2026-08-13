@@ -59,6 +59,9 @@ def main() -> int:
             "Status: Accepted", "strategy_market_points", "online indefinitely", "backup-and-restore",
             "D:\\OPPW-Backups\\mysql", "02:15",
         ),
+        "docs/decisions/0032-named-multi-account-runtime.md": (
+            "Status: Accepted", "--account-key", "managedAccounts", "register_account.php",
+        ),
         "docs/DATA_LIFECYCLE.md": (
             "Market minute OHLC", "Indefinite", "retention.php", "validate_backup_restore.ps1",
             "OPPW MySQL Production Backup", "D:\\OPPW-Backups\\mysql", "02:15",
@@ -247,7 +250,9 @@ def main() -> int:
     )
     required_config_names = (
         'ACCOUNT_CONFIG_FILES = {ACCOUNT_DEMO: "demo_mt5_config.py", ACCOUNT_REAL: "real_mt5_config.py"}',
-        'account_dir / ACCOUNT_CONFIG_FILES[account]',
+        "def account_config_path(",
+        'f"{normalized_key.lower()}_mt5_config.py"',
+        "def load_account_config(account_type: str, account_key: str | None = None):",
     )
     for marker in required_config_names:
         if marker not in config_authority_text:
@@ -262,7 +267,10 @@ def main() -> int:
         fail(errors, "legacy MT5 account-config aliases are not allowed")
 
     service_files = {
-        "service/oppw_windows_supervisor.py": ("ACCOUNTS = (\"DEMO\", \"REAL\")", "ROLES = (\"EXECUTOR\", \"PUBLISHER\")", "assignmentTtlSeconds", "STARTUP_ORDER", "--service-ready-file"),
+        "service/oppw_windows_supervisor.py": (
+            'MAX_MANAGED_ACCOUNTS = 8', 'ROLES = ("EXECUTOR", "PUBLISHER")',
+            'managedAccounts', 'startup_order', 'assignmentTtlSeconds', '--account-key', '--service-ready-file',
+        ),
         "service/OPPWServiceHost.cs": ("ServiceName = \"OPPWContinuousSupervisor\"", "CreateKillOnCloseJob", "WTSQueryUserToken", "CreateProcessAsUser"),
         "service/install-service.ps1": (
             "ValidateSet('Master','Backup')", "delayed-auto", "RuntimeUser", "runtimeSid",
@@ -273,7 +281,11 @@ def main() -> int:
             "Set-ExactPathAcl -Path $runtimeDir", "Set-ExactPathAcl -Path $logDir",
             "Set-ExactPathAcl -Path $configPath",
         ),
-        "Mobile/backend/service-control.php": ("setDesiredState", "strategy_service_control_events", "MASTER_ONLINE"),
+        "Mobile/backend/service-control.php": ("setDesiredState", "strategy_service_control_events", "MASTER_ONLINE", "count($rawProcesses) > 16"),
+        "Mobile/backend/admin/register_account.php": ("monitor_accounts", "strategy_service_desired_state", "strategy_entry_rule_controls"),
+        "Mobile/backend/sql/migrate_v56_2_bossa_tms_accounts.sql": (
+            "DEMO BOSSA", "REAL BOSSA", "DEMO_TMS", "REAL_TMS", "FALSE, FALSE",
+        ),
         "Mobile/backend/strategy-controls.php": ("setRule", "recordWeekState", "strategy_entry_rule_week_events"),
     }
     for relative, markers in service_files.items():
@@ -592,14 +604,16 @@ def main() -> int:
         if migration_order.is_file()
         else []
     )
-    if not migration_names or migration_names[-1] != "migrate_v56_2_execution_lifecycle_links.sql":
-        fail(errors, "migrate_v56_2_execution_lifecycle_links.sql must be the last ordered forward migration")
+    if not migration_names or migration_names[-1] != "migrate_v56_2_bossa_tms_accounts.sql":
+        fail(errors, "migrate_v56_2_bossa_tms_accounts.sql must be the last ordered forward migration")
     elif migration_names.index("migrate_data_lifecycle.sql") >= migration_names.index("migrate_v55_entry_rules.sql"):
         fail(errors, "migrate_v55_entry_rules.sql must follow migrate_data_lifecycle.sql")
     elif migration_names.index("migrate_v55_entry_rules.sql") >= migration_names.index("migrate_v56_single_premarket_low.sql"):
         fail(errors, "migrate_v56_single_premarket_low.sql must follow migrate_v55_entry_rules.sql")
     elif migration_names.index("migrate_v56_single_premarket_low.sql") >= migration_names.index("migrate_v56_2_execution_lifecycle_links.sql"):
         fail(errors, "migrate_v56_2_execution_lifecycle_links.sql must follow migrate_v56_single_premarket_low.sql")
+    elif migration_names.index("migrate_v56_2_execution_lifecycle_links.sql") >= migration_names.index("migrate_v56_2_bossa_tms_accounts.sql"):
+        fail(errors, "migrate_v56_2_bossa_tms_accounts.sql must follow migrate_v56_2_execution_lifecycle_links.sql")
 
     retention_path = root / "Mobile" / "backend" / "admin" / "retention.php"
     retention_text = retention_path.read_text(encoding="utf-8") if retention_path.is_file() else ""

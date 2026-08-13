@@ -69,6 +69,8 @@ Mobile/app/build/
 Mobile/backend/private/firebase-service-account.json
 mt5/real/MetaTrader 5/
 mt5/demo/MetaTrader 5/
+mt5/real_tms/
+mt5/demo_tms/
 /config
 
 # Release products are generated exclusively by tools/release.ps1.

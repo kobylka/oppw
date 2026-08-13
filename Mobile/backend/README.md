@@ -45,6 +45,15 @@ The full policy, scheduling guidance, archive requirements, and recovery drill a
 
 ## Manual browser administration
 
+The ordered account migration preserves keys `DEMO` and `REAL` while labeling them `DEMO BOSSA` and `REAL BOSSA`. It also creates `DEMO_TMS` and `REAL_TMS` disabled. After both nodes have populated TMS private files, register them to enable the accounts and initialize their service desired state and entry-rule controls:
+
+```powershell
+php admin/register_account.php --account=DEMO_TMS --type=DEMO --display-name="DEMO TMS" --broker-account-id=123456 --sort-order=40
+php admin/register_account.php --account=REAL_TMS --type=REAL --display-name="REAL TMS" --broker-account-id=654321 --sort-order=30
+```
+
+Account keys are the stable identifiers used by MT5, service control, Mobile grants, leases, audit records, and analytics. They must match the supervisor's configured list.
+
 CLI pairing grants must state operational-control authority explicitly. The existing `can_control_service` grant covers both service desired state and entry-rule toggles:
 
 ```powershell

@@ -15,10 +15,13 @@ if str(MT5_DIR) not in sys.path:
 
 from oppw_core.account_config import (  # noqa: E402
     CONFIG_FIELD_NAMES,
+    account_config_path,
     build_account_config,
     default_config,
     effective_config_summary,
     load_private_overrides,
+    normalize_account_key,
+    scope_config_to_account,
 )
 from oppw_core.settings import Config  # noqa: E402
 
@@ -65,6 +68,56 @@ class AccountConfigAuthorityTests(unittest.TestCase):
             self.assertTrue(config.live_enabled)
             self.assertEqual(123, config.login)
             self.assertEqual(account_dir / "oppw_mt5_state.json", config.state_file)
+
+    def test_named_accounts_have_distinct_files_identities_paths_and_strategy_overrides(self):
+        with tempfile.TemporaryDirectory() as directory:
+            mt5 = Path(directory)
+            account_dir = mt5 / "demo"
+            alpha = build_account_config(
+                "DEMO_ALPHA",
+                account_dir,
+                {"base_leverage": 8, "required_balance_multiplier": 1.765, "login": 101},
+                environ={},
+            )
+            beta = build_account_config(
+                "DEMO_BETA",
+                account_dir,
+                {"base_leverage": 10, "required_balance_multiplier": 1.5, "login": 202},
+                environ={},
+            )
+            alpha = scope_config_to_account(alpha, "DEMO_ALPHA")
+            beta = scope_config_to_account(beta, "DEMO_BETA")
+
+            self.assertEqual(mt5 / "demo" / "demo_mt5_config.py", account_config_path("DEMO", "DEMO", mt5))
+            self.assertEqual(
+                mt5 / "demo" / "demo_alpha_mt5_config.py",
+                account_config_path("demo", "demo_alpha", mt5),
+            )
+            self.assertEqual("DEMO_ALPHA", alpha.monitor_account_key)
+            self.assertEqual("DEMO_BETA", beta.monitor_account_key)
+            self.assertEqual(8, alpha.base_leverage)
+            self.assertEqual(10, beta.base_leverage)
+            self.assertEqual(1.765, alpha.required_balance_multiplier)
+            self.assertEqual(1.5, beta.required_balance_multiplier)
+            self.assertNotEqual(alpha.state_file, beta.state_file)
+            self.assertNotEqual(alpha.log_dir, beta.log_dir)
+
+    def test_account_keys_are_strict_and_account_scoping_is_idempotent(self):
+        with self.assertRaisesRegex(RuntimeError, "Account key"):
+            normalize_account_key("demo alpha")
+        with self.assertRaisesRegex(RuntimeError, "Reserved account key"):
+            account_config_path("REAL", "DEMO", Path("mt5"))
+        config = scope_config_to_account(
+            Config(
+                state_file=Path("state.demo_alpha.json"),
+                monitor_history_file=Path("history.demo_alpha.json"),
+                log_dir=Path("logs/demo_alpha"),
+            ),
+            "DEMO_ALPHA",
+        )
+        self.assertEqual(Path("state.demo_alpha.json"), config.state_file)
+        self.assertEqual(Path("history.demo_alpha.json"), config.monitor_history_file)
+        self.assertEqual(Path("logs/demo_alpha"), config.log_dir)
 
     def test_private_config_rejects_unknown_fields_and_copied_config_class(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -16,7 +16,14 @@ class DataLifecycleStaticTests(unittest.TestCase):
             if line.strip() and not line.lstrip().startswith("#")
         ]
         self.assertLess(order.index("migrate_data_lifecycle.sql"), order.index("migrate_v55_entry_rules.sql"))
-        self.assertEqual(order[-1], "migrate_v56_2_execution_lifecycle_links.sql")
+        self.assertLess(
+            order.index("migrate_v56_2_execution_lifecycle_links.sql"),
+            order.index("migrate_v56_2_bossa_tms_accounts.sql"),
+        )
+        self.assertEqual(order[-1], "migrate_v56_2_bossa_tms_accounts.sql")
+        accounts = (ROOT / "Mobile/backend/sql/migrate_v56_2_bossa_tms_accounts.sql").read_text(encoding="utf-8")
+        for marker in ("DEMO BOSSA", "REAL BOSSA", "DEMO_TMS", "REAL_TMS", "FALSE, FALSE"):
+            self.assertIn(marker, accounts)
         migration = (ROOT / "Mobile/backend/sql/migrate_data_lifecycle.sql").read_text(encoding="utf-8")
         self.assertIn("CREATE TABLE IF NOT EXISTS strategy_equity_daily", migration)
         self.assertIn("CREATE TABLE IF NOT EXISTS strategy_retention_runs", migration)

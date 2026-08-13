@@ -453,13 +453,20 @@ class StrategyDecisionMixin:
         return float(self.cfg.required_balance_multiplier)
 
     def balance_multiplier_profile(self) -> str:
-        return "CONSERVATIVE_LEVERAGE_BOUND" if bool(getattr(self.cfg, "use_legacy_balance_multiplier", False)) else "GROWTH_1_765"
+        if bool(getattr(self.cfg, "use_legacy_balance_multiplier", False)):
+            return "CONSERVATIVE_LEVERAGE_BOUND"
+        multiplier = float(self.cfg.required_balance_multiplier)
+        return f"GROWTH_{multiplier:.3f}".replace(".", "_")
 
     def account_loss_cap_enabled(self) -> bool:
         return bool(getattr(self.cfg, "use_legacy_balance_multiplier", False))
 
     def account_loss_cap_policy(self) -> str:
-        return "BALANCE_50_PERCENT" if self.account_loss_cap_enabled() else "DISABLED_FOR_GROWTH_1_765"
+        return (
+            "BALANCE_50_PERCENT"
+            if self.account_loss_cap_enabled()
+            else f"DISABLED_FOR_{self.balance_multiplier_profile()}"
+        )
 
     def potential_position_preview(self, assume_current_position_closed: bool = False) -> dict[str, Any]:
         previous_full_week, previous_trade, full_week_source, trade_source = self.resolved_leverage_inputs()
@@ -645,9 +652,9 @@ class StrategyDecisionMixin:
                 "conservativeMultiplierL8": float(self.cfg.legacy_required_balance_multiplier_l8),
                 "activeProfile": self.balance_multiplier_profile(),
                 "activeRequiredBalanceMultiplierRule": (
-                    "growthRequiredBalanceMultiplier"
-                    if self.balance_multiplier_profile() == "GROWTH_1_765"
-                    else "conservativeMultiplier selected by leverage"
+                    "conservativeMultiplier selected by leverage"
+                    if bool(getattr(self.cfg, "use_legacy_balance_multiplier", False))
+                    else "growthRequiredBalanceMultiplier"
                 ),
                 "volumeRule": "largest broker volume step whose required balance and margin are available",
             },

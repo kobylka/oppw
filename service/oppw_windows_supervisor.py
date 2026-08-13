@@ -1,10 +1,11 @@
-"""Fail-safe supervisor for the four canonical OPPW MT5 process roles."""
+"""Fail-safe supervisor for configured canonical OPPW MT5 account roles."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -19,14 +20,62 @@ from pathlib import Path
 from typing import Any
 
 
-ACCOUNTS = ("DEMO", "REAL")
+ACCOUNT_TYPES = ("DEMO", "REAL")
+ACCOUNT_KEY_PATTERN = re.compile(r"^[A-Z0-9][A-Z0-9_-]{0,63}$")
+MAX_MANAGED_ACCOUNTS = 8
 ROLES = ("EXECUTOR", "PUBLISHER")
-STARTUP_ORDER = (
-    ("DEMO", "EXECUTOR"),
-    ("REAL", "EXECUTOR"),
-    ("DEMO", "PUBLISHER"),
-    ("REAL", "PUBLISHER"),
-)
+
+
+@dataclass(frozen=True)
+class ManagedAccount:
+    account_key: str
+    account_type: str
+
+
+def managed_accounts(values: dict[str, Any]) -> tuple[ManagedAccount, ...]:
+    raw_accounts = values.get("managedAccounts")
+    if raw_accounts is None:
+        raw_accounts = [
+            {"accountKey": "DEMO", "accountType": "DEMO"},
+            {"accountKey": "REAL", "accountType": "REAL"},
+        ]
+    if not isinstance(raw_accounts, list) or not 1 <= len(raw_accounts) <= MAX_MANAGED_ACCOUNTS:
+        raise RuntimeError(f"managedAccounts must contain 1-{MAX_MANAGED_ACCOUNTS} accounts")
+    result: list[ManagedAccount] = []
+    seen: set[str] = set()
+    for raw in raw_accounts:
+        if not isinstance(raw, dict):
+            raise RuntimeError("Each managed account must contain accountKey and accountType")
+        account_key = str(raw.get("accountKey", "")).strip().upper()
+        account_type = str(raw.get("accountType", "")).strip().upper()
+        if not ACCOUNT_KEY_PATTERN.fullmatch(account_key):
+            raise RuntimeError("managed accountKey must use 1-64 letters, digits, underscores, or hyphens")
+        if account_type not in ACCOUNT_TYPES:
+            raise RuntimeError("managed accountType must be DEMO or REAL")
+        if account_key in ACCOUNT_TYPES and account_key != account_type:
+            raise RuntimeError(f"Reserved accountKey {account_key} must use accountType {account_key}")
+        if account_key in seen:
+            raise RuntimeError(f"Duplicate managed accountKey: {account_key}")
+        seen.add(account_key)
+        result.append(ManagedAccount(account_key, account_type))
+    return tuple(result)
+
+
+def startup_order(accounts: tuple[ManagedAccount, ...]) -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (account.account_key, role)
+        for role in ROLES
+        for account in accounts
+    )
+
+
+def private_config_path(root: Path, account: ManagedAccount) -> Path:
+    filename = (
+        f"{account.account_type.lower()}_mt5_config.py"
+        if account.account_key == account.account_type
+        else f"{account.account_key.lower()}_mt5_config.py"
+    )
+    return root / "mt5" / account.account_type.lower() / filename
 
 
 def assignments_fresh(last_assignment_at: float, ttl_seconds: float, now: float | None = None) -> bool:
@@ -35,14 +84,15 @@ def assignments_fresh(last_assignment_at: float, ttl_seconds: float, now: float 
 
 
 def next_start_key(
+    ordered_keys: tuple[tuple[str, str], ...],
     assignments: dict[tuple[str, str], bool],
     states: dict[tuple[str, str], tuple[bool, bool]],
     eligible: dict[tuple[str, str], bool] | None = None,
 ) -> tuple[str, str] | None:
-    for key in STARTUP_ORDER:
+    for key in ordered_keys:
         if assignments.get(key, False) and states[key] == (True, False):
             return None
-    for key in STARTUP_ORDER:
+    for key in ordered_keys:
         if not assignments.get(key, False):
             continue
         running, ready = states[key]
@@ -85,12 +135,18 @@ def load_config(path: Path) -> dict[str, Any]:
         raise RuntimeError("nodeRole must be MASTER or BACKUP")
     if not str(values["controlUrl"]).lower().startswith("https://"):
         raise RuntimeError("controlUrl must use HTTPS")
+    accounts = managed_accounts(values)
+    values["managedAccounts"] = [
+        {"accountKey": account.account_key, "accountType": account.account_type}
+        for account in accounts
+    ]
     return values
 
 
 @dataclass
 class ManagedProcess:
     account: str
+    account_type: str
     role: str
     stop_file: Path
     ready_file: Path
@@ -142,6 +198,15 @@ class Supervisor:
         self.build = "oppw-" + self.version
         if not self.python.is_file() or not self.entrypoint.is_file():
             raise RuntimeError("pythonPath or canonical MT5 entrypoint does not exist")
+        self.accounts = managed_accounts(self.cfg)
+        for account in self.accounts:
+            config_path = private_config_path(self.root, account)
+            if not config_path.is_file():
+                raise RuntimeError(
+                    f"Missing {account.account_type} account configuration for "
+                    f"{account.account_key}: {config_path}"
+                )
+        self.startup_order = startup_order(self.accounts)
         self.runtime_dir = Path(str(self.cfg.get("runtimeDir") or self.config_path.parent / "runtime"))
         self.log_dir = Path(str(self.cfg.get("logDir") or self.config_path.parent / "logs"))
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -162,13 +227,14 @@ class Supervisor:
         self.last_assignment_at = 0.0
         self.assignments: dict[tuple[str, str], bool] = {}
         self.processes = {
-            (account, role): ManagedProcess(
-                account,
+            (account.account_key, role): ManagedProcess(
+                account.account_key,
+                account.account_type,
                 role,
-                self.runtime_dir / f"stop-{account.lower()}-{role.lower()}.signal",
-                self.runtime_dir / f"ready-{account.lower()}-{role.lower()}.json",
+                self.runtime_dir / f"stop-{account.account_key.lower()}-{role.lower()}.signal",
+                self.runtime_dir / f"ready-{account.account_key.lower()}-{role.lower()}.json",
             )
-            for account in ACCOUNTS for role in ROLES
+            for account in self.accounts for role in ROLES
         }
 
     def log(self, message: str) -> None:
@@ -210,10 +276,10 @@ class Supervisor:
         for assignment in decoded.get("assignments", []):
             account = str(assignment.get("account", "")).upper()
             role = str(assignment.get("role", "")).upper()
-            if account in ACCOUNTS and role in ROLES:
+            if ACCOUNT_KEY_PATTERN.fullmatch(account) and role in ROLES:
                 result[(account, role)] = bool(assignment.get("assigned", False))
         if set(result) != set(self.processes):
-            raise RuntimeError("control response did not assign all four managed roles")
+            raise RuntimeError("control response assignments do not match configured managed accounts")
         return result
 
     def start_process(self, item: ManagedProcess) -> None:
@@ -228,7 +294,8 @@ class Supervisor:
         output_path = self.log_dir / f"{item.account.lower()}-{item.role.lower()}.console.log"
         item.output = output_path.open("ab", buffering=0)
         command = [
-            str(self.python), str(self.entrypoint), "--account", item.account.lower(),
+            str(self.python), str(self.entrypoint), "--account", item.account_type.lower(),
+            "--account-key", item.account,
             "--mode", item.role.lower(), "--service-stop-file", str(item.stop_file),
             "--service-ready-file", str(item.ready_file),
         ]
@@ -316,7 +383,7 @@ class Supervisor:
             key: now >= item.next_start_monotonic
             for key, item in self.processes.items()
         }
-        key_to_start = next_start_key(self.assignments, states, eligible)
+        key_to_start = next_start_key(self.startup_order, self.assignments, states, eligible)
         if key_to_start is not None:
             self.start_process(self.processes[key_to_start])
 

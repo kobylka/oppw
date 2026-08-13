@@ -1,6 +1,6 @@
 # ADR 0005: Single MT5 entrypoint and explicit account configuration
 
-- Status: Accepted
+- Status: Accepted; fixed account-filename portion superseded by ADR 0032
 - Date: 2026-07-22
 - Supersedes: the account-launcher portion of ADR 0001
 

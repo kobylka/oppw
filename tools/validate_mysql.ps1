@@ -104,6 +104,18 @@ VALUES
         mysql -N -uroot --database=oppw_monitor -e $entryRuleTableQuery).Trim()
     if ($LASTEXITCODE -ne 0 -or [int]$entryRuleTableCount -ne 4) { throw "Entry-rule table validation failed: $entryRuleTableCount/4" }
 
+    $accountSetupQuery = @"
+SELECT COUNT(*)
+  FROM monitor_accounts
+ WHERE (account_key='DEMO' AND BINARY display_name='DEMO BOSSA' AND account_type='DEMO' AND enabled=TRUE)
+    OR (account_key='REAL' AND BINARY display_name='REAL BOSSA' AND account_type='REAL' AND enabled=TRUE)
+    OR (account_key='DEMO_TMS' AND BINARY display_name='DEMO TMS' AND account_type='DEMO' AND enabled=FALSE)
+    OR (account_key='REAL_TMS' AND BINARY display_name='REAL TMS' AND account_type='REAL' AND enabled=FALSE);
+"@
+    $accountSetupCount = (& $docker.Source exec $container `
+        mysql -N -uroot --database=oppw_monitor -e $accountSetupQuery).Trim()
+    if ($LASTEXITCODE -ne 0 -or [int]$accountSetupCount -ne 4) { throw "Bossa/TMS account setup validation failed: $accountSetupCount/4" }
+
     $tradeClassColumnQuery = "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='oppw_monitor' AND TABLE_NAME='strategy_trades' AND COLUMN_NAME IN ('preleverage_return_percent','trade_class');"
     $tradeClassColumnCount = (& $docker.Source exec $container `
         mysql -N -uroot --database=oppw_monitor -e $tradeClassColumnQuery).Trim()
@@ -139,7 +151,7 @@ VALUES
         mysql -N -uroot --database=oppw_monitor -e $marketForeignKeyQuery).Trim()
     if ($LASTEXITCODE -ne 0 -or [int]$marketForeignKeyCount -ne 1) { throw "Market-minute cascade protection validation failed: $marketForeignKeyCount/1" }
 
-    Write-Host "MYSQL VALIDATION PASSED authority_tables=$tableCount service_tables=$serviceTableCount lifecycle_tables=$lifecycleTableCount trade_class_columns=$tradeClassColumnCount trade_class_triggers=$tradeClassTriggerCount snapshot_unique=$snapshotUniqueCount immutable_triggers=$triggerCount market_retention_trigger=$marketRetentionTriggerCount retention_indexes=$retentionIndexCount market_fk_restrict=$marketForeignKeyCount lifecycle_repair=mixed-collation image=$Image"
+    Write-Host "MYSQL VALIDATION PASSED authority_tables=$tableCount service_tables=$serviceTableCount lifecycle_tables=$lifecycleTableCount accounts=$accountSetupCount trade_class_columns=$tradeClassColumnCount trade_class_triggers=$tradeClassTriggerCount snapshot_unique=$snapshotUniqueCount immutable_triggers=$triggerCount market_retention_trigger=$marketRetentionTriggerCount retention_indexes=$retentionIndexCount market_fk_restrict=$marketForeignKeyCount lifecycle_repair=mixed-collation image=$Image"
 } finally {
     if ($containerStarted) {
         try {

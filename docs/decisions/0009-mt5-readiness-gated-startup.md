@@ -1,6 +1,6 @@
 # ADR 0009: Readiness-gated global MT5 startup
 
-- Status: Accepted
+- Status: Accepted; fixed two-account ordering portion superseded by ADR 0032
 - Date: 2026-07-23
 - Supersedes: the time-based per-account startup sequencing in ADR 0008
 

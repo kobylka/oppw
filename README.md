@@ -47,7 +47,7 @@ Two Windows machines may run the continuous supervisor as Master and Backup. The
 ## Runtime and safety guarantees
 
 - `mt5/oppw_mt5_continuous.py` is the only executable strategy entrypoint. Account-specific launchers and copied strategy trees are unsupported.
-- Demo/Real selection uses `--account demo|real`; execution/publication selection uses `--mode executor|publisher`.
+- Account type uses `--account demo|real`; an optional `--account-key` selects a named account identity, and execution/publication uses `--mode executor|publisher`.
 - Configuration precedence is canonical defaults, private account `OVERRIDES`, `OPPW_*` environment variables, then explicit CLI flags.
 - Execution ordering, global leases/fencing, deterministic authority identifiers, weekly-entry claims, and immutable audit links are enforced across machines.
 - The Android app reads authenticated projections and has no order, position-modification, or market-closure capability.
@@ -59,10 +59,12 @@ Release validation requires Python 3, PHP CLI, Docker with a running engine, MyS
 
 ### MT5 account configuration
 
-Copy `mt5/oppw_mt5_config.example.py` to the exact ignored private path for each configured account:
+Copy `mt5/oppw_mt5_config.example.py` to one ignored private path per configured account:
 
-- Demo: `mt5/demo/demo_mt5_config.py`
-- Real: `mt5/real/real_mt5_config.py`
+- Bossa Demo: `mt5/demo/demo_mt5_config.py` (stable account key `DEMO`, display name `DEMO BOSSA`)
+- Bossa Real: `mt5/real/real_mt5_config.py` (stable account key `REAL`, display name `REAL BOSSA`)
+- TMS Demo: `mt5/demo/demo_tms_mt5_config.py` (account key `DEMO_TMS`)
+- TMS Real: `mt5/real/real_tms_mt5_config.py` (account key `REAL_TMS`)
 
 Each private file contains only the five required credential constants and an optional `OVERRIDES` mapping. It must not copy or define the canonical `Config` class. Migrate historical copied configurations with:
 
@@ -77,7 +79,11 @@ python .\mt5\oppw_mt5_continuous.py --mode executor --account demo
 python .\mt5\oppw_mt5_continuous.py --mode publisher --account demo
 python .\mt5\oppw_mt5_continuous.py --mode executor --account real
 python .\mt5\oppw_mt5_continuous.py --mode publisher --account real
+python .\mt5\oppw_mt5_continuous.py --mode executor --account demo --account-key DEMO_TMS
+python .\mt5\oppw_mt5_continuous.py --mode publisher --account real --account-key REAL_TMS
 ```
+
+The account key scopes backend leases, weekly claims, audit history, Mobile data, state, and logs. Put intentional strategy differences such as leverage, timing, sizing, or `live_enabled` in that account file's `OVERRIDES`. Both prepared TMS files set `required_balance_multiplier` to `1.5`; the Bossa accounts retain the canonical `1.765`. With the normal broker-exposure multiplier of `20`, the TMS limit approaches `20 / 1.5 = 13.333x` effective exposure before broker volume-step and available-margin constraints. Use a separate MetaTrader installation/terminal path for every concurrently running broker login.
 
 ### Backend and database
 
@@ -90,6 +96,13 @@ Backend authentication is capability-specific:
 - MT5 ingestion and coordination use the publisher write token.
 - Mobile reads use short-lived paired-device access tokens and per-account grants.
 - Pairing and manual administration use separate optional tokens and remain disabled unless needed.
+
+The ordered migration labels the existing stable keys as `DEMO BOSSA` and `REAL BOSSA`, and prepares `DEMO_TMS` and `REAL_TMS` as disabled backend accounts. After replacing every TMS private-config placeholder on both nodes, enable them with:
+
+```powershell
+php .\Mobile\backend\admin\register_account.php --account=DEMO_TMS --type=DEMO --display-name="DEMO TMS" --broker-account-id=123456 --sort-order=40
+php .\Mobile\backend\admin\register_account.php --account=REAL_TMS --type=REAL --display-name="REAL TMS" --broker-account-id=654321 --sort-order=30
+```
 
 `Mobile/backend/health.php` is the unauthenticated database-health endpoint. Canonical mobile capabilities are owned by `status.php`, `analytics.php`, `events.php`, `accounts.php`, and the other endpoints listed in `docs/CURRENT_ARCHITECTURE.md`.
 
@@ -113,6 +126,15 @@ Install the same supervisor on two Windows machines from elevated PowerShell, ch
 .\service\install-service.ps1 -NodeRole Master -RepoRoot D:\oppw -PythonPath C:\Path\To\python.exe -RuntimeUser MACHINE\mt5user
 .\service\install-service.ps1 -NodeRole Backup -RepoRoot D:\oppw -PythonPath C:\Path\To\python.exe -RuntimeUser MACHINE\mt5user
 ```
+
+Pass the same explicit account order on both machines when managing named accounts:
+
+```powershell
+$accounts = @('DEMO:DEMO','DEMO:DEMO_TMS','REAL:REAL','REAL:REAL_TMS')
+.\service\install-service.ps1 -NodeRole Master -Accounts $accounts -RepoRoot D:\oppw -PythonPath C:\Path\To\python.exe -RuntimeUser MACHINE\mt5user
+```
+
+Adding enabled backend accounts and changing the supervisor list must be coordinated because list drift fails closed. Stop both supervisors, enable both TMS accounts, then reinstall/update Master and Backup with the same four-account list before resuming unattended operation.
 
 The service runs as LocalSystem and launches canonical MT5 children in the configured runtime user's active or disconnected interactive session. The runtime user must remain signed in; locking or disconnecting is supported.
 
@@ -150,6 +172,7 @@ The gate validates canonical layout, Python compilation and tests, the Windows s
 - `docs/CHANGE_CHECKLIST.md` — required implementation and validation scope
 - `docs/RELEASE_PROCESS.md` — reproducible validation and packaging
 - `docs/DATA_LIFECYCLE.md` — retention, backup, restore and archive requirements
+- `docs/DEPLOY_BOSSA_TMS_ACCOUNTS.md` — coordinated Bossa/TMS backend, terminal, configuration and supervisor rollout
 - `docs/decisions/` — accepted Architecture Decision Records
 
 Generated builds, archives, IDE state, logs, locks, credentials, populated configs, backend secrets, and Android local properties must remain untracked.

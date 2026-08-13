@@ -41,8 +41,9 @@ Key execution rules
 * Every completed trade is assigned a Guy Fleury A/B/C/D class and the publisher includes the label.
 * Weekends remain market-idle after startup. A lightweight MT5 account-balance watcher runs regardless of position state and may publish a fresh next-trade What-if snapshot after a top-up or withdrawal; no recurring market checks or minute publishing follow.
 
-Run with `--mode executor|publisher` and `--account demo|real`. DEMO loads
-demo/demo_mt5_config.py and REAL loads real/real_mt5_config.py. Live trading is disabled
+Run with `--mode executor|publisher`, `--account demo|real`, and an optional
+`--account-key`. DEMO loads demo/<account-key>_mt5_config.py and REAL loads
+real/<account-key>_mt5_config.py. Live trading is disabled
 unless LIVE_ENABLED=True in the selected account configuration or OPPW_LIVE=1 is set.
 """
 
@@ -112,7 +113,6 @@ from oppw_core.utilities import (
     truncate_four_decimals,
 )
 from oppw_core.versioning import (
-    ACCOUNT_CONFIG_FILES,
     ACCOUNT_DEMO,
     ACCOUNT_REAL,
     INSTANCE_MODE_EXECUTOR,
@@ -124,6 +124,14 @@ PROJECT_VERSION = read_project_version()
 BUILD_ID = f"oppw-{PROJECT_VERSION}"
 
 
+def account_trade_mode_matches(account_type: str, trade_mode: Any) -> bool:
+    expected = {
+        ACCOUNT_DEMO: getattr(mt5, "ACCOUNT_TRADE_MODE_DEMO", 0),
+        ACCOUNT_REAL: getattr(mt5, "ACCOUNT_TRADE_MODE_REAL", 2),
+    }
+    return account_type in expected and trade_mode == expected[account_type]
+
+
 class OPPWContinuousStrategy(
     SessionCalendarMixin,
     PositionLifecycleMixin,
@@ -133,12 +141,13 @@ class OPPWContinuousStrategy(
     RuntimeMixin,
 ):
     def __init__(
-        self, config, role: str, account: str, coordinator: BackendLeaseCoordinator,
+        self, config, role: str, account: str, account_type: str, coordinator: BackendLeaseCoordinator,
         service_ready_file: Optional[Path] = None,
     ):
         self.cfg = config
         self.role = role
         self.account = account.upper()
+        self.account_type = account_type.upper()
         self.is_executor = role == INSTANCE_MODE_EXECUTOR
         self.coordinator = coordinator
         self.service_ready_file = service_ready_file
@@ -228,6 +237,13 @@ class OPPWContinuousStrategy(
         if expected_login > 0 and actual_login != expected_login:
             mt5.shutdown()
             raise RuntimeError(f"Selected {self.account} config expects MT5 login {expected_login}, but terminal returned {actual_login}")
+        actual_trade_mode = getattr(account, "trade_mode", None)
+        if not account_trade_mode_matches(self.account_type, actual_trade_mode):
+            mt5.shutdown()
+            raise RuntimeError(
+                f"Selected {self.account} config expects an {self.account_type} MT5 account, "
+                f"but terminal returned trade mode {actual_trade_mode!r}"
+            )
         if not mt5.symbol_select(self.cfg.trade_symbol, True):
             raise RuntimeError(f"Cannot select trade symbol {self.cfg.trade_symbol}: {mt5.last_error()}")
         if not mt5.symbol_select(self.cfg.signal_symbol, True):
@@ -235,8 +251,8 @@ class OPPWContinuousStrategy(
 
         self.connected = True
         self.log.info(
-            "EVENT CONNECTED role=%s selected_account=%s login=%s server=%s trade=%s signal=%s live=%s build=%s script=%s",
-            self.role, self.account, getattr(account, "login", "?"), getattr(account, "server", "?"), self.cfg.trade_symbol,
+            "EVENT CONNECTED role=%s selected_account=%s account_type=%s login=%s server=%s trade=%s signal=%s live=%s build=%s script=%s",
+            self.role, self.account, self.account_type, getattr(account, "login", "?"), getattr(account, "server", "?"), self.cfg.trade_symbol,
             self.cfg.signal_symbol, self.cfg.live_enabled, BUILD_ID, Path(__file__).resolve(),
         )
         self.log.info(
@@ -262,6 +278,7 @@ class OPPWContinuousStrategy(
             autotrading_enabled, _ = self.autotrading_status()
             ready_payload = {
                 "account": self.account,
+                "accountType": self.account_type,
                 "role": self.role,
                 "pid": os.getpid(),
                 "connectedAt": datetime.now(UTC).isoformat(),
@@ -284,10 +301,12 @@ class OPPWContinuousStrategy(
 
     def selected_account_matches(self) -> bool:
         expected_login = int(getattr(self.cfg, "login", 0) or 0)
-        if expected_login <= 0:
-            return True
         account = mt5.account_info()
-        return account is not None and int(getattr(account, "login", 0) or 0) == expected_login
+        if account is None or not account_trade_mode_matches(
+            self.account_type, getattr(account, "trade_mode", None)
+        ):
+            return False
+        return expected_login <= 0 or int(getattr(account, "login", 0) or 0) == expected_login
 
     def connection_healthy(self) -> bool:
         terminal = mt5.terminal_info()
@@ -370,7 +389,15 @@ def parse_arguments(argv: Optional[list[str]] = None) -> argparse.Namespace:
         "--account",
         choices=(ACCOUNT_DEMO.lower(), ACCOUNT_REAL.lower()),
         default=ACCOUNT_DEMO.lower(),
-        help="demo loads demo/demo_mt5_config.py; real loads real/real_mt5_config.py",
+        help="select the DEMO or REAL private-configuration directory",
+    )
+    parser.add_argument(
+        "--account-key",
+        default="",
+        help=(
+            "stable backend/account identity and config filename prefix; defaults to DEMO or REAL "
+            "(for example DEMO_ALPHA loads demo/demo_alpha_mt5_config.py)"
+        ),
     )
     parser.add_argument(
         "--conservative-multiplier",
@@ -393,8 +420,9 @@ def parse_arguments(argv: Optional[list[str]] = None) -> argparse.Namespace:
 def main() -> int:
     args = parse_arguments()
     role = str(args.mode).upper()
-    account = str(args.account).upper()
-    original_cfg, config_path = load_account_config(account)
+    account_type = str(args.account).upper()
+    account = str(args.account_key).strip().upper() or account_type
+    original_cfg, config_path = load_account_config(account_type, account)
     validate_config(original_cfg)
     original_cfg = apply_runtime_flags(
         original_cfg, bool(args.conservative_multiplier)
@@ -407,7 +435,9 @@ def main() -> int:
     try:
         coordinator.start()
         service_ready_file = Path(str(args.service_ready_file)).resolve() if str(args.service_ready_file).strip() else None
-        strategy = OPPWContinuousStrategy(cfg, role, account, coordinator, service_ready_file)
+        strategy = OPPWContinuousStrategy(
+            cfg, role, account, account_type, coordinator, service_ready_file
+        )
         if (
             role == INSTANCE_MODE_PUBLISHER
             and not strategy.monitor_publisher.ready
