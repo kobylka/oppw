@@ -565,7 +565,9 @@ def main() -> int:
         print(f"Warning: {args.start} is not present in quotes.pkl; oppw24.py will begin at the next available session.", file=sys.stderr)
 
     disaster_stop_ratio = (100.0 - 50.0 / args.base_leverage) / 100.0
-    end_exclusive = add_days(args.end, 0)
+    # Sim.process stops before end_date.  The exporter CLI promises an
+    # inclusive --end, so give the simulator the following calendar day.
+    end_exclusive = add_days(args.end, 1)
     sim.process(
         sim.quotes,
         args.source_stock,
