@@ -204,10 +204,11 @@ class BrokerExecutionMixin:
         self.entry_rule_controls_revision = revision
         self.last_entry_rule_context = payload
         self.last_entry_rule_context_monotonic = time_module.monotonic()
-        if changed:
+        if changed and str(getattr(self, "role", "")).upper() == "EXECUTOR":
             self.state.entry_rule_controls_revision = revision
             self.state.entry_rule_controls = dict(parsed)
             self.state.save(self.cfg.state_file)
+        if changed:
             self.log.info(
                 "EVENT ENTRY_RULE_CONTROLS_UPDATED revision=%s rules=%s",
                 revision, json.dumps(parsed, sort_keys=True, separators=(",", ":")),
@@ -270,12 +271,24 @@ class BrokerExecutionMixin:
         self.state.save(self.cfg.state_file)
         self.record_strategy_decision_if_changed(force=True)
 
-    def entry_rule_market_context(self, current_day: date) -> Optional[dict[str, Any]]:
+    def entry_rule_market_context(
+        self,
+        current_day: date,
+        preview_price: Optional[float] = None,
+        preview_at: Optional[datetime] = None,
+        preview_source: str = "CURRENT_BUY_PRICE_PREVIEW",
+    ) -> Optional[dict[str, Any]]:
         session = self.session_times(current_day)
         cash_open_time = session.cash_open.time().replace(second=0, microsecond=0)
         cash_bar = self.m1_bar_at(self.cfg.trade_symbol, current_day, cash_open_time)
-        if cash_bar is None or cash_bar.open <= 0:
+        preview_price = float(preview_price or 0.0)
+        effective_at = preview_at or datetime.now(self.tz)
+        cash_open_is_preview = (
+            preview_price > 0 and effective_at < session.cash_open
+        ) or cash_bar is None or cash_bar.open <= 0
+        if cash_open_is_preview and preview_price <= 0:
             return None
+        cash_open = preview_price if cash_open_is_preview else float(cash_bar.open)
 
         sessions = self.calendar.sessions_in_range(
             (current_day - timedelta(days=75)).isoformat(),
@@ -302,7 +315,8 @@ class BrokerExecutionMixin:
 
         premarket_start = datetime.combine(current_day, self.cfg.premarket_start, self.tz)
         query_start = self.local_to_mt5_bar_query_time(premarket_start)
-        query_end = self.local_to_mt5_bar_query_time(session.cash_open - timedelta(seconds=1))
+        premarket_end = min(effective_at, session.cash_open - timedelta(seconds=1))
+        query_end = self.local_to_mt5_bar_query_time(premarket_end)
         try:
             rates = mt5.copy_rates_range(self.cfg.trade_symbol, mt5.TIMEFRAME_M1, query_start, query_end)
         except Exception:
@@ -313,18 +327,126 @@ class BrokerExecutionMixin:
             if premarket_start <= local_at < session.cash_open:
                 premarket_rows.append(row)
         premarket_rows.sort(key=lambda row: int(row["time"]))
+        premarket_open = float(premarket_rows[0]["open"]) if premarket_rows else 0.0
+        premarket_high = max((float(row["high"]) for row in premarket_rows), default=0.0)
+        premarket_low = min((float(row["low"]) for row in premarket_rows), default=0.0)
+        premarket_close = float(premarket_rows[-1]["close"]) if premarket_rows else 0.0
+        if preview_price > 0 and premarket_start <= effective_at < session.cash_open:
+            premarket_open = premarket_open or preview_price
+            premarket_high = max(premarket_high, preview_price)
+            premarket_low = min(premarket_low, preview_price) if premarket_low > 0 else preview_price
+            premarket_close = preview_price
         return {
-            "cashOpen": float(cash_bar.open),
+            "cashOpen": cash_open,
+            "cashOpenSource": preview_source if cash_open_is_preview else "CASH_OPEN_M1",
+            "currentPrice": preview_price,
             "previousCashClose": previous_close,
             "previousTradingDay": previous_day.isoformat() if previous_day else "",
             "momentumBaseDay": momentum_base_day.isoformat() if momentum_base_day else "",
             "momentumBaseClose": momentum_base_close,
             "momentum20": momentum20,
-            "premarketOpen": float(premarket_rows[0]["open"]) if premarket_rows else 0.0,
-            "premarketHigh": max(float(row["high"]) for row in premarket_rows) if premarket_rows else 0.0,
-            "premarketLow": min(float(row["low"]) for row in premarket_rows) if premarket_rows else 0.0,
-            "premarketClose": float(premarket_rows[-1]["close"]) if premarket_rows else 0.0,
+            "premarketOpen": premarket_open,
+            "premarketHigh": premarket_high,
+            "premarketLow": premarket_low,
+            "premarketClose": premarket_close,
             "premarketBars": len(premarket_rows),
+        }
+
+    @staticmethod
+    def loss_control_condition(
+        key: str, label: str, actual: Optional[float], operator: str, threshold: float,
+    ) -> dict[str, Any]:
+        met = None
+        if actual is not None:
+            met = actual <= threshold + 1e-12 if operator == "<=" else actual >= threshold - 1e-12
+        return {
+            "key": key, "label": label, "actual": actual, "operator": operator,
+            "threshold": float(threshold), "unit": "RATIO", "met": met,
+        }
+
+    def live_loss_control_status(self, now: datetime, current_price: float) -> dict[str, Any]:
+        backend_context: dict[str, Any] = {}
+        error = ""
+        runtime_role = str(getattr(self, "role", "")).upper()
+        if runtime_role in {"EXECUTOR", "PUBLISHER"} and bool(getattr(self, "connected", False)):
+            try:
+                backend_context = self.refresh_entry_rule_context(now.date())
+            except Exception as exc:
+                backend_context = self.last_entry_rule_context or {}
+                error = str(exc)
+        else:
+            backend_context = getattr(self, "last_entry_rule_context", None) or {}
+
+        controls = dict(self.entry_rule_controls)
+        outcomes_raw = backend_context.get("recentOutcomes")
+        outcomes = [
+            float(item["return"])
+            for item in (outcomes_raw if isinstance(outcomes_raw, list) else [])
+            if isinstance(item, dict) and isinstance(item.get("return"), (int, float))
+        ]
+        try:
+            market = self.entry_rule_market_context(
+                now.date(), preview_price=current_price, preview_at=now,
+            ) or {}
+        except Exception as exc:
+            market = {}
+            error = f"{error}; {exc}".strip("; ")
+        week_state = backend_context.get("weekState") if isinstance(backend_context.get("weekState"), dict) else {}
+        week_inputs = week_state.get("inputs") if isinstance(week_state.get("inputs"), dict) else {}
+
+        arithmetic_sum = sum(outcomes[:2]) if len(outcomes) >= 2 else None
+        previous_close = float(market.get("previousCashClose", 0.0) or 0.0)
+        cash_open = float(market.get("cashOpen", 0.0) or 0.0)
+        gap = cash_open / previous_close - 1.0 if cash_open > 0 and previous_close > 0 else None
+        momentum = market.get("momentum20")
+        momentum = float(momentum) if isinstance(momentum, (int, float)) else None
+        premarket_open = float(market.get("premarketOpen", 0.0) or 0.0)
+        premarket_high = float(market.get("premarketHigh", 0.0) or 0.0)
+        premarket_low = float(market.get("premarketLow", 0.0) or 0.0)
+        premarket_close = float(market.get("premarketClose", 0.0) or 0.0)
+        premarket_span = premarket_high - premarket_low
+        premarket_range = premarket_span / premarket_open if premarket_open > 0 and premarket_span > 0 else None
+        close_location = (premarket_close - premarket_low) / premarket_span if premarket_span > 0 else None
+        friday_close = float(week_inputs.get("previousCashClose", 0.0) or previous_close)
+        tuesday_change = abs(cash_open / friday_close - 1.0) if cash_open > 0 and friday_close > 0 else None
+
+        def rule(key: str, effect: str, applicable: bool, conditions: list[dict[str, Any]]) -> dict[str, Any]:
+            enabled = bool(controls.get(key, True))
+            available = all(condition["actual"] is not None for condition in conditions)
+            matched = available and all(bool(condition["met"]) for condition in conditions)
+            status = (
+                "DISABLED" if not enabled else
+                "NOT_APPLICABLE" if not applicable else
+                "WAITING" if not available else
+                "MATCHED" if matched else "NOT_MATCHED"
+            )
+            return {
+                "key": key, "enabled": enabled, "applicable": applicable,
+                "status": status, "effect": effect, "conditions": conditions,
+            }
+
+        is_entry_day = now.weekday() in (0, 1)
+        rules = [
+            rule("ARITHMETIC_LAST_TWO", "SKIP_ENTRY", is_entry_day, [
+                self.loss_control_condition("ARITHMETIC_SUM", "Last two weekly outcomes sum", arithmetic_sum, "<=", -float(self.cfg.entry_rule_arithmetic_threshold)),
+            ]),
+            rule("GAP_MOMENTUM", "DEFER_OR_SKIP_ENTRY", is_entry_day, [
+                self.loss_control_condition("OPEN_GAP", "Current/open gap vs previous cash close", gap, ">=", float(self.cfg.entry_rule_gap_threshold)),
+                self.loss_control_condition("MOMENTUM_20", "Previous close momentum over 20 sessions", momentum, "<=", float(self.cfg.entry_rule_momentum20_threshold)),
+            ]),
+            rule("TUESDAY_NORMALIZATION", "ALLOW_TUESDAY_REENTRY", now.weekday() == 1 and str(week_state.get("status", "")) == "DEFER_TUESDAY", [
+                self.loss_control_condition("TUESDAY_DISTANCE", "Absolute current/open distance from Friday close", tuesday_change, "<=", float(self.cfg.entry_rule_tuesday_normalization_tolerance)),
+            ]),
+            rule("PREMARKET_LOW", "SKIP_ENTRY", is_entry_day, [
+                self.loss_control_condition("PREMARKET_RANGE", "Premarket high-low range / open", premarket_range, ">=", float(self.cfg.entry_rule_premarket_minimum_range)),
+                self.loss_control_condition("PREMARKET_CLOSE_LOCATION", "Current/close location within premarket range", close_location, "<=", float(self.cfg.entry_rule_premarket_maximum_close_location)),
+            ]),
+        ]
+        return {
+            "revision": int(self.entry_rule_controls_revision),
+            "evaluatedAt": now.isoformat(), "currentPrice": float(current_price),
+            "currentPriceUsage": "Live MT5 BUY price; authoritative entry reference at the pre-open BUY action",
+            "error": error, "rules": rules,
         }
 
     def loss_control_entry_decision(
@@ -1214,19 +1336,9 @@ class BrokerExecutionMixin:
             self.remember_entry_rule_decision(current_day, week_status, dict((week_state or {}).get("inputs") or {}))
             return
 
-        latest_entry = session.cash_open + timedelta(seconds=self.cfg.entry_window_seconds)
-        premarket_enabled = self.entry_rule_controls["PREMARKET_LOW"]
+        latest_entry = session.buy_action + timedelta(seconds=self.cfg.entry_window_seconds)
         approved_inputs = dict((week_state or {}).get("inputs") or {}) if week_status == "ENTRY_APPROVED" else {}
-        cash_open_required = (
-            bool(approved_inputs.get("cashOpenRequired"))
-            if week_status == "ENTRY_APPROVED"
-            else (
-                self.entry_rule_controls["GAP_MOMENTUM"]
-                or premarket_enabled
-                or week_status in {"DEFER_TUESDAY", "TUESDAY_REENTRY"}
-            )
-        )
-        scheduled_at = session.cash_open if cash_open_required else session.buy_action
+        scheduled_at = session.buy_action
         if now < scheduled_at:
             return
         if now > latest_entry:
@@ -1248,19 +1360,27 @@ class BrokerExecutionMixin:
             self.send_buy(current_day, scheduled_at=scheduled_at)
             return
 
+        tick = self.require_fresh_tick(self.cfg.trade_symbol)
+        buy_price = float(getattr(tick, "ask", 0.0) or 0.0)
+        if buy_price <= 0:
+            return
+        market = self.entry_rule_market_context(
+            current_day, preview_price=buy_price, preview_at=now,
+            preview_source="ENTRY_ACTION_BUY_PRICE",
+        )
+        if market is None:
+            return
+
         if week_status in {"DEFER_TUESDAY", "TUESDAY_REENTRY"}:
             if current_day.weekday() != 1:
                 return
             inputs = dict((week_state or {}).get("inputs") or {})
             if week_status == "DEFER_TUESDAY":
-                cash_open_time = session.cash_open.time().replace(second=0, microsecond=0)
-                cash_bar = self.m1_bar_at(self.cfg.trade_symbol, current_day, cash_open_time)
-                if cash_bar is None or cash_bar.open <= 0:
-                    return
                 friday_close = float(inputs.get("previousCashClose", 0.0) or 0.0)
-                tuesday_open = float(cash_bar.open)
+                tuesday_open = float(market.get("cashOpen", 0.0) or 0.0)
                 inputs["tuesdayOpen"] = tuesday_open
                 inputs["fridayClose"] = friday_close
+                inputs.update(market)
                 normalized = (
                     not self.entry_rule_controls["TUESDAY_NORMALIZATION"]
                     or self.normalized_tuesday_entry_rule(
@@ -1285,13 +1405,12 @@ class BrokerExecutionMixin:
                 )
                 if not normalized:
                     return
-            self.send_buy(current_day, scheduled_at=session.cash_open)
+            self.send_buy(current_day, scheduled_at=scheduled_at)
             return
 
         previous = self.previous_trading_date(current_day) or parse_date(self.state.last_trading_date)
         if previous is not None:
             self.refresh_previous_full_week_change(previous)
-        market = self.entry_rule_market_context(current_day) if cash_open_required else None
         status, inputs = self.loss_control_entry_decision(current_day, backend_context, market)
         if status == "WAIT_MARKET_INPUTS":
             return
@@ -1312,7 +1431,9 @@ class BrokerExecutionMixin:
             )
             return
 
-        inputs["cashOpenRequired"] = cash_open_required
+        inputs["cashOpenRequired"] = False
+        inputs["entryPriceRequired"] = True
+        inputs["entryPriceSource"] = str(market.get("cashOpenSource", "ENTRY_ACTION_BUY_PRICE"))
         inputs["scheduledAt"] = scheduled_at.isoformat()
         try:
             self.record_entry_rule_week_state(current_day, "ENTRY_APPROVED", inputs)

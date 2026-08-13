@@ -491,7 +491,9 @@ class StrategyDecisionMixin:
             "potentialStopLossPercent": 0.0, "potentialStopLossRatio": 0.0,
             "potentialStopLossPrice": 0.0, "potentialStopLossCash": 0.0, "accountLossPercentAtStop": 0.0,
             "accountLossCapApplied": False, "accountLossCapPolicy": self.account_loss_cap_policy(), "stopLossFormula": "",
-            "positionNotional": 0.0, "sizingUnits": 0, "minimumVolumeFloor": False, "scenarios": [], "error": "",
+            "positionNotional": 0.0, "sizingUnits": 0, "minimumVolumeFloor": False, "scenarios": [],
+            "lossControls": {"revision": 0, "evaluatedAt": now.isoformat(), "currentPrice": 0.0, "rules": [], "error": ""},
+            "error": "",
             "purpose": "NEXT_TRADE", "currentPositionOpen": bool(assume_current_position_closed),
             "assumesCurrentPositionClosed": bool(assume_current_position_closed), "sizingFreeMargin": 0.0,
             "sizingBalanceSource": "MT5 account balance",
@@ -517,6 +519,7 @@ class StrategyDecisionMixin:
             price = ask if ask > 0 else last if last > 0 else bid
             if price <= 0:
                 raise RuntimeError(f"No usable current price for {self.cfg.trade_symbol}")
+            result["lossControls"] = self.live_loss_control_status(now, price)
 
             sizing = self.required_balance_sizing(balance, sizing_free_margin, info, price, leverage)
             sizing_units = int(sizing["sizingUnits"])
@@ -612,7 +615,7 @@ class StrategyDecisionMixin:
                 "entryWindowSeconds": int(self.cfg.entry_window_seconds),
                 "entryDayRule": "FIRST_XNYS_SESSION_OF_WEEK; Monday when open, otherwise the first later XNYS session after any closure sequence",
                 "signalOpenRule": "EXACT_ENTRY_SESSION_CASH_OPEN_M1; deferred without fill-price fallback",
-                "ruleControlledEntryTime": "cash open when an enabled market-input rule is required; otherwise the configured entry lead",
+                "ruleControlledEntryTime": "configured pre-open entry action for every loss-control configuration",
             },
             "entryLossControl": {
                 "controlAuthority": "per-account MySQL strategy_entry_rule_controls, changed by an explicitly authorized paired device",
@@ -631,6 +634,7 @@ class StrategyDecisionMixin:
                 "tuesdayNormalizationTolerance": float(self.cfg.entry_rule_tuesday_normalization_tolerance),
                 "premarketMinimumRange": float(self.cfg.entry_rule_premarket_minimum_range),
                 "premarketMaximumCloseLocation": float(self.cfg.entry_rule_premarket_maximum_close_location),
+                "entryPriceReference": "fresh MT5 BUY price sampled at the pre-open entry action; no cash-open M1 wait",
                 "priority": ["ARITHMETIC_LAST_TWO", "PREMARKET_LOW", "GAP_MOMENTUM", "TUESDAY_NORMALIZATION"],
                 "skippedWeekOutcome": 0.0,
                 "missingInputPolicy": "do not submit BUY; retry inside the bounded entry window",

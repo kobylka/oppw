@@ -473,7 +473,8 @@ object JsonParser {
         potentialStopLossPrice = json.optDoubleAny("potentialStopLossPrice", "potential_stop_loss_price"), potentialStopLossCash = json.optDoubleAny("potentialStopLossCash", "potential_stop_loss_cash"),
         accountLossPercentAtStop = json.optDoubleAny("accountLossPercentAtStop", "account_loss_percent_at_stop"),
         accountLossCapApplied = json.optBooleanAny("accountLossCapApplied", "account_loss_cap_applied"), stopLossFormula = json.optStringAny("stopLossFormula", "stop_loss_formula"),
-        minimumVolumeFloor = json.optBooleanAny("minimumVolumeFloor", "minimum_volume_floor"), scenarios = buildList {
+        minimumVolumeFloor = json.optBooleanAny("minimumVolumeFloor", "minimum_volume_floor"),
+        lossControls = parseLossControls(json.optJSONObject("lossControls")), scenarios = buildList {
             val values = json.optJSONArray("scenarios") ?: JSONArray()
             for (i in 0 until values.length()) values.getJSONObject(i).let { item -> add(WhatIfScenario(
                 label = item.optString("label"), underlyingReturnPercent = item.optDouble("underlyingReturnPercent"), price = item.optDouble("price"),
@@ -481,6 +482,37 @@ object JsonParser {
             )) }
         },
     )
+
+    private fun parseLossControls(value: JSONObject?): LossControlStatus {
+        val rules = value?.optJSONArray("rules") ?: JSONArray()
+        return LossControlStatus(
+            revision = value?.optLong("revision") ?: 0,
+            evaluatedAt = value?.optString("evaluatedAt").orEmpty(),
+            currentPrice = value?.optDouble("currentPrice") ?: 0.0,
+            currentPriceUsage = value?.optString("currentPriceUsage").orEmpty(),
+            error = value?.optString("error").orEmpty(),
+            rules = buildList {
+                for (index in 0 until rules.length()) rules.getJSONObject(index).let { rule ->
+                    val conditions = rule.optJSONArray("conditions") ?: JSONArray()
+                    add(LossControlRuleStatus(
+                        key = rule.optString("key"), enabled = rule.optBoolean("enabled"),
+                        applicable = rule.optBoolean("applicable"), status = rule.optString("status"),
+                        effect = rule.optString("effect"), conditions = buildList {
+                            for (conditionIndex in 0 until conditions.length()) conditions.getJSONObject(conditionIndex).let { condition ->
+                                add(LossControlCondition(
+                                    key = condition.optString("key"), label = condition.optString("label"),
+                                    actual = condition.optNullableFiniteDouble("actual"),
+                                    operator = condition.optString("operator"), threshold = condition.optDouble("threshold"),
+                                    unit = condition.optString("unit"),
+                                    met = if (!condition.has("met") || condition.isNull("met")) null else condition.optBoolean("met"),
+                                ))
+                            }
+                        },
+                    ))
+                }
+            },
+        )
+    }
 
     private fun parseStrategyDecision(json: JSONObject): StrategyDecision {
         val inputs = json.optJSONObject("inputs") ?: JSONObject()

@@ -175,7 +175,9 @@ if ($method === 'GET') {
             'ownerId' => $_GET['ownerId'] ?? '',
             'fencingToken' => $_GET['fencingToken'] ?? 0,
         ], 'entry-rules');
-        if ($actor['role'] !== 'EXECUTOR') json_response(['ok' => false, 'error' => 'Executor lease required'], 409);
+        if (!in_array($actor['role'], ['EXECUTOR', 'PUBLISHER'], true)) {
+            json_response(['ok' => false, 'error' => 'Executor or publisher lease required'], 409);
+        }
         $response($db, $account, false, $week);
     }
     $session = require_mobile_session($account);

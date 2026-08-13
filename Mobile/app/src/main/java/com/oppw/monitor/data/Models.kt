@@ -155,6 +155,35 @@ data class PotentialPosition(
     val stopLossFormula: String = "",
     val minimumVolumeFloor: Boolean = false,
     val scenarios: List<WhatIfScenario> = emptyList(),
+    val lossControls: LossControlStatus = LossControlStatus(),
+)
+
+data class LossControlStatus(
+    val revision: Long = 0,
+    val evaluatedAt: String = "",
+    val currentPrice: Double = 0.0,
+    val currentPriceUsage: String = "",
+    val error: String = "",
+    val rules: List<LossControlRuleStatus> = emptyList(),
+)
+
+data class LossControlRuleStatus(
+    val key: String,
+    val enabled: Boolean,
+    val applicable: Boolean,
+    val status: String,
+    val effect: String,
+    val conditions: List<LossControlCondition>,
+)
+
+data class LossControlCondition(
+    val key: String,
+    val label: String,
+    val actual: Double?,
+    val operator: String,
+    val threshold: Double,
+    val unit: String,
+    val met: Boolean?,
 )
 
 data class WhatIfScenario(

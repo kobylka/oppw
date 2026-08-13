@@ -124,6 +124,19 @@
       "leverageReason": "CONTRACT_FIXTURE",
       "positionNotional": 80000.0,
       "sizingUnits": 2,
+      "lossControls": {
+        "revision": 7,
+        "evaluatedAt": "${CAPTURED_AT}",
+        "currentPrice": 29051.0,
+        "currentPriceUsage": "Live MT5 BUY price; authoritative entry reference at the pre-open BUY action",
+        "error": "",
+        "rules": [
+          {"key":"ARITHMETIC_LAST_TWO","enabled":true,"applicable":true,"status":"NOT_MATCHED","effect":"SKIP_ENTRY","conditions":[{"key":"ARITHMETIC_SUM","label":"Last two weekly outcomes sum","actual":0.01,"operator":"<=","threshold":-0.02,"unit":"RATIO","met":false}]},
+          {"key":"GAP_MOMENTUM","enabled":false,"applicable":true,"status":"DISABLED","effect":"DEFER_OR_SKIP_ENTRY","conditions":[{"key":"OPEN_GAP","label":"Current/open gap vs previous cash close","actual":0.005,"operator":">=","threshold":0.01,"unit":"RATIO","met":false},{"key":"MOMENTUM_20","label":"Previous close momentum over 20 sessions","actual":-0.006,"operator":"<=","threshold":-0.005,"unit":"RATIO","met":true}]},
+          {"key":"TUESDAY_NORMALIZATION","enabled":true,"applicable":false,"status":"NOT_APPLICABLE","effect":"ALLOW_TUESDAY_REENTRY","conditions":[{"key":"TUESDAY_DISTANCE","label":"Absolute current/open distance from Friday close","actual":0.003,"operator":"<=","threshold":0.005,"unit":"RATIO","met":true}]},
+          {"key":"PREMARKET_LOW","enabled":true,"applicable":true,"status":"NOT_MATCHED","effect":"SKIP_ENTRY","conditions":[{"key":"PREMARKET_RANGE","label":"Premarket high-low range / open","actual":0.009,"operator":">=","threshold":0.008,"unit":"RATIO","met":true},{"key":"PREMARKET_CLOSE_LOCATION","label":"Current/close location within premarket range","actual":0.25,"operator":"<=","threshold":0.15,"unit":"RATIO","met":false}]}
+        ]
+      },
       "error": ""
     },
     "execution": {

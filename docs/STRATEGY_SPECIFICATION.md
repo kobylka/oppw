@@ -26,11 +26,12 @@ Concurrent account market-order priority is REAL BOSSA, REAL TMS, DEMO BOSSA, th
 ## Session-order invariants
 
 - Four per-account entry-loss controls are read from MySQL before a controlled entry: `ARITHMETIC_LAST_TWO`, combined `GAP_MOMENTUM`, `TUESDAY_NORMALIZATION`, and combined `PREMARKET_LOW`.
+- While flat before entry, the what-if snapshot reports all four controls even when disabled. It exposes every resolved threshold, current input, comparison operator, comparison result, rule applicability, and resulting status. Price-dependent pre-open previews use the current MT5 BUY price.
 - Arithmetic skips when the latest two weekly outcomes sum to at most −2.00%; an explicit skipped week contributes `0.0`, while an entered week contributes its closed trade's pre-leverage price return.
 - The combined gate requires cash-open gap ≥1.00% and prior 20-session momentum ≤−0.50%. On Monday it defers to Tuesday; when Tuesday is the first actual weekly session it skips without a later re-entry.
-- A deferred Tuesday entry proceeds only when the Tuesday cash open is within ±0.50% of the prior Friday close, unless that individual rule is disabled.
+- A deferred Tuesday entry proceeds only when the live MT5 BUY price at the pre-open entry action is within ±0.50% of the prior Friday close, unless that individual rule is disabled.
 - The single premarket-low rule requires both a premarket range ≥0.80% and a close in the bottom 15% of that range. Disabling `PREMARKET_LOW` disables the complete conjunctive rule.
-- Any enabled market-input rule moves BUY evaluation from the pre-open lead to cash open, still within the existing 55-second entry window. The fenced backend records the entry approval against the exact control revision before BUY; a stale revision, missing backend authority, or missing required market data never permits BUY.
+- All entry-loss rules evaluate in the first executor cycle at the pre-open BUY action, normally 15:29:57 Europe/Warsaw for a 15:30 XNYS open. The live MT5 BUY price at that instant is the authoritative entry reference for gap and Tuesday normalization and is included in the premarket range/close-location inputs. An allowed BUY is dispatched in the same cycle without waiting for the 15:30 M1 bar. The fenced backend records the entry approval against the exact control revision before BUY; a stale revision, missing backend authority, stale tick, or missing required market data never permits BUY.
 
 - OH is never evaluated on the first actual XNYS trading session of the week. Its cash-open-minus-lead checks begin on the second actual session, including holiday-shifted weeks and manually adopted positions.
 - Break-even can arm only after a false CH at day close, no earlier than the second actual XNYS session and never on the position opening day. Capturing a pending entry-session cash-open signal reference is not a break-even check.

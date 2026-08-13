@@ -14,6 +14,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.oppw.monitor.data.PriceCondition
+import com.oppw.monitor.data.StrategyRuleControl
 import com.oppw.monitor.data.UiState
 import com.oppw.monitor.ui.components.AppCard
 import com.oppw.monitor.ui.components.ErrorPanel
@@ -41,6 +42,7 @@ import com.oppw.monitor.util.shortDateTime
 import com.oppw.monitor.util.timeOnly
 import com.oppw.monitor.util.volume
 import kotlin.math.abs
+import java.util.Locale
 
 @Composable
 fun PositionScreen(state: UiState, onRetry: () -> Unit) {
@@ -96,6 +98,9 @@ fun PositionScreen(state: UiState, onRetry: () -> Unit) {
                                 }
                             }
                         }
+                    }
+                    item {
+                        LossControlCard(state, potential)
                     }
                     if (potential?.available == true) {
                         item {
@@ -234,6 +239,74 @@ fun PositionScreen(state: UiState, onRetry: () -> Unit) {
             }
         }
     }
+}
+
+@Composable
+private fun LossControlCard(state: UiState, potential: com.oppw.monitor.data.PotentialPosition?) {
+    val live = potential?.lossControls
+    val liveByKey = live?.rules.orEmpty().associateBy { it.key }
+    val configured = state.strategyControl?.rules.orEmpty().ifEmpty {
+        live?.rules.orEmpty().map { StrategyRuleControl(it.key, it.key.replace('_', ' '), "", it.enabled) }
+    }
+    AppCard(Modifier.fillMaxWidth()) {
+        SectionTitle("Weekly entry loss controls", "REV ${state.strategyControl?.revision ?: live?.revision ?: 0}")
+        if (live == null || live.rules.isEmpty()) {
+            Text("Waiting for the publisher's live loss-control evaluation.", color = TextSecondary)
+            state.strategyControlError?.let { Text(it, color = DangerRed) }
+            return@AppCard
+        }
+        MetricRow("Live current price", price(live.currentPrice), "Evaluated", shortDateTime(live.evaluatedAt))
+        if (live.currentPriceUsage.isNotBlank()) Text(live.currentPriceUsage, color = TextSecondary)
+        configured.forEach { control ->
+            val rule = liveByKey[control.key]
+            val enabled = control.enabled
+            val status = when {
+                !enabled -> "DISABLED"
+                rule == null -> "WAITING"
+                !rule.applicable -> "NOT_APPLICABLE"
+                rule.conditions.any { it.met == null } -> "WAITING"
+                rule.conditions.all { it.met == true } -> "MATCHED"
+                else -> "NOT_MATCHED"
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(control.label, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                StatusChip(status.replace('_', ' '), lossControlTone(status, rule?.effect.orEmpty()))
+            }
+            if (control.description.isNotBlank()) Text(control.description, color = TextSecondary)
+            rule?.conditions.orEmpty().forEach { condition ->
+                val actual = condition.actual?.let(::lossControlRatio) ?: "awaiting input"
+                val threshold = lossControlRatio(condition.threshold)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Column(Modifier.weight(1f)) {
+                        Text(condition.label)
+                        Text("$actual  ${condition.operator}  $threshold", color = TextSecondary)
+                    }
+                    StatusChip(
+                        when (condition.met) { true -> "MET"; false -> "NOT MET"; null -> "WAITING" },
+                        lossControlConditionTone(enabled && rule?.applicable == true, rule?.effect.orEmpty(), condition.met),
+                    )
+                }
+            }
+        }
+        live.error.takeIf { it.isNotBlank() }?.let { Text("Live input warning: $it", color = TextSecondary) }
+    }
+}
+
+private fun lossControlRatio(value: Double): String = String.format(Locale.US, "%+.3f%%", value * 100.0)
+
+private fun lossControlTone(status: String, effect: String): String = when (status) {
+    "DISABLED", "NOT_APPLICABLE" -> "blue"
+    "WAITING" -> "amber"
+    "MATCHED" -> if (effect == "ALLOW_TUESDAY_REENTRY") "green" else "red"
+    "NOT_MATCHED" -> if (effect == "ALLOW_TUESDAY_REENTRY") "red" else "green"
+    else -> "blue"
+}
+
+private fun lossControlConditionTone(active: Boolean, effect: String, met: Boolean?): String = when {
+    !active -> "blue"
+    met == null -> "amber"
+    effect == "ALLOW_TUESDAY_REENTRY" -> if (met) "green" else "red"
+    else -> if (met) "red" else "green"
 }
 
 @Composable

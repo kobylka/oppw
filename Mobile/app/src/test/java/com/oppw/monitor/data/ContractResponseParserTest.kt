@@ -48,6 +48,10 @@ class ContractResponseParserTest {
         assertEquals(27550.0, position.protectionTarget.price, 0.01)
         assertTrue(position.protectionTarget.applied)
         assertTrue(status.snapshot.strategyDecision?.decisionId?.isNotBlank() == true)
+        val lossControls = status.snapshot.potentialPosition!!.lossControls
+        assertEquals(4, lossControls.rules.size)
+        assertEquals(-0.02, lossControls.rules.first().conditions.first().threshold, 0.000001)
+        assertFalse(lossControls.rules.first { it.key == "GAP_MOMENTUM" }.enabled)
         assertEquals("BE CHECK", status.snapshot.closestCondition?.name)
         assertTrue(status.snapshot.conditions.any { it.name == "BE CHECK" })
         status.snapshot.marketStats.currentWeek!!.let { week ->

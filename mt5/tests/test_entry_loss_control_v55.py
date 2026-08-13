@@ -43,6 +43,7 @@ class EntryLossControlTests(unittest.TestCase):
             entry_rule_premarket_minimum_range=0.008,
             entry_rule_premarket_maximum_close_location=0.15,
             entry_window_seconds=55,
+            trade_symbol="US100",
         )
         strategy.entry_rule_controls_revision = 3
         strategy.entry_rule_controls = {
@@ -156,6 +157,95 @@ class EntryLossControlTests(unittest.TestCase):
         self.assertIs(payload, strategy.refresh_entry_rule_context(MONDAY))
         self.assertEqual(1, len(calls))
 
+    def test_publisher_control_refresh_never_persists_executor_state(self):
+        strategy = self.strategy()
+        strategy.role = "PUBLISHER"
+        strategy.state = SimpleNamespace(
+            entry_rule_controls_revision=3,
+            entry_rule_controls=dict(strategy.entry_rule_controls),
+            save=lambda _path: self.fail("publisher must not persist executor state"),
+        )
+        strategy.cfg.state_file = Path("unused-state.json")
+        strategy.log = SimpleNamespace(info=lambda *_args: None)
+        payload = {
+            "revision": 4,
+            "rules": [
+                {"key": key, "enabled": key != "PREMARKET_LOW"}
+                for key in strategy.entry_rule_controls
+            ],
+        }
+
+        strategy.apply_entry_rule_context(payload)
+
+        self.assertEqual(4, strategy.entry_rule_controls_revision)
+        self.assertFalse(strategy.entry_rule_controls["PREMARKET_LOW"])
+        self.assertEqual(3, strategy.state.entry_rule_controls_revision)
+
+    def test_pre_cash_open_market_preview_includes_current_price(self):
+        strategy = self.strategy()
+        strategy.tz = WARSAW
+        strategy.cfg.trade_symbol = "US100"
+        strategy.cfg.premarket_start = time(0, 0)
+        cash_open = datetime(2026, 8, 10, 15, 30, tzinfo=WARSAW)
+        strategy.session_times = lambda _day: SimpleNamespace(cash_open=cash_open)
+        strategy.m1_bar_at = lambda *_args: SimpleNamespace(open=90.0)
+        strategy.calendar = SimpleNamespace(sessions_in_range=lambda *_args: [])
+        strategy.local_to_mt5_bar_query_time = lambda value: value
+        strategy.mt5_bar_timestamp_to_local = lambda value: datetime.fromtimestamp(value, WARSAW)
+        had_copy_rates_range = hasattr(MODULE.mt5, "copy_rates_range")
+        old_copy_rates_range = getattr(MODULE.mt5, "copy_rates_range", None)
+        MODULE.mt5.copy_rates_range = lambda *_args: [{
+            "time": int(datetime(2026, 8, 10, 15, 28, tzinfo=WARSAW).timestamp()),
+            "open": 100.0, "high": 100.5, "low": 99.5, "close": 100.4,
+        }]
+        self.addCleanup(
+            setattr if had_copy_rates_range else delattr,
+            MODULE.mt5, "copy_rates_range", *([old_copy_rates_range] if had_copy_rates_range else []),
+        )
+
+        market = strategy.entry_rule_market_context(
+            MONDAY, preview_price=101.0,
+            preview_at=datetime(2026, 8, 10, 15, 29, tzinfo=WARSAW),
+        )
+
+        self.assertEqual("CURRENT_BUY_PRICE_PREVIEW", market["cashOpenSource"])
+        self.assertEqual(101.0, market["cashOpen"])
+        self.assertEqual(101.0, market["premarketHigh"])
+        self.assertEqual(101.0, market["premarketClose"])
+
+    def test_live_status_includes_every_rule_disabled_state_threshold_and_condition(self):
+        strategy = self.strategy()
+        strategy.role = "EXECUTOR"
+        strategy.connected = True
+        strategy.entry_rule_controls["PREMARKET_LOW"] = False
+        strategy.last_entry_rule_context = None
+        strategy.refresh_entry_rule_context = lambda _day: self.backend([-0.011, -0.010]) | {"weekState": None}
+        strategy.entry_rule_market_context = lambda *_args, **_kwargs: self.quiet_market() | {
+            "cashOpen": 101.0,
+            "previousCashClose": 100.0,
+            "momentum20": -0.005,
+            "premarketOpen": 100.0,
+            "premarketHigh": 100.8,
+            "premarketLow": 100.0,
+            "premarketClose": 100.12,
+        }
+
+        status = strategy.live_loss_control_status(
+            datetime(2026, 8, 10, 15, 29, tzinfo=WARSAW), 101.0,
+        )
+
+        self.assertEqual(101.0, status["currentPrice"])
+        self.assertEqual(
+            ["ARITHMETIC_LAST_TWO", "GAP_MOMENTUM", "TUESDAY_NORMALIZATION", "PREMARKET_LOW"],
+            [rule["key"] for rule in status["rules"]],
+        )
+        self.assertEqual("MATCHED", status["rules"][0]["status"])
+        self.assertEqual(-0.02, status["rules"][0]["conditions"][0]["threshold"])
+        self.assertEqual(2, len(status["rules"][1]["conditions"]))
+        self.assertEqual("NOT_APPLICABLE", status["rules"][2]["status"])
+        self.assertEqual("DISABLED", status["rules"][3]["status"])
+        self.assertTrue(all("actual" in condition and "threshold" in condition for rule in status["rules"] for condition in rule["conditions"]))
+
     def test_loop_does_not_poll_controls_before_entry_context_lead(self):
         strategy = self.strategy()
         strategy.state = MODULE.StrategyState()
@@ -181,7 +271,8 @@ class EntryLossControlTests(unittest.TestCase):
         )
         strategy.previous_trading_date = lambda _day: date(2026, 8, 7)
         strategy.refresh_previous_full_week_change = lambda _day: None
-        strategy.entry_rule_market_context = lambda _day: self.quiet_market()
+        strategy.require_fresh_tick = lambda _symbol: SimpleNamespace(ask=100.0)
+        strategy.entry_rule_market_context = lambda *_args, **_kwargs: self.quiet_market()
         recorded = []
         strategy.record_entry_rule_week_state = lambda _day, status, inputs: recorded.append((status, inputs)) or {}
         strategy.remember_entry_rule_decision = lambda *_args: None
@@ -190,9 +281,8 @@ class EntryLossControlTests(unittest.TestCase):
         strategy.maybe_open_new_week(MONDAY, cash_open, None, None)
         self.assertEqual("SKIP_ARITHMETIC", recorded[0][0])
 
-    def test_loop_records_fenced_approval_before_baseline_buy(self):
+    def test_loop_evaluates_live_buy_price_and_sends_at_preopen_buy_action(self):
         strategy = self.strategy()
-        strategy.entry_rule_controls = {key: False for key in strategy.entry_rule_controls}
         strategy.state = MODULE.StrategyState()
         strategy.last_entry_rule_error_monotonic = 0.0
         strategy.cfg.monitor_error_log_interval_seconds = 30.0
@@ -204,7 +294,12 @@ class EntryLossControlTests(unittest.TestCase):
         strategy.session_times = lambda _day: SimpleNamespace(buy_action=buy_action, cash_open=cash_open)
         strategy.previous_trading_date = lambda _day: date(2026, 8, 7)
         strategy.refresh_previous_full_week_change = lambda _day: None
-        strategy.entry_rule_market_context = lambda _day: self.fail("cash-open market inputs must not be read")
+        strategy.require_fresh_tick = lambda _symbol: SimpleNamespace(ask=101.25)
+        market_calls = []
+        strategy.entry_rule_market_context = lambda day, preview_price=None, preview_at=None, preview_source="": (
+            market_calls.append((day, preview_price, preview_at, preview_source))
+            or self.quiet_market() | {"cashOpen": preview_price, "cashOpenSource": preview_source}
+        )
         recorded = []
         sent = []
         strategy.record_entry_rule_week_state = lambda _day, status, inputs: recorded.append((status, inputs)) or {}
@@ -214,6 +309,10 @@ class EntryLossControlTests(unittest.TestCase):
         strategy.maybe_open_new_week(MONDAY, buy_action, None, None)
         self.assertEqual("ENTRY_APPROVED", recorded[0][0])
         self.assertFalse(recorded[0][1]["cashOpenRequired"])
+        self.assertTrue(recorded[0][1]["entryPriceRequired"])
+        self.assertEqual(101.25, recorded[0][1]["cashOpen"])
+        self.assertEqual("ENTRY_ACTION_BUY_PRICE", recorded[0][1]["entryPriceSource"])
+        self.assertEqual([(MONDAY, 101.25, buy_action, "ENTRY_ACTION_BUY_PRICE")], market_calls)
         self.assertEqual([buy_action], sent)
 
 

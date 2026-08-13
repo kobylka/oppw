@@ -548,6 +548,16 @@ return [
                 "role": "PUBLISHER", "ownerId": owner_id,
                 "fencingToken": int(lease["fencingToken"]),
             }
+            publisher_context_query = urllib.parse.urlencode({
+                "accountKey": "DEMO", "weekKey": "2026-W33", "role": "PUBLISHER",
+                "ownerId": owner_id, "fencingToken": int(lease["fencingToken"]),
+            })
+            _, publisher_entry_context, _ = http_json(
+                "GET", base_url + "strategy-controls.php?" + publisher_context_query,
+                token=WRITE_TOKEN,
+            )
+            if len(publisher_entry_context.get("rules", [])) != 4:
+                raise AssertionError("publisher could not read all entry-loss controls")
 
             for delivery in range(2):
                 _, stored, _ = http_json(

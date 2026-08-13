@@ -95,6 +95,8 @@ class StrategySpecificationTests(unittest.TestCase):
         self.assertEqual(specification["document"]["persistenceAuthority"]["events"], "diagnostic stream only")
         self.assertEqual(specification["document"]["entryLossControl"]["arithmeticLookback"], 2)
         self.assertEqual(specification["document"]["entryLossControl"]["momentumSessions"], 20)
+        self.assertIn("pre-open entry action", specification["document"]["calendarAndTime"]["ruleControlledEntryTime"])
+        self.assertIn("fresh MT5 BUY price", specification["document"]["entryLossControl"]["entryPriceReference"])
         self.assertEqual("GROWTH_1_765", specification["document"]["sizing"]["activeProfile"])
 
     def test_account_required_balance_override_is_effective_and_audited(self):
