@@ -215,7 +215,7 @@ class Sim:
     def read_quotes(self, files, start_date):
         for f in files:
             fname = f.split(".")
-            if fname[-1] == "txt" and fname[0] != "weekly_returns":
+            if fname[-1] == "txt" and fname[0] != "weekly_returns" and fname[0] != "weekly_returns_v5":
                 stock = fname[0].upper()
                 self.stocks.append(stock)
                 self.wallet[stock] = [0,0,0,0]
@@ -228,7 +228,7 @@ class Sim:
                     line = line.split(",")
                     if line[0] == "<TICKER>":
                         continue
-
+                    
                     date = line[2]
                     
                     if date == "20200309": continue
@@ -294,20 +294,20 @@ class Sim:
                 SL = 0.95
                 
                 if self.leverage_override and LEVERAGE == 10:
-                    granular = int((self.balance/1.5/2240))*2240
+                    granular = int((self.balance/1.5/200))*200
                     SL = 0.9465
                 elif self.leverage_override:
-                    granular = int((self.balance/1.5/2240))*2240
+                    granular = int((self.balance/1.5/200))*200
                     SL = 0.9465
                 else:
-                    granular = int((self.balance/(20/LEVERAGE)/2240))*2240
-                #granular = int((self.balance/(20/LEVERAGE)/2240)+1)*2240
+                    granular = int((self.balance/(20/LEVERAGE)/200))*200
+                #granular = int((self.balance/(20/LEVERAGE)/200)+1)*200
                 #if(round(20/(self.balance/granular), 2) < 3):
-                #    granular = int((self.balance/(20/LEVERAGE)/2240)+2)*2240
+                #    granular = int((self.balance/(20/LEVERAGE)/200)+2)*200
                 #if(round(20/(self.balance/granular), 2) < 3):
-                 #   granular = int((self.balance/(20/LEVERAGE)/2240)+3)*2240
+                 #   granular = int((self.balance/(20/LEVERAGE)/200)+3)*200
                 #if(LEVERAGE == 10):
-                    #granular = int((self.balance/1.396/2240))*2240
+                    #granular = int((self.balance/1.396/200))*200
                     
                 effective_leverage = round(20/(self.balance/granular), 2)
                     
@@ -359,7 +359,6 @@ class Sim:
                     avg_loss = round(sum(self.loses) / len(self.loses),3)
                 else:
                     avg_loss = 0
-                
                 
                 if(debug == True):
                     #print(self.balance)
@@ -673,13 +672,13 @@ class Sim:
             SL = 0.95
 
             if self.leverage_override and LEVERAGE == 10:
-                granular = int((self.balance/1.5/2240))*2240
+                granular = int((self.balance/1.5/200))*200
                 SL = 0.9465
             elif self.leverage_override:
-                granular = int((self.balance/1.5/2240))*2240
+                granular = int((self.balance/1.5/200))*200
                 SL = 0.9465
             else:
-                granular = int(self.balance / (20 / LEVERAGE) / 2240) * 2240
+                granular = int(self.balance / (20 / LEVERAGE) / 200) * 200
                 granular *= 20 / LEVERAGE
 
             if granular == 0 and self.balance < initial_balance:
@@ -903,8 +902,9 @@ class Sim:
                 #        self.deposited += 3000
                 #        self.balance += 3000
                 if(self.deposited < 200000 and (self.prev_full_week_change < -0.02 or self.prev_change < -0.007) and allow_deposits):
-                    granular = int((self.balance/1.666666/2240))
-                    plus_one = int(2240*(granular+1)*1.396-self.balance+200)
+                    granular = int((self.balance/1.5/200))
+                    plus_one = int(200*(granular+1)*1.5-self.balance+200)
+                    
                     self.deposited += plus_one
                     self.balance += plus_one
                     
@@ -1155,7 +1155,7 @@ def run_backtest(
         sim.read_quotes(files, "20180413")
         sim.read_csv_quotes(files, "20180413")
     
-    LEVERAGE = 5.5
+    LEVERAGE = 8
     SL = (100-50/LEVERAGE)/100
     BE = 0.996
     
@@ -1168,16 +1168,16 @@ def run_backtest(
     result = sim.process(
         sim_i.quotes,
         "QQQ",
-        "20180413",
-        "20260804",
+        "20240102",
+        "20260813",
         LEVERAGE,
         tpps,
         SL,
         BE,
         0.004,
         0.004,
-        initial_balance=30000,
-        allow_deposits=False,
+        initial_balance=300,
+        allow_deposits=True,
         apply_tax=True,
         debug=debug,
         plots=plots,
