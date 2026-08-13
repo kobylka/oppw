@@ -112,6 +112,7 @@ from oppw_core.utilities import (
     price_changed,
     truncate_four_decimals,
 )
+from oppw_core.windows_ui import HighRiskWarningAcknowledger
 from oppw_core.versioning import (
     ACCOUNT_DEMO,
     ACCOUNT_REAL,
@@ -216,17 +217,79 @@ class OPPWContinuousStrategy(
             self.monitor_publisher.start()
 
     def connect(self) -> None:
-        kwargs: dict[str, Any] = {}
+        credential_kwargs: dict[str, Any] = {}
         if self.cfg.login:
-            kwargs["login"] = self.cfg.login
+            credential_kwargs["login"] = self.cfg.login
         if self.cfg.password:
-            kwargs["password"] = self.cfg.password
+            credential_kwargs["password"] = self.cfg.password
         if self.cfg.server:
-            kwargs["server"] = self.cfg.server
+            credential_kwargs["server"] = self.cfg.server
+        timeout_milliseconds = int(float(self.cfg.mt5_initialize_timeout_seconds) * 1000)
+        separate_login = bool(self.cfg.separate_mt5_login_after_initialize)
+        if separate_login and not self.cfg.login:
+            raise RuntimeError("separate_mt5_login_after_initialize requires an explicit MT5 login")
 
-        ok = mt5.initialize(self.cfg.terminal_path, **kwargs) if self.cfg.terminal_path else mt5.initialize(**kwargs)
+        acknowledger = None
+        if bool(self.cfg.auto_acknowledge_high_risk_warning):
+            if not self.cfg.terminal_path:
+                raise RuntimeError(
+                    "auto_acknowledge_high_risk_warning requires an explicit terminal_path"
+                )
+            self.log.warning(
+                "EVENT HIGH_RISK_WARNING_AUTO_ACK_ENABLED account=%s terminal=%s timeout=%.1fs",
+                self.account, self.cfg.terminal_path,
+                float(self.cfg.high_risk_warning_timeout_seconds),
+            )
+            acknowledger = HighRiskWarningAcknowledger(
+                self.cfg.terminal_path,
+                float(self.cfg.high_risk_warning_timeout_seconds),
+                lambda: self.log.warning(
+                    "EVENT HIGH_RISK_WARNING_ACKNOWLEDGED account=%s terminal=%s",
+                    self.account, self.cfg.terminal_path,
+                ),
+                lambda exc: self.log.error(
+                    "EVENT HIGH_RISK_WARNING_AUTO_ACK_FAILED account=%s error=%s",
+                    self.account, exc,
+                ),
+                lambda: self.log.warning(
+                    "EVENT HIGH_RISK_WARNING_AUTO_ACK_TIMEOUT account=%s terminal=%s timeout=%.1fs",
+                    self.account, self.cfg.terminal_path,
+                    float(self.cfg.high_risk_warning_timeout_seconds),
+                ),
+            )
+            acknowledger.start()
+        # Broker authorization dialogs can be created after the Python bridge
+        # returns from initialize(). The bounded daemon watcher therefore owns
+        # its full configured lifetime and stops itself after acknowledgement
+        # or timeout instead of being cancelled here.
+        initialize_kwargs: dict[str, Any] = {"timeout": timeout_milliseconds}
+        if not separate_login:
+            initialize_kwargs.update(credential_kwargs)
+        ok = (
+            mt5.initialize(self.cfg.terminal_path, **initialize_kwargs)
+            if self.cfg.terminal_path
+            else mt5.initialize(**initialize_kwargs)
+        )
         if not ok:
             raise RuntimeError(f"mt5.initialize() failed: {mt5.last_error()}")
+        if separate_login:
+            self.log.info(
+                "EVENT MT5_SEPARATE_LOGIN_STARTED account=%s login=%s server=%s timeout=%.1fs",
+                self.account, self.cfg.login, self.cfg.server,
+                float(self.cfg.mt5_initialize_timeout_seconds),
+            )
+            login_kwargs = {
+                name: value for name, value in credential_kwargs.items() if name != "login"
+            }
+            login_kwargs["timeout"] = timeout_milliseconds
+            if not mt5.login(int(self.cfg.login), **login_kwargs):
+                error = mt5.last_error()
+                mt5.shutdown()
+                raise RuntimeError(f"mt5.login() failed after terminal initialization: {error}")
+            self.log.info(
+                "EVENT MT5_SEPARATE_LOGIN_SUCCEEDED account=%s login=%s",
+                self.account, self.cfg.login,
+            )
 
         terminal = mt5.terminal_info()
         account = mt5.account_info()

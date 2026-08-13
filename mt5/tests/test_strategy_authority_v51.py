@@ -40,6 +40,7 @@ def strategy_config():
         timezone_name="Europe/Warsaw", market_timezone_name="America/New_York",
         premarket_start=time(0, 0), cash_open=time(9, 30), close_bar_open=time(16, 0),
         entry_action_lead_seconds=3.0, non_entry_action_lead_seconds=3.0, entry_window_seconds=55,
+        market_order_priority_delay_seconds=0.0,
         base_leverage=8, loss_leverage=10, full_week_loss_trigger=-0.025,
         previous_trade_loss_trigger=-0.007, sizing_multiplier=20.0,
         entry_rule_arithmetic_threshold=0.02, entry_rule_gap_threshold=0.01,
@@ -109,6 +110,33 @@ class StrategySpecificationTests(unittest.TestCase):
         self.assertEqual(1.5, sizing["growthRequiredBalanceMultiplier"])
         self.assertEqual("GROWTH_1_500", sizing["activeProfile"])
         self.assertEqual("growthRequiredBalanceMultiplier", sizing["activeRequiredBalanceMultiplierRule"])
+
+    def test_account_symbol_overrides_are_recorded_in_specification(self):
+        strategy = self.strategy()
+        bossa_hash = strategy.strategy_specification["specHash"]
+        strategy.cfg.trade_symbol = "US100.pro"
+        strategy.cfg.signal_symbol = "US100.pro"
+
+        specification = strategy.build_strategy_specification()
+
+        self.assertEqual("US100.pro", specification["document"]["instruments"]["execution"])
+        self.assertEqual("US100.pro", specification["document"]["instruments"]["signal"])
+        self.assertNotEqual(bossa_hash, specification["specHash"])
+
+    def test_market_order_priority_delay_is_effective_and_audited(self):
+        strategy = self.strategy()
+        strategy.cfg.market_order_priority_delay_seconds = 0.5
+        strategy.log = Mock()
+
+        with patch("mt5.oppw_core.broker_execution.time_module.sleep") as sleep:
+            strategy.wait_for_market_order_priority("BUY")
+
+        sleep.assert_called_once_with(0.5)
+        specification = strategy.build_strategy_specification()
+        self.assertEqual(
+            0.5,
+            specification["document"]["calendarAndTime"]["marketOrderPriorityDelaySeconds"],
+        )
 
     def test_required_balance_override_changes_maximum_effective_exposure(self):
         strategy = self.strategy()

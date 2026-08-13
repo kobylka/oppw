@@ -36,6 +36,12 @@ from .utilities import (
 from .versioning import BUILD_ID, PROJECT_VERSION
 
 
+def format_lot_volume(value: Any) -> str:
+    """Render broker lot precision without hiding sub-0.01 volume steps."""
+    rendered = f"{float(value):.8f}".rstrip("0").rstrip(".")
+    return rendered if rendered else "0"
+
+
 class MonitoringMixin:
     def format_status(self, reason: str, position, now: datetime, current_bar: Optional[M1Bar] = None) -> str:
         due, due_reason, final_day = self.weekly_exit_status(position, now)
@@ -53,11 +59,11 @@ class MonitoringMixin:
             leverage_reason = str(preview["leverageReason"])
             if bool(preview["available"]):
                 potential_lines = [
-                    f"next potential position: BUY {float(preview['volume']):.2f} lot {preview['symbol']} @ {float(preview['price']):.5f}",
+                    f"next potential position: BUY {format_lot_volume(preview['volume'])} lot {preview['symbol']} @ {float(preview['price']):.5f}",
                     f"required deposit: {float(preview['requiredDeposit']):.2f}{currency_suffix}",
                     f"required balance: {float(preview['requiredBalance']):.2f}{currency_suffix} ({float(preview.get('requiredBalanceMultiplier') or self.required_balance_multiplier(int(preview.get('strategyLeverage') or self.cfg.base_leverage))):.3f} Ă— deposit)",
                     f"balance headroom: {float(preview['requiredBalanceHeadroom']):.2f}{currency_suffix}",
-                    f"next volume step: {float(preview['nextVolumeStep']):.2f} lot requires balance {float(preview['nextVolumeStepRequiredBalance']):.2f}{currency_suffix}",
+                    f"next volume step: {format_lot_volume(preview['nextVolumeStep'])} lot requires balance {float(preview['nextVolumeStepRequiredBalance']):.2f}{currency_suffix}",
                     f"effective leverage: {float(preview['effectiveLeverage']):.4f}x ({float(self.cfg.sizing_multiplier):g} Ă— required deposit / balance)",
                     f"potential hard SL: {float(preview['potentialStopLossPrice']):.5f} ({float(preview['potentialStopLossPercent']):.4f}%)",
                     f"potential SL cash P/L: {float(preview['potentialStopLossCash']):.2f}{currency_suffix}",
@@ -131,7 +137,7 @@ class MonitoringMixin:
             f"phase: {phase} protection regime: {regime}",
             f"time: {now:%Y-%m-%d %H:%M:%S %Z} week: {iso_week_key(now.date())}",
             f"closest condition: {closest}",
-            f"position: {float(position.volume):.2f} lot {position.symbol}",
+            f"position: {format_lot_volume(position.volume)} lot {position.symbol}",
             f"leverage: {leverage}x",
             f"opened: {opened:%Y-%m-%d %H:%M:%S %Z}",
             f"open price: {entry:.5f}",

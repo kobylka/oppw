@@ -52,6 +52,9 @@ ENVIRONMENT_VARIABLES = {
     "reconnect_seconds": "OPPW_RECONNECT_SECONDS",
     "maximum_tick_age_seconds": "OPPW_MAX_TICK_AGE_SECONDS",
     "request_retry_seconds": "OPPW_REQUEST_RETRY_SECONDS",
+    "mt5_initialize_timeout_seconds": "OPPW_MT5_INITIALIZE_TIMEOUT_SECONDS",
+    "market_order_priority_delay_seconds": "OPPW_MARKET_ORDER_PRIORITY_DELAY_SECONDS",
+    "separate_mt5_login_after_initialize": "OPPW_SEPARATE_MT5_LOGIN_AFTER_INITIALIZE",
     "entry_action_lead_seconds": "OPPW_ENTRY_ACTION_LEAD_SECONDS",
     "non_entry_action_lead_seconds": "OPPW_NON_ENTRY_ACTION_LEAD_SECONDS",
     "base_leverage": "OPPW_BASE_LEVERAGE",
@@ -325,6 +328,12 @@ def validate_config(config) -> None:
         )
     if float(config.trade_gate_ttl_seconds) <= 0:
         raise RuntimeError("trade_gate_ttl_seconds must be positive")
+    if not 1 <= float(config.high_risk_warning_timeout_seconds) <= 180:
+        raise RuntimeError("high_risk_warning_timeout_seconds must be between 1 and 180")
+    if not 5 <= float(config.mt5_initialize_timeout_seconds) <= 140:
+        raise RuntimeError("mt5_initialize_timeout_seconds must be between 5 and 140")
+    if not 0 <= float(config.market_order_priority_delay_seconds) <= 5:
+        raise RuntimeError("market_order_priority_delay_seconds must be between 0 and 5")
     if not 0 < float(config.trade_gate_max_hold_seconds) < float(config.trade_gate_ttl_seconds):
         raise RuntimeError("trade_gate_max_hold_seconds must be positive and less than trade_gate_ttl_seconds")
 

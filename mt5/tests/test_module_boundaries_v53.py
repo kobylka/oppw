@@ -7,7 +7,7 @@ import sys
 import types
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 def load_strategy_module():
@@ -61,6 +61,56 @@ class ModuleBoundaryTests(unittest.TestCase):
         self.assertEqual("", legacy.account_key)
         self.assertEqual("real", named.account)
         self.assertEqual("REAL_PROP", named.account_key)
+
+    def test_connect_forwards_configured_initialize_timeout_in_milliseconds(self):
+        strategy = MODULE.OPPWContinuousStrategy.__new__(MODULE.OPPWContinuousStrategy)
+        strategy.account = "DEMO_TMS"
+        strategy.cfg = SimpleNamespace(
+            terminal_path=r"D:\oppw\mt5\demo_tms\MetaTrader 5\terminal64.exe",
+            login=123,
+            password="password",
+            server="server",
+            mt5_initialize_timeout_seconds=120.0,
+            separate_mt5_login_after_initialize=False,
+            auto_acknowledge_high_risk_warning=False,
+        )
+        with patch.object(MODULE.mt5, "initialize", return_value=False, create=True) as initialize, patch.object(
+            MODULE.mt5, "last_error", return_value=(-10005, "IPC timeout"), create=True
+        ):
+            with self.assertRaisesRegex(RuntimeError, "IPC timeout"):
+                strategy.connect()
+        initialize.assert_called_once_with(
+            strategy.cfg.terminal_path,
+            login=123,
+            password="password",
+            server="server",
+            timeout=120000,
+        )
+
+    def test_tms_two_phase_connect_attaches_before_broker_login(self):
+        strategy = MODULE.OPPWContinuousStrategy.__new__(MODULE.OPPWContinuousStrategy)
+        strategy.account = "DEMO_TMS"
+        strategy.cfg = SimpleNamespace(
+            terminal_path=r"D:\oppw\mt5\demo_tms\MetaTrader 5\terminal64.exe",
+            login=123,
+            password="password",
+            server="server",
+            mt5_initialize_timeout_seconds=120.0,
+            separate_mt5_login_after_initialize=True,
+            auto_acknowledge_high_risk_warning=False,
+        )
+        strategy.log = Mock()
+        with patch.object(MODULE.mt5, "initialize", return_value=True, create=True) as initialize, patch.object(
+            MODULE.mt5, "login", return_value=False, create=True
+        ) as login, patch.object(
+            MODULE.mt5, "last_error", return_value=(-6, "authorization failed"), create=True
+        ), patch.object(MODULE.mt5, "shutdown", create=True) as shutdown:
+            with self.assertRaisesRegex(RuntimeError, "authorization failed"):
+                strategy.connect()
+
+        initialize.assert_called_once_with(strategy.cfg.terminal_path, timeout=120000)
+        login.assert_called_once_with(123, password="password", server="server", timeout=120000)
+        shutdown.assert_called_once_with()
 
     def test_strategy_methods_are_owned_by_cohesive_modules(self):
         strategy = MODULE.OPPWContinuousStrategy

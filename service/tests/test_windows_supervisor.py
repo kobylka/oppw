@@ -33,7 +33,7 @@ class SupervisorConfigTests(unittest.TestCase):
             set(startup_order(accounts)),
         )
 
-    def test_named_accounts_are_validated_and_preserve_configured_startup_order(self):
+    def test_named_accounts_are_validated_and_apply_canonical_startup_priority(self):
         accounts = managed_accounts({
             "managedAccounts": [
                 {"accountKey": "DEMO_ALPHA", "accountType": "demo"},
@@ -47,6 +47,21 @@ class SupervisorConfigTests(unittest.TestCase):
                 ("DEMO_ALPHA", "PUBLISHER"), ("DEMO_BETA", "PUBLISHER"), ("REAL_PROP", "PUBLISHER"),
             ),
             startup_order(accounts),
+        )
+        priority_accounts = managed_accounts({"managedAccounts": [
+            {"accountKey": "DEMO", "accountType": "DEMO"},
+            {"accountKey": "DEMO_TMS", "accountType": "DEMO"},
+            {"accountKey": "REAL", "accountType": "REAL"},
+            {"accountKey": "REAL_TMS", "accountType": "REAL"},
+        ]})
+        self.assertEqual(
+            (
+                ("REAL", "EXECUTOR"), ("REAL_TMS", "EXECUTOR"),
+                ("DEMO", "EXECUTOR"), ("DEMO_TMS", "EXECUTOR"),
+                ("REAL", "PUBLISHER"), ("REAL_TMS", "PUBLISHER"),
+                ("DEMO", "PUBLISHER"), ("DEMO_TMS", "PUBLISHER"),
+            ),
+            startup_order(priority_accounts),
         )
         with self.assertRaisesRegex(RuntimeError, "Duplicate"):
             managed_accounts({"managedAccounts": [
@@ -128,13 +143,11 @@ class SupervisorConfigTests(unittest.TestCase):
         order = startup_order((ManagedAccount("DEMO", "DEMO"), ManagedAccount("REAL", "REAL")))
         assignments = {key: True for key in order}
         states = {key: (False, False) for key in order}
-        self.assertEqual(("DEMO", "EXECUTOR"), next_start_key(order, assignments, states))
-        states[("DEMO", "EXECUTOR")] = (True, False)
-        self.assertIsNone(next_start_key(order, assignments, states))
-        states[("DEMO", "EXECUTOR")] = (True, True)
         self.assertEqual(("REAL", "EXECUTOR"), next_start_key(order, assignments, states))
+        states[("REAL", "EXECUTOR")] = (True, False)
+        self.assertIsNone(next_start_key(order, assignments, states))
         states[("REAL", "EXECUTOR")] = (True, True)
-        self.assertEqual(("DEMO", "PUBLISHER"), next_start_key(order, assignments, states))
+        self.assertEqual(("DEMO", "EXECUTOR"), next_start_key(order, assignments, states))
 
     def test_failed_demo_backoff_does_not_block_real_startup(self):
         order = startup_order((ManagedAccount("DEMO", "DEMO"), ManagedAccount("REAL", "REAL")))

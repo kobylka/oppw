@@ -56,6 +56,7 @@ class AccountConfigAuthorityTests(unittest.TestCase):
                 "server": "private-server",
                 "monitor_write_token": "private-token",
                 "poll_seconds": 0.4,
+                "auto_acknowledge_high_risk_warning": True,
                 "live_enabled": False,
             }
             config = build_account_config(
@@ -66,6 +67,7 @@ class AccountConfigAuthorityTests(unittest.TestCase):
             )
             self.assertEqual(0.7, config.poll_seconds)
             self.assertTrue(config.live_enabled)
+            self.assertTrue(config.auto_acknowledge_high_risk_warning)
             self.assertEqual(123, config.login)
             self.assertEqual(account_dir / "oppw_mt5_state.json", config.state_file)
 
@@ -82,7 +84,14 @@ class AccountConfigAuthorityTests(unittest.TestCase):
             beta = build_account_config(
                 "DEMO_BETA",
                 account_dir,
-                {"base_leverage": 10, "required_balance_multiplier": 1.5, "login": 202},
+                {
+                    "base_leverage": 10,
+                    "required_balance_multiplier": 1.5,
+                    "trade_symbol": "US100.pro",
+                    "signal_symbol": "US100.pro",
+                    "market_order_priority_delay_seconds": 0.5,
+                    "login": 202,
+                },
                 environ={},
             )
             alpha = scope_config_to_account(alpha, "DEMO_ALPHA")
@@ -99,6 +108,10 @@ class AccountConfigAuthorityTests(unittest.TestCase):
             self.assertEqual(10, beta.base_leverage)
             self.assertEqual(1.765, alpha.required_balance_multiplier)
             self.assertEqual(1.5, beta.required_balance_multiplier)
+            self.assertEqual("US100", alpha.trade_symbol)
+            self.assertEqual("US100.pro", beta.trade_symbol)
+            self.assertEqual("US100.pro", beta.signal_symbol)
+            self.assertEqual(0.5, beta.market_order_priority_delay_seconds)
             self.assertNotEqual(alpha.state_file, beta.state_file)
             self.assertNotEqual(alpha.log_dir, beta.log_dir)
 

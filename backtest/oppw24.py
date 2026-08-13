@@ -294,20 +294,20 @@ class Sim:
                 SL = 0.95
                 
                 if self.leverage_override and LEVERAGE == 10:
-                    granular = int((self.balance/1.5/200))*200
+                    granular = int((self.balance/1.5/115))*115
                     SL = 0.9465
                 elif self.leverage_override:
-                    granular = int((self.balance/1.5/200))*200
+                    granular = int((self.balance/1.5/115))*115
                     SL = 0.9465
                 else:
-                    granular = int((self.balance/(20/LEVERAGE)/200))*200
-                #granular = int((self.balance/(20/LEVERAGE)/200)+1)*200
+                    granular = int((self.balance/(20/LEVERAGE)/115))*115
+                #granular = int((self.balance/(20/LEVERAGE)/115)+1)*115
                 #if(round(20/(self.balance/granular), 2) < 3):
-                #    granular = int((self.balance/(20/LEVERAGE)/200)+2)*200
+                #    granular = int((self.balance/(20/LEVERAGE)/115)+2)*115
                 #if(round(20/(self.balance/granular), 2) < 3):
-                 #   granular = int((self.balance/(20/LEVERAGE)/200)+3)*200
+                 #   granular = int((self.balance/(20/LEVERAGE)/115)+3)*115
                 #if(LEVERAGE == 10):
-                    #granular = int((self.balance/1.396/200))*200
+                    #granular = int((self.balance/1.396/115))*115
                     
                 effective_leverage = round(20/(self.balance/granular), 2)
                     
@@ -672,13 +672,13 @@ class Sim:
             SL = 0.95
 
             if self.leverage_override and LEVERAGE == 10:
-                granular = int((self.balance/1.5/200))*200
+                granular = int((self.balance/1.5/115))*115
                 SL = 0.9465
             elif self.leverage_override:
-                granular = int((self.balance/1.5/200))*200
+                granular = int((self.balance/1.5/115))*115
                 SL = 0.9465
             else:
-                granular = int(self.balance / (20 / LEVERAGE) / 200) * 200
+                granular = int(self.balance / (20 / LEVERAGE) / 115) * 115
                 granular *= 20 / LEVERAGE
 
             if granular == 0 and self.balance < initial_balance:
@@ -902,8 +902,8 @@ class Sim:
                 #        self.deposited += 3000
                 #        self.balance += 3000
                 if(self.deposited < 200000 and (self.prev_full_week_change < -0.02 or self.prev_change < -0.007) and allow_deposits):
-                    granular = int((self.balance/1.5/200))
-                    plus_one = int(200*(granular+1)*1.5-self.balance+20)
+                    granular = int((self.balance/1.5/115))
+                    plus_one = int(115*(granular+1)*1.5-self.balance+20)
                     
                     self.deposited += plus_one
                     self.balance += plus_one
@@ -1168,7 +1168,7 @@ def run_backtest(
     result = sim.process(
         sim_i.quotes,
         "QQQ",
-        "20220103",
+        "20250102",
         "20260813",
         LEVERAGE,
         tpps,
@@ -1176,8 +1176,8 @@ def run_backtest(
         BE,
         0.004,
         0.004,
-        initial_balance=300,
-        allow_deposits=True,
+        initial_balance=580,
+        allow_deposits=False,
         apply_tax=True,
         debug=debug,
         plots=plots,

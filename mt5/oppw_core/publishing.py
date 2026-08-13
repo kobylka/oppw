@@ -19,6 +19,9 @@ from zoneinfo import ZoneInfo
 from .coordination import BackendLeaseCoordinator
 from .versioning import BUILD_ID, INSTANCE_MODE_PUBLISHER
 
+SNAPSHOT_EQUITY_HISTORY_FALLBACK_POINTS = 144
+
+
 class MobileMonitorPublisher:
     """Asynchronous publisher coordinated exclusively by global MySQL leases."""
 
@@ -277,7 +280,13 @@ class MobileMonitorPublisher:
                 -max(1, self.cfg.monitor_equity_history_points):
             ]
             self.save_equity_history()
-        snapshot["equityHistory"] = list(self.equity_history)
+        # The backend constructs authoritative daily, weekly, and all-time
+        # curves from strategy_equity_points. Keep only a bounded compatibility
+        # fallback in the snapshot; embedding the full 10,080-point local
+        # history can exceed ingest.php's deliberate 512 KiB request limit.
+        snapshot["equityHistory"] = list(
+            self.equity_history[-SNAPSHOT_EQUITY_HISTORY_FALLBACK_POINTS:]
+        )
 
     @staticmethod
     def public_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:

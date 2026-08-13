@@ -192,6 +192,7 @@ def main() -> int:
         "strategy_decision.py",
         "utilities.py",
         "versioning.py",
+        "windows_ui.py",
     }
     core_dir = root / "mt5" / "oppw_core"
     actual_core_modules = {

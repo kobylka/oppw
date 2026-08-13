@@ -74,12 +74,20 @@ Set the five private constants in each ignored file: terminal path, login, passw
 ```python
 OVERRIDES = {
     "config_name": "DEMO TMS",  # use "REAL TMS" in the Real file
+    "auto_acknowledge_high_risk_warning": True,
+    "mt5_initialize_timeout_seconds": 120.0,
+    "high_risk_warning_timeout_seconds": 120.0,
+    "separate_mt5_login_after_initialize": True,
     "required_balance_multiplier": 1.5,
+    "trade_symbol": "US100.pro",
+    "signal_symbol": "US100.pro",
     "live_enabled": False,
 }
 ```
 
 Do not copy the canonical `Config` class and never commit or transmit these files. Terminal paths may differ between nodes, but account identity and strategy overrides must agree.
+
+`auto_acknowledge_high_risk_warning` is an explicit authorization to tick and confirm the exact Polish leveraged-instrument risk warning during MT5 startup. It is disabled by default and must not be enabled for an account unless its operator is authorized to make that acknowledgement. Successful use is logged as `HIGH_RISK_WARNING_ACKNOWLEDGED`.
 
 Because environment values outrank private overrides and are shared by every child of a supervisor, check the runtime user's User and Machine environment scopes. Remove stale account-specific `OPPW_*` overrides, especially `OPPW_REQUIRED_BALANCE_MULTIPLIER`, `OPPW_LIVE`, `OPPW_TERMINAL_PATH`, and `OPPW_LOGIN`. Per-account differences belong in the private files.
 

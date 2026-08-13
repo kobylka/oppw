@@ -27,6 +27,11 @@ MONITOR_WRITE_TOKEN = ""
 # Field names are validated strictly; unknown names stop startup.
 OVERRIDES = {
     # "live_enabled": True,
+    # Explicit legal acknowledgement opt-in for a broker's exact MT5 risk-warning dialog:
+    # "auto_acknowledge_high_risk_warning": True,
+    # "mt5_initialize_timeout_seconds": 120.0,
+    # "market_order_priority_delay_seconds": 0.0,
+    # "separate_mt5_login_after_initialize": True,
     # "entry_action_lead_seconds": 3.0,
     # "monitor_enabled": True,
 }

@@ -37,6 +37,11 @@ class Config:
     reconnect_seconds: float = 3.0
     maximum_tick_age_seconds: float = 10.0
     request_retry_seconds: float = 1.0
+    mt5_initialize_timeout_seconds: float = 60.0
+    separate_mt5_login_after_initialize: bool = False
+    auto_acknowledge_high_risk_warning: bool = False
+    high_risk_warning_timeout_seconds: float = 90.0
+    market_order_priority_delay_seconds: float = 0.0
 
     # Independent execution clocks
     entry_action_lead_seconds: float = 3.0

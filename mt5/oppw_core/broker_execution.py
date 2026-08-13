@@ -37,6 +37,16 @@ from .versioning import BUILD_ID, PROJECT_VERSION
 
 
 class BrokerExecutionMixin:
+    def wait_for_market_order_priority(self, action: str) -> None:
+        delay = float(getattr(self.cfg, "market_order_priority_delay_seconds", 0.0))
+        if delay <= 0:
+            return
+        self.log.info(
+            "EVENT MARKET_ORDER_PRIORITY_WAIT action=%s account=%s delay=%.3fs",
+            action, self.account, delay,
+        )
+        time_module.sleep(delay)
+
     def choose_leverage(self) -> int:
         return self.leverage_decision()[0]
 
@@ -626,6 +636,7 @@ class BrokerExecutionMixin:
             return False
         if not self.ensure_autotrading_enabled("BUY"):
             return False
+        self.wait_for_market_order_priority("BUY")
         if not self.request_allowed_now():
             return False
 
@@ -881,6 +892,7 @@ class BrokerExecutionMixin:
             return False
         if not self.ensure_autotrading_enabled(f"SELL_{reason}"):
             return False
+        self.wait_for_market_order_priority("SELL")
         if not self.request_allowed_now():
             return False
 

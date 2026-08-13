@@ -94,6 +94,16 @@ def bar_datetime_utc(date_key: str, bar_index: int) -> datetime:
 def load_module(path: Path) -> ModuleType:
     if not path.is_file():
         raise FileNotFoundError(f"oppw24.py not found: {path}")
+    # The export never requests plots, so keep this data-only tool usable on
+    # the production Python runtime where matplotlib is intentionally absent.
+    try:
+        import matplotlib.pyplot  # noqa: F401
+    except ModuleNotFoundError:
+        matplotlib = ModuleType("matplotlib")
+        pyplot = ModuleType("matplotlib.pyplot")
+        matplotlib.pyplot = pyplot
+        sys.modules.setdefault("matplotlib", matplotlib)
+        sys.modules.setdefault("matplotlib.pyplot", pyplot)
     spec = importlib.util.spec_from_file_location("oppw24_export_source", path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Could not load Python module from {path}")
@@ -210,9 +220,12 @@ def make_exporting_sim(module: ModuleType, source_stock: str, ticket_base: int):
             leverage_f = float(LEVERAGE)
             balance_before = float(self.balance)
 
-            # This exactly mirrors oppw24.py: truncate toward zero to four decimals.
-            change = math.trunc((close_price_f / open_price_f - 1.0) * 10000.0) / 10000.0
-            granular = int(balance_before / 1.765 / 2240.0) * 2240
+            # This exactly mirrors oppw24.py: truncate toward zero to five decimals.
+            change = math.trunc((close_price_f / open_price_f - 1.0) * 100000.0) / 100000.0
+            if self.leverage_override:
+                granular = int(balance_before / 1.5 / 115.0) * 115
+            else:
+                granular = int(balance_before / (20.0 / leverage_f) / 115.0) * 115
             volume = granular / 2240.0 * 0.01
             profit = granular * 20.0 * change
             exit_reason = str(trade_type or "MANUAL")[:100]
@@ -505,17 +518,27 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--quotes", type=Path, default=Path("quotes.pkl"), help="Path to the quotes.pkl used by oppw24.py.")
     parser.add_argument("--output", type=Path, default=Path("oppw_trades_20260105_20260716.sql"), help="Output SQL file.")
     parser.add_argument("--start", type=parse_ymd, default="20250106", help="Inclusive start date.")
-    parser.add_argument("--end", type=parse_ymd, default="20260717", help="Inclusive end date.")
-    parser.add_argument("--account", default="DEMO", help="monitor_accounts.account_key, normally REAL or DEMO.")
+    parser.add_argument("--end", type=parse_ymd, default="20260812", help="Inclusive end date.")
+    parser.add_argument("--account", default="DEMO_TMS", help="monitor_accounts.account_key, normally REAL or DEMO.")
     parser.add_argument("--database", default="oppw_monitor", help="MySQL database name.")
     parser.add_argument("--source-stock", default="QQQ", help="Key passed to oppw24.py Sim.process.")
     parser.add_argument("--db-symbol", default="US100", help="Symbol written to strategy_trades.")
-    parser.add_argument("--base-leverage", type=float, default=8.0, help="Matches codex/v48 oppw24.py main block.")
-    parser.add_argument("--initial-balance", type=float, default=16000.0, help="Matches codex/v48 oppw24.py main block.")
+    parser.add_argument("--base-leverage", type=float, default=13.33, help="Matches codex/v48 oppw24.py main block.")
+    parser.add_argument("--initial-balance", type=float, default=580.0, help="Matches codex/v48 oppw24.py main block.")
     parser.add_argument("--tpps", type=parse_tpps, default=DEFAULT_TPPS, help="Comma-separated TPP values.")
     parser.add_argument("--be", type=float, default=0.996, help="Break-even ratio.")
     parser.add_argument("--thursday-stop", type=float, default=0.004, help="Thursday stop fraction.")
     parser.add_argument("--friday-stop", type=float, default=0.004, help="Friday stop fraction.")
+    parser.add_argument(
+        "--leverage-override",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Match oppw24.py's fixed 1.5 balance divisor and 0.9465 hard stop (default: enabled).",
+    )
+    parser.add_argument("--arithmetic-last-two", action="store_true", help="Match oppw24.py's arithmetic loss protection.")
+    parser.add_argument("--gap-momentum", action="store_true", help="Match oppw24.py's gap/momentum protection.")
+    parser.add_argument("--tuesday-normalization", action="store_true", help="Match oppw24.py's Tuesday re-entry protection.")
+    parser.add_argument("--premarket-low", action="store_true", help="Match oppw24.py's combined premarket-low protection.")
     parser.add_argument("--ticket-base", type=int, default=0, help="Base for deterministic synthetic tickets.")
     parser.add_argument("--equity-batch-size", type=int, default=DEFAULT_EQUITY_BATCH_SIZE, help="Maximum strategy_equity_points rows per INSERT statement.")
     return parser
@@ -559,6 +582,12 @@ def main() -> int:
         False,
         False,
         False,
+        loss_control_lookback=2 if args.arithmetic_last_two else None,
+        arithmetic_loss_control_enabled=args.arithmetic_last_two,
+        gap_momentum_enabled=args.gap_momentum,
+        tuesday_normalization_enabled=args.tuesday_normalization,
+        premarket_low_enabled=args.premarket_low,
+        leverage_override=args.leverage_override,
     )
 
     trades = sorted(sim.captured_trades, key=lambda item: (item.opened_at_utc, item.ticket))
@@ -575,7 +604,8 @@ def main() -> int:
     if missing:
         readable = ", ".join(f"{item[:4]}-{item[4:6]}-{item[6:]}" for item in missing)
         print(
-            "Warning: no closed trade was produced for these weekly entries: "
+            "Warning: no closed trade was produced for these weekly entries "
+            "(an enabled entry protection may have intentionally skipped the week): "
             + readable
             + ". A position may still have been open at the inclusive end date.",
             file=sys.stderr,

@@ -609,6 +609,7 @@ class StrategyDecisionMixin:
                 "cashCloseFallback": self.cfg.close_bar_open.isoformat(),
                 "entryLeadSeconds": float(self.cfg.entry_action_lead_seconds),
                 "nonEntryLeadSeconds": float(self.cfg.non_entry_action_lead_seconds),
+                "marketOrderPriorityDelaySeconds": float(self.cfg.market_order_priority_delay_seconds),
                 "entryWindowSeconds": int(self.cfg.entry_window_seconds),
                 "entryDayRule": "FIRST_XNYS_SESSION_OF_WEEK; Monday when open, otherwise the first later XNYS session after any closure sequence",
                 "signalOpenRule": "EXACT_ENTRY_SESSION_CASH_OPEN_M1; deferred without fill-price fallback",

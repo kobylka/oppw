@@ -24,6 +24,7 @@ ACCOUNT_TYPES = ("DEMO", "REAL")
 ACCOUNT_KEY_PATTERN = re.compile(r"^[A-Z0-9][A-Z0-9_-]{0,63}$")
 MAX_MANAGED_ACCOUNTS = 8
 ROLES = ("EXECUTOR", "PUBLISHER")
+ACCOUNT_START_PRIORITY = {"REAL": 0, "REAL_TMS": 1, "DEMO": 2, "DEMO_TMS": 3}
 
 
 @dataclass(frozen=True)
@@ -62,10 +63,18 @@ def managed_accounts(values: dict[str, Any]) -> tuple[ManagedAccount, ...]:
 
 
 def startup_order(accounts: tuple[ManagedAccount, ...]) -> tuple[tuple[str, str], ...]:
+    configured_position = {account.account_key: index for index, account in enumerate(accounts)}
+    prioritized = sorted(
+        accounts,
+        key=lambda account: (
+            ACCOUNT_START_PRIORITY.get(account.account_key, len(ACCOUNT_START_PRIORITY)),
+            configured_position[account.account_key],
+        ),
+    )
     return tuple(
         (account.account_key, role)
         for role in ROLES
-        for account in accounts
+        for account in prioritized
     )
 
 
@@ -217,7 +226,7 @@ class Supervisor:
         self.stop_grace = max(3.0, min(60.0, float(self.cfg.get("stopGraceSeconds", 15.0))))
         self.restart_delay = max(1.0, min(30.0, float(self.cfg.get("restartDelaySeconds", 5.0))))
         self.startup_ready_timeout = max(
-            30.0, min(180.0, float(self.cfg.get("startupReadyTimeoutSeconds", 90.0)))
+            30.0, min(180.0, float(self.cfg.get("startupReadyTimeoutSeconds", 150.0)))
         )
         self.startup_failure_backoff = max(
             15.0, min(300.0, float(self.cfg.get("startupFailureBackoffSeconds", 60.0)))

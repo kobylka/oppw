@@ -15,6 +15,12 @@ Changing a trading-relevant resolved value creates a different hash and a new im
 
 The resolved sizing document includes the active required-balance multiplier and profile. Bossa uses the canonical `1.765`; the prepared TMS account overrides use `1.5`. With `brokerExposureMultiplier = 20`, the latter permits a theoretical maximum effective exposure of `20 / 1.5 = 13.333x`, subject to broker volume steps and available margin. Each TMS account therefore produces and adopts a specification hash distinct from Bossa.
 
+Instrument names are resolved per broker account. Bossa uses `US100` for execution and signal data; both TMS accounts use the OANDA TMS symbol `US100.pro` for execution and signal data. The resolved symbols are included in each immutable strategy specification and therefore produce separate TMS specification hashes.
+
+Order volume is normalized from each broker symbol's reported `volume_min`, `volume_step`, and `volume_max`. OANDA TMS currently reports a `0.001` lot step for `US100.pro`; status output preserves that precision instead of rounding it to two decimal places.
+
+Concurrent account market-order priority is REAL BOSSA, REAL TMS, DEMO BOSSA, then DEMO TMS. Their resolved market-order delays are `0.0`, `0.1`, `1.0`, and `1.5` seconds and are included in each immutable specification. The delay applies to BUY and market SELL submission only; protective SL/TP installation and modification are never delayed.
+
 ## Session-order invariants
 
 - Four per-account entry-loss controls are read from MySQL before a controlled entry: `ARITHMETIC_LAST_TWO`, combined `GAP_MOMENTUM`, `TUESDAY_NORMALIZATION`, and combined `PREMARKET_LOW`.
