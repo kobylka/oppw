@@ -519,7 +519,6 @@ class StrategyDecisionMixin:
                 raise RuntimeError(f"No usable current price for {self.cfg.trade_symbol}")
 
             sizing = self.required_balance_sizing(balance, sizing_free_margin, info, price, leverage)
-            minimum_volume_notional = self.minimum_volume_notional(info, price)
             sizing_units = int(sizing["sizingUnits"])
             volume = float(sizing["volume"])
             required_deposit = float(sizing["requiredDeposit"])
@@ -558,7 +557,7 @@ class StrategyDecisionMixin:
                 "potentialStopLossRatio": stop_ratio, "potentialStopLossPrice": stop_price,
                 "potentialStopLossCash": stop_profit, "accountLossPercentAtStop": stop_profit / balance * 100.0 if balance > 0 else 0.0,
                 "accountLossCapApplied": account_loss_cap_applied, "accountLossCapPolicy": self.account_loss_cap_policy(),
-                "positionNotional": minimum_volume_notional * (float(volume) / float(info.volume_min)),
+                "positionNotional": self.position_notional(required_deposit),
                 "sizingUnits": int(sizing_units), "minimumVolumeFloor": False,
                 "scenarios": self.what_if_scenarios(float(volume), price, balance, stop_return),
             })

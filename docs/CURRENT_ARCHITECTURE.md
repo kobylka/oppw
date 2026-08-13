@@ -61,6 +61,8 @@ Broker-specific instrument names are also private account overrides. Bossa resol
 
 Sizing uses the selected symbol's MT5-reported minimum, step, and maximum volumes. Monitoring text renders the resulting volume without fixed two-decimal rounding so broker steps such as OANDA TMS `0.001` remain visible; this presentation rule does not alter the broker-derived sizing calculation.
 
+Potential notional is derived from the same current-price MT5 margin result as required deposit: `requiredDeposit × sizingMultiplier`. It therefore updates with broker margin and account-currency conversion. A simulated one-percent `order_calc_profit` is not used as an exposure proxy because broker CFD profit and margin contract models can differ.
+
 Android uses the same precision-preserving lot presentation for open positions and pre-trade what-if tickets: it renders up to eight broker decimals and removes only insignificant trailing zeroes. Values such as `0.002` and `0.295` therefore remain distinct instead of displaying as `0.00` or `0.30`.
 
 The publisher retains up to 10,080 local equity samples for restart continuity, but includes only the latest 144 as the snapshot's compatibility fallback. The backend constructs authoritative daily, weekly, and all-time curves from `strategy_equity_points`; bounding the redundant fallback keeps mature-account ingestion below the 512 KiB request limit.

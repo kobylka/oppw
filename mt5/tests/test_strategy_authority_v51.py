@@ -157,6 +157,7 @@ class StrategySpecificationTests(unittest.TestCase):
         self.assertEqual(150.0, sizing["requiredBalance"])
         self.assertEqual(1.5, sizing["requiredBalanceMultiplier"])
         self.assertAlmostEqual(20.0 / 1.5, effective_leverage)
+        self.assertEqual(2000.0, strategy.position_notional(sizing["requiredDeposit"]))
 
     def test_decision_is_immutably_linked_to_specification(self):
         strategy = self.strategy()

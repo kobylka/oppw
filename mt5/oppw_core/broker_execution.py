@@ -406,14 +406,9 @@ class BrokerExecutionMixin:
         self.state.save(self.cfg.state_file)
         self.log.info("EVENT PREVIOUS_FULL_WEEK_CHANGE_UPDATED value=%.5f", self.state.prev_full_week_change)
 
-    def minimum_volume_notional(self, info, ask: float) -> float:
-        minimum_volume = float(info.volume_min)
-        if minimum_volume <= 0:
-            raise RuntimeError(f"Invalid minimum volume for {self.cfg.trade_symbol}: {minimum_volume}")
-        profit_for_one_percent = mt5.order_calc_profit(mt5.ORDER_TYPE_BUY, self.cfg.trade_symbol, minimum_volume, ask, ask * 1.01)
-        if profit_for_one_percent is None or abs(profit_for_one_percent) <= 0:
-            raise RuntimeError(f"Cannot derive minimum-volume notional: {mt5.last_error()}")
-        return abs(float(profit_for_one_percent)) / 0.01
+    def position_notional(self, required_deposit: float) -> float:
+        """Return broker exposure using the same margin authority as sizing."""
+        return max(0.0, float(required_deposit)) * float(self.cfg.sizing_multiplier)
 
     @staticmethod
     def normalized_volume(sizing_units: int, info) -> float:
@@ -588,7 +583,6 @@ class BrokerExecutionMixin:
 
         leverage = self.choose_leverage()
         ask = float(tick.ask)
-        minimum_volume_notional = self.minimum_volume_notional(info, ask)
         try:
             sizing = self.required_balance_sizing(
                 float(account.balance), max(0.0, float(getattr(account, "margin_free", 0.0) or 0.0)), info, ask, leverage,
@@ -607,7 +601,10 @@ class BrokerExecutionMixin:
         volume = float(sizing["volume"])
         required_deposit = float(sizing["requiredDeposit"])
         required_balance = float(sizing["requiredBalance"])
-        position_notional = minimum_volume_notional * (volume / float(info.volume_min))
+        minimum_volume_notional = self.position_notional(
+            float(sizing["minimumVolumeRequiredDeposit"])
+        )
+        position_notional = self.position_notional(required_deposit)
         tick_size = float(getattr(info, "trade_tick_size", 0.0) or info.point)
         sl, sl_profit, account_loss_cap_applied = self.capped_hard_stop(
             self.cfg.trade_symbol, volume, ask, float(account.balance), leverage, tick_size,

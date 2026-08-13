@@ -19,6 +19,8 @@ Instrument names are resolved per broker account. Bossa uses `US100` for executi
 
 Order volume is normalized from each broker symbol's reported `volume_min`, `volume_step`, and `volume_max`. OANDA TMS currently reports a `0.001` lot step for `US100.pro`; status output preserves that precision instead of rounding it to two decimal places.
 
+Potential notional uses the same MT5 margin authority as sizing: `requiredDeposit × brokerExposureMultiplier`. It must not be inferred from `order_calc_profit` for a hypothetical one-percent price move because CFD profit conversion is not the margin/exposure contract and can diverge across brokers. With the canonical multiplier `20`, a required deposit of `225.42` reports potential notional of `4,508.40` in account currency.
+
 Concurrent account market-order priority is REAL BOSSA, REAL TMS, DEMO BOSSA, then DEMO TMS. Their resolved market-order delays are `0.0`, `0.1`, `1.0`, and `1.5` seconds and are included in each immutable specification. The delay applies to BUY and market SELL submission only; protective SL/TP installation and modification are never delayed.
 
 ## Session-order invariants
