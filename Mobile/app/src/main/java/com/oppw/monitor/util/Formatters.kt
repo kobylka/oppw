@@ -22,7 +22,7 @@ fun percent(value: Double): String = String.format(Locale.US, "%+.2f%%", value)
 fun unsignedPercent(value: Double): String = String.format(Locale.US, "%.2f%%", value)
 fun optionalPercent(value: Double?): String = value?.let(::percent) ?: "—"
 fun leverage(value: Double): String = if (value <= 0) "—" else String.format(Locale.US, "%.2fx", value)
-fun volume(value: Double): String = String.format(Locale.US, "%.2f", value)
+fun volume(value: Double): String = String.format(Locale.US, "%.8f", value).trimEnd('0').trimEnd('.')
 fun age(value: Double?): String = value?.let { String.format(Locale.US, "%.1fs", max(0.0, it)) } ?: "—"
 
 fun priceHealth(ageSeconds: Double?, warningAfterSeconds: Double = 60.0): String = when {
