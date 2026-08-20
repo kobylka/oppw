@@ -13,7 +13,7 @@ private val number = NumberFormat.getNumberInstance(Locale.US).apply {
     minimumFractionDigits = 2
     maximumFractionDigits = 2
 }
-private val deviceZone: ZoneId get() = ZoneId.systemDefault()
+private val displayZone: ZoneId = ZoneId.of("Europe/Warsaw")
 
 fun money(value: Double, currency: String): String = "${number.format(value)} $currency".trim()
 fun price(value: Double): String = if (value == 0.0) "—" else String.format(Locale.US, "%,.2f", value)
@@ -32,19 +32,19 @@ fun priceHealth(ageSeconds: Double?, warningAfterSeconds: Double = 60.0): String
 }
 
 fun shortDateTime(value: String): String = runCatching {
-    OffsetDateTime.parse(value).toInstant().atZone(deviceZone).format(DateTimeFormatter.ofPattern("dd MMM HH:mm:ss"))
+    OffsetDateTime.parse(value).toInstant().atZone(displayZone).format(DateTimeFormatter.ofPattern("dd MMM HH:mm:ss"))
 }.getOrDefault(value.ifBlank { "—" })
 
 fun executionDateTime(value: String): String = runCatching {
-    OffsetDateTime.parse(value).toInstant().atZone(deviceZone).format(DateTimeFormatter.ofPattern("dd MMM HH:mm:ss.SSS"))
+    OffsetDateTime.parse(value).toInstant().atZone(displayZone).format(DateTimeFormatter.ofPattern("dd MMM HH:mm:ss.SSS"))
 }.getOrDefault(value.ifBlank { "—" })
 
 fun dateOnly(value: String): String = runCatching {
-    OffsetDateTime.parse(value).toInstant().atZone(deviceZone).format(DateTimeFormatter.ofPattern("dd MMM yy"))
+    OffsetDateTime.parse(value).toInstant().atZone(displayZone).format(DateTimeFormatter.ofPattern("dd MMM yy"))
 }.getOrDefault(value.ifBlank { "—" })
 
 fun timeOnly(value: String): String = runCatching {
-    OffsetDateTime.parse(value).toInstant().atZone(deviceZone).format(DateTimeFormatter.ofPattern("HH:mm:ss"))
+    OffsetDateTime.parse(value).toInstant().atZone(displayZone).format(DateTimeFormatter.ofPattern("HH:mm:ss"))
 }.getOrDefault(value.ifBlank { "—" })
 
 fun humanProtection(value: String): String {

@@ -18,3 +18,10 @@ fun lifecycleAbsentStageLabel(stage: String, observedStages: Set<String>): Strin
     } else {
         "—"
     }
+
+fun lifecycleStageDisplayName(stage: String, result: Boolean?): String = when {
+    result != false -> stage
+    stage == "ACCEPTED" -> "REJECTED"
+    stage == "EXIT_ACCEPTED" -> "EXIT_REJECTED"
+    else -> stage
+}

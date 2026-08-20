@@ -66,6 +66,7 @@ import com.oppw.monitor.util.duration
 import com.oppw.monitor.util.executionDateTime
 import com.oppw.monitor.util.expectedOrderLifecycleStages
 import com.oppw.monitor.util.lifecycleAbsentStageLabel
+import com.oppw.monitor.util.lifecycleStageDisplayName
 import com.oppw.monitor.util.money
 import com.oppw.monitor.util.percent
 import com.oppw.monitor.util.price
@@ -651,7 +652,8 @@ private fun LifecycleStages(lifecycle: ExecutionLifecycle) {
     expectedOrderLifecycleStages.forEach { name ->
         val stage = stages[name]
         Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(if (stage == null) "○ $name" else if (stage.result == false) "× $name" else "● $name", color = when { stage == null -> TextSecondary; stage.result == false -> DangerRed; else -> BrightGreen })
+            val displayName = lifecycleStageDisplayName(name, stage?.result)
+            Text(if (stage == null) "○ $displayName" else if (stage.result == false) "× $displayName" else "● $displayName", color = when { stage == null -> TextSecondary; stage.result == false -> DangerRed; else -> BrightGreen })
             Text(stage?.let { executionDateTime(it.eventAt) } ?: lifecycleAbsentStageLabel(name, observedStages), color = TextSecondary)
         }
         if (stage != null && (stage.retcode.isNotBlank() || stage.fillingMode.isNotBlank() || stage.reason.isNotBlank())) {

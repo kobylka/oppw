@@ -6,6 +6,7 @@ import types
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
+from zoneinfo import ZoneInfo
 
 
 sys.modules.setdefault("exchange_calendars", types.ModuleType("exchange_calendars"))
@@ -164,6 +165,22 @@ class ClosedPositionContractTests(unittest.TestCase):
         stages = [call.args[0] for call in strategy.execution_stage.call_args_list]
         self.assertNotIn("EXIT_FILLED", stages)
         self.assertEqual(["CLOSED"], stages)
+
+    def test_broker_deal_wall_clock_is_converted_to_utc_with_warsaw_dst(self):
+        strategy = self.strategy()
+        strategy.tz = ZoneInfo("Europe/Warsaw")
+
+        summer_wall_clock = datetime(2026, 8, 19, 22, 0, 1, 412000, tzinfo=UTC)
+        winter_wall_clock = datetime(2026, 1, 19, 22, 0, 1, 412000, tzinfo=UTC)
+
+        self.assertEqual(
+            "2026-08-19T20:00:01.412000+00:00",
+            strategy.broker_deal_time(SimpleNamespace(time_msc=int(summer_wall_clock.timestamp() * 1000))),
+        )
+        self.assertEqual(
+            "2026-01-19T21:00:01.412000+00:00",
+            strategy.broker_deal_time(SimpleNamespace(time_msc=int(winter_wall_clock.timestamp() * 1000))),
+        )
 
     def test_missing_exact_deal_defers_reconciliation_without_clearing_state(self):
         strategy = MODULE.OPPWContinuousStrategy.__new__(MODULE.OPPWContinuousStrategy)

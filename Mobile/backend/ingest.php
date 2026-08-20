@@ -53,9 +53,15 @@ $normalizedEvents = [];
 foreach ($events as $event) {
     if (!is_array($event)) continue;
     $name = strtoupper(trim((string)($event['name'] ?? 'EVENT')));
-    $eventTime = normalize_datetime($event['time'] ?? null);
-    $message = substr((string)($event['message'] ?? ''), 0, 1000);
     $details = is_array($event['details'] ?? null) ? $event['details'] : [];
+    $executionEventAt = $name === 'EXECUTION_STAGE'
+        ? trim((string)($details['event_at'] ?? ''))
+        : '';
+    // Match events-ingest.php: the offset-bearing execution timestamp is
+    // authoritative. Log-envelope time can be a naive workstation clock and
+    // is only a fallback for historical producers without details.event_at.
+    $eventTime = normalize_datetime($executionEventAt !== '' ? $executionEventAt : ($event['time'] ?? null));
+    $message = substr((string)($event['message'] ?? ''), 0, 1000);
     if (str_starts_with($name, 'BUY') || str_starts_with($name, 'SELL') || $name === 'POSITION_CLOSED') $hasTradeEvent = true;
     if ($name === 'POSITION_CLOSED') $closedEvent = $event;
     if ($name === 'BUY_REQUEST' && is_numeric($details['ask'] ?? null)) $buyReference = (float)$details['ask'];

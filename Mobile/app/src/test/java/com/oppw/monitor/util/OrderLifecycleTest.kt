@@ -26,4 +26,12 @@ class OrderLifecycleTest {
     fun expectedOrderIncludesExactExitFill() {
         assertTrue("EXIT_FILLED" in expectedOrderLifecycleStages)
     }
+
+    @Test
+    fun failedAcceptanceStagesArePresentedAsRejections() {
+        assertEquals("REJECTED", lifecycleStageDisplayName("ACCEPTED", false))
+        assertEquals("EXIT_REJECTED", lifecycleStageDisplayName("EXIT_ACCEPTED", false))
+        assertEquals("EXIT_ACCEPTED", lifecycleStageDisplayName("EXIT_ACCEPTED", true))
+        assertEquals("EXIT_ACCEPTED", lifecycleStageDisplayName("EXIT_ACCEPTED", null))
+    }
 }

@@ -611,13 +611,12 @@ class PositionLifecycleMixin:
             return f"TSL_{float(self.cfg.tsl_stop) * 100.0:g}%" if str(reason).upper() == "TSL" else reason
         return self.state.exit_latched_reason or "broker/manual"
 
-    @staticmethod
-    def broker_deal_time(deal) -> str:
+    def broker_deal_time(self, deal) -> str:
         time_msc = int(getattr(deal, "time_msc", 0) or 0)
         timestamp = time_msc / 1000.0 if time_msc > 0 else float(getattr(deal, "time", 0) or 0)
         if timestamp <= 0:
             raise RuntimeError("Exact closing deal has no valid timestamp")
-        return datetime.fromtimestamp(timestamp, UTC).isoformat()
+        return self.mt5_timestamp_to_local(timestamp).astimezone(UTC).isoformat()
 
     def finalize_closed_position(self) -> bool:
         """Publish the exact broker close and then clear local position state.

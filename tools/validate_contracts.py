@@ -929,7 +929,20 @@ return [
             flat_payload["snapshot"]["position"] = None
             flat_payload["snapshot"]["market"]["currentPrice"] = exact_exit_fill
             flat_payload["snapshot"]["market"]["bid"] = exact_exit_fill
-            flat_payload["events"] = []
+            snapshot_stage_time = close_time + timedelta(milliseconds=250)
+            flat_payload["events"] = [{
+                # Snapshot ingestion must use the explicit offset-bearing
+                # stage time, not the disagreeing naive/log-envelope time.
+                "time": iso(snapshot_stage_time + timedelta(hours=2)),
+                "level": "INFO", "name": "EXECUTION_STAGE", "result": True,
+                "message": "contract snapshot execution timestamp authority",
+                "details": {
+                    "execution_id": fixture["executionId"], "decision_id": identities["decisionId"],
+                    "position_ticket": fixture["positionTicket"], "stage": "TIMESTAMP_PROBE",
+                    "result": True, "event_at": iso(snapshot_stage_time),
+                    "reason": "snapshot_explicit_event_at",
+                },
+            }]
             next_decision = copy.deepcopy(ingest_payload["strategyDecision"])
             next_decision["decisionId"] = hashlib.sha256(b"oppw-contract-next-decision").hexdigest()[:32]
             next_decision["recordedAt"] = iso(close_time + timedelta(milliseconds=500))
@@ -937,6 +950,20 @@ return [
             flat_payload["strategyDecision"] = next_decision
             flat_payload.pop("strategySpecification", None)
             http_json("POST", base_url + "ingest.php", flat_payload, token=WRITE_TOKEN, expected=(201,))
+            snapshot_stage_stored = docker_sql(
+                docker, container,
+                "SELECT DATE_FORMAT(occurred_at,'%Y-%m-%dT%H:%i:%s.%fZ') "
+                "FROM strategy_execution_stages WHERE strategy_key='DEMO' "
+                "AND execution_id=" + sql_text(fixture["executionId"]) + " "
+                "AND stage='TIMESTAMP_PROBE' ORDER BY id DESC LIMIT 1",
+                docker_env,
+            )
+            expected_snapshot_stage = snapshot_stage_time.strftime("%Y-%m-%dT%H:%M:%S.%f")[:23] + "000Z"
+            if snapshot_stage_stored != expected_snapshot_stage:
+                raise AssertionError(
+                    "snapshot ingestion ignored details.event_at: expected "
+                    f"{expected_snapshot_stage}, got {snapshot_stage_stored}"
+                )
             preserved_entry_decision = docker_sql(
                 docker, container,
                 "SELECT decision_id FROM strategy_trades WHERE strategy_key='DEMO' AND position_ticket="
