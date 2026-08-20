@@ -593,6 +593,9 @@ class StrategyDecisionMixin:
                 "entryLeadSeconds": float(self.cfg.entry_action_lead_seconds),
                 "nonEntryLeadSeconds": float(self.cfg.non_entry_action_lead_seconds),
                 "marketOrderPriorityDelaySeconds": float(self.cfg.market_order_priority_delay_seconds),
+                "tsl1preMarketExitDelaySeconds": float(
+                    getattr(self.cfg, "tsl1pre_market_exit_delay_seconds", 0.0)
+                ),
                 "entryWindowSeconds": int(self.cfg.entry_window_seconds),
                 "entryDayRule": "FIRST_XNYS_SESSION_OF_WEEK; Monday when open, otherwise the first later XNYS session after any closure sequence",
                 "signalOpenRule": "EXACT_ENTRY_SESSION_CASH_OPEN_M1; deferred without fill-price fallback",
@@ -677,6 +680,7 @@ class StrategyDecisionMixin:
                 "thursdayTslDistance": float(self.cfg.tsl_stop),
                 "thursdayTslFormula": "position fill price * (1 - thursdayTslDistance), active from Thursday date change",
                 "thursdayPremarketCrossedTslExitReason": "TSL1PRE",
+                "thursdayPremarketCrossedTslExecution": "when tsl1preMarketExitDelaySeconds is positive, immutably authorize at the threshold crossing and submit no earlier than that many seconds after the Thursday date change; retain and retry the market SELL through rejection or failover",
                 "hardStopPointsOverLeverage": float(self.cfg.leverage_stop_points),
                 "hardStopRatioOverride": float(getattr(self.cfg, "hard_stop_ratio_override", 0.0) or 0.0),
                 "hardStopRatioL10": float(self.hard_sl_ratio(int(self.cfg.loss_leverage))),

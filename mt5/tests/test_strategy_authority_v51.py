@@ -147,6 +147,7 @@ class StrategySpecificationTests(unittest.TestCase):
     def test_market_order_priority_delay_is_effective_and_audited(self):
         strategy = self.strategy()
         strategy.cfg.market_order_priority_delay_seconds = 0.5
+        strategy.cfg.tsl1pre_market_exit_delay_seconds = 60.0
         strategy.log = Mock()
 
         with patch("mt5.oppw_core.broker_execution.time_module.sleep") as sleep:
@@ -157,6 +158,10 @@ class StrategySpecificationTests(unittest.TestCase):
         self.assertEqual(
             0.5,
             specification["document"]["calendarAndTime"]["marketOrderPriorityDelaySeconds"],
+        )
+        self.assertEqual(
+            60.0,
+            specification["document"]["calendarAndTime"]["tsl1preMarketExitDelaySeconds"],
         )
 
     def test_required_balance_override_changes_maximum_effective_exposure(self):

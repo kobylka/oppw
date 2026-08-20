@@ -277,6 +277,12 @@ class PositionLifecycleMixin:
     def clear_current_position_exit_state(self, clear_last_exit: bool = True) -> None:
         self.state.exit_latched_reason = ""
         self.state.exit_latched_at = ""
+        self.state.pending_market_exit_reason = ""
+        self.state.pending_market_exit_position_identifier = 0
+        self.state.pending_market_exit_request_id = ""
+        self.state.pending_market_exit_triggered_at = ""
+        self.state.pending_market_exit_not_before = ""
+        self.state.pending_market_exit_inputs = {}
         self.state.active_sl_reason = ""
         self.state.active_tp_reason = ""
         self.state.active_sl_price = 0.0

@@ -31,6 +31,8 @@ OVERRIDES = {
     # "auto_acknowledge_high_risk_warning": True,
     # "mt5_initialize_timeout_seconds": 120.0,
     # "market_order_priority_delay_seconds": 0.0,
+    # Broker-specific delay from Thursday 00:00 before a crossed-TSL TSL1PRE SELL:
+    # "tsl1pre_market_exit_delay_seconds": 60.0,
     # "separate_mt5_login_after_initialize": True,
     # "entry_action_lead_seconds": 3.0,
     # Optional fixed hard-stop ratio; 0 keeps the leverage-dependent formula:

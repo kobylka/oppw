@@ -83,7 +83,7 @@ python .\mt5\oppw_mt5_continuous.py --mode executor --account demo --account-key
 python .\mt5\oppw_mt5_continuous.py --mode publisher --account real --account-key REAL_TMS
 ```
 
-The account key scopes backend leases, weekly claims, audit history, Mobile data, state, and logs. Put intentional strategy differences such as leverage, timing, sizing, protection, or `live_enabled` in that account file's `OVERRIDES`. Both prepared TMS files set `required_balance_multiplier` to `1.5` and `hard_stop_ratio_override` to `0.9465`; the Bossa accounts retain the canonical `1.765` and leverage-dependent hard-stop formula. With the normal broker-exposure multiplier of `20`, the TMS limit approaches `20 / 1.5 = 13.333x` effective exposure before broker volume-step and available-margin constraints. Use a separate MetaTrader installation/terminal path for every concurrently running broker login.
+The account key scopes backend leases, weekly claims, audit history, Mobile data, state, and logs. Put intentional strategy differences such as leverage, timing, sizing, protection, or `live_enabled` in that account file's `OVERRIDES`. Both prepared TMS files set `required_balance_multiplier` to `1.5`, `hard_stop_ratio_override` to `0.9465`, and `tsl1pre_market_exit_delay_seconds` to `60.0`; the Bossa accounts retain the canonical `1.765`, leverage-dependent hard-stop formula, and immediate TSL1PRE submission. With the normal broker-exposure multiplier of `20`, the TMS limit approaches `20 / 1.5 = 13.333x` effective exposure before broker volume-step and available-margin constraints. Use a separate MetaTrader installation/terminal path for every concurrently running broker login.
 
 ### Backend and database
 

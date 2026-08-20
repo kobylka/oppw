@@ -328,21 +328,27 @@ if ($action === 'recordPositionRuleTrigger') {
     require_write_token();
     $account = $validAccount($data['accountKey'] ?? '');
     $ruleKey = strtoupper(trim((string)($data['ruleKey'] ?? '')));
+    $isOr5Trigger = $ruleKey === 'OR5';
+    $isTsl1PreTrigger = $ruleKey === 'TSL1PRE';
     $requestId = strtolower(trim((string)($data['requestId'] ?? '')));
     $positionIdentifier = (int)($data['positionIdentifier'] ?? 0);
     $positionTicket = (int)($data['positionTicket'] ?? 0);
     $controlsRevision = (int)($data['controlsRevision'] ?? 0);
     $signalRaw = trim((string)($data['signalAt'] ?? ''));
     $inputs = $data['inputs'] ?? [];
-    if ($ruleKey !== 'OR5'
+    if ((!$isOr5Trigger && !$isTsl1PreTrigger)
         || !preg_match('/^[a-f0-9]{32}$/', $requestId)
         || $positionIdentifier <= 0
         || $positionTicket <= 0
-        || $controlsRevision <= 0
+        || ($isOr5Trigger && $controlsRevision <= 0)
+        || ($isTsl1PreTrigger && $controlsRevision !== 0)
         || $signalRaw === ''
         || !preg_match('/(?:Z|[+-]\d{2}:\d{2})$/', $signalRaw)
         || !is_array($inputs)) {
-        json_response(['ok' => false, 'error' => 'valid OR5 trigger identity, revision, signalAt and inputs required'], 400);
+        json_response(['ok' => false, 'error' => 'valid OR5 or TSL1PRE trigger identity, revision, signalAt and inputs required'], 400);
+    }
+    if ($isTsl1PreTrigger && !in_array($account, ['DEMO_TMS', 'REAL_TMS'], true)) {
+        json_response(['ok' => false, 'error' => 'TSL1PRE deferred exit authority is limited to TMS accounts'], 400);
     }
     try {
         $signalAt = new DateTimeImmutable($signalRaw);
@@ -381,14 +387,26 @@ if ($action === 'recordPositionRuleTrigger') {
         ]);
         $newRequest = $event->rowCount() === 1;
         if (!$newRequest) {
-            $existing = $db->prepare('SELECT payload_hash FROM strategy_position_rule_trigger_events WHERE request_id=? FOR UPDATE');
+            $existing = $db->prepare(
+                'SELECT strategy_key,rule_key,position_identifier,position_ticket,payload_hash
+                   FROM strategy_position_rule_trigger_events WHERE request_id=? FOR UPDATE'
+            );
             $existing->execute([$requestId]);
-            $existingHash = (string)($existing->fetchColumn() ?: '');
-            if ($existingHash === '' || !hash_equals($existingHash, $payloadHash)) {
+            $recorded = $existing->fetch();
+            $sameTsl1PreIntent = $isTsl1PreTrigger
+                && is_array($recorded)
+                && hash_equals((string)$recorded['strategy_key'], $account)
+                && hash_equals((string)$recorded['rule_key'], 'TSL1PRE')
+                && (int)$recorded['position_identifier'] === $positionIdentifier
+                && (int)$recorded['position_ticket'] === $positionTicket;
+            $sameImmutablePayload = is_array($recorded)
+                && (string)$recorded['payload_hash'] !== ''
+                && hash_equals((string)$recorded['payload_hash'], $payloadHash);
+            if (!$sameTsl1PreIntent && !$sameImmutablePayload) {
                 $db->rollBack();
                 json_response(['ok' => false, 'error' => 'requestId was already used for different position-rule trigger content'], 409);
             }
-        } else {
+        } elseif ($isOr5Trigger) {
             $currentControls = $db->prepare('SELECT revision,or5_enabled FROM strategy_position_rule_controls WHERE strategy_key=? FOR UPDATE');
             $currentControls->execute([$account]);
             $current = $currentControls->fetch();

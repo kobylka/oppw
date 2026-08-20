@@ -42,6 +42,10 @@ class Config:
     auto_acknowledge_high_risk_warning: bool = False
     high_risk_warning_timeout_seconds: float = 90.0
     market_order_priority_delay_seconds: float = 0.0
+    # Delay a Thursday premarket crossed-TSL market exit from the local date
+    # change. TMS accounts override this to 60 seconds because their broker
+    # accepts market orders from 00:01 Europe/Warsaw; Bossa remains immediate.
+    tsl1pre_market_exit_delay_seconds: float = 0.0
 
     # Independent execution clocks
     entry_action_lead_seconds: float = 3.0

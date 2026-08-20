@@ -80,6 +80,7 @@ OVERRIDES = {
     "separate_mt5_login_after_initialize": True,
     "required_balance_multiplier": 1.5,
     "hard_stop_ratio_override": 0.9465,
+    "tsl1pre_market_exit_delay_seconds": 60.0,
     "trade_symbol": "US100.pro",
     "signal_symbol": "US100.pro",
     "live_enabled": False,
@@ -148,6 +149,8 @@ The first rollout keeps TMS trading disabled. On Master, inspect `%ProgramData%\
 - TMS logs contain `CONFIG_PROFILE ... GROWTH_1_500`, `default_multiplier=1.500`, and `EVENT DRY_RUN live_enabled=false`;
 - Bossa logs still contain `GROWTH_1_765` and `default_multiplier=1.765`;
 - TMS `CONFIG_EFFECTIVE` reports `hard_stop_ratio_override: 0.9465`, while both Bossa accounts report `hard_stop_ratio_override: 0.0`;
+- TMS `CONFIG_EFFECTIVE` reports `tsl1pre_market_exit_delay_seconds: 60.0`, while both Bossa accounts retain `0.0`;
+- each TMS immutable strategy specification contains `tsl1preMarketExitDelaySeconds: 60.0`;
 - Mobile/API account lists show `DEMO BOSSA`, `REAL BOSSA`, `DEMO TMS`, and `REAL TMS` separately;
 - the latest TMS strategy specification contains `growthRequiredBalanceMultiplier: 1.5` and `activeProfile: GROWTH_1_500`;
 - no account shows login mismatch, symbol-selection failure, readiness timeout, or assignment-list mismatch.

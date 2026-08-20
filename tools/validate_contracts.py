@@ -416,6 +416,7 @@ return [
                 ("DEMO_ALPHA", "DEMO", "Demo Alpha", "10101", "30"),
                 ("DEMO_BETA", "DEMO", "Demo Beta", "20202", "40"),
                 ("REAL_PROP", "REAL", "Real Prop", "30303", "50"),
+                ("DEMO_TMS", "DEMO", "Demo TMS", "40404", "60"),
             ):
                 run([
                     php, str(root / "Mobile/backend/admin/register_account.php"),
@@ -426,10 +427,10 @@ return [
             registered_account_count = int(docker_sql(
                 docker, container,
                 "SELECT COUNT(*) FROM monitor_accounts WHERE enabled=TRUE "
-                "AND account_key IN ('DEMO_ALPHA','DEMO_BETA','REAL_PROP')",
+                "AND account_key IN ('DEMO_ALPHA','DEMO_BETA','REAL_PROP','DEMO_TMS')",
                 docker_env,
             ))
-            if registered_account_count != 3:
+            if registered_account_count != 4:
                 raise AssertionError("CLI multi-account registration did not persist all named accounts")
 
             pairing_hash = hmac.new(PAIRING_SECRET.encode(), PAIRING_CODE.encode(), hashlib.sha256).hexdigest()
@@ -710,6 +711,14 @@ return [
             }, token=WRITE_TOKEN)
             if executor_lease.get("acquired") is not True:
                 raise AssertionError(f"executor lease was not acquired: {executor_lease}")
+            tms_executor_owner_id = "e" * 32
+            _, tms_executor_lease, _ = http_json("POST", base_url + "coordination.php", {
+                "action": "acquireLease", "accountKey": "DEMO_TMS", "role": "EXECUTOR",
+                "ownerId": tms_executor_owner_id, "leaseName": "EXECUTOR", "ttlSeconds": 120,
+                "hostname": "contract", "pid": 3, "build": "oppw-" + version,
+            }, token=WRITE_TOKEN)
+            if tms_executor_lease.get("acquired") is not True:
+                raise AssertionError(f"TMS executor lease was not acquired: {tms_executor_lease}")
             or5_control_request_id = "4" * 32
             _, or5_control, _ = http_json("POST", base_url + "strategy-controls.php", {
                 "action": "setRule", "requestId": or5_control_request_id, "accountKey": "DEMO",
@@ -785,6 +794,70 @@ return [
             ))
             if or5_trigger_count != 1:
                 raise AssertionError("OR5 trigger authorization was not idempotent")
+
+            tsl1pre_trigger_request_id = "5" * 32
+            tsl1pre_signal_at = "2026-08-20T00:00:01+02:00"
+            tsl1pre_trigger = {
+                "action": "recordPositionRuleTrigger", "requestId": tsl1pre_trigger_request_id,
+                "accountKey": "DEMO_TMS", "ruleKey": "TSL1PRE",
+                "positionIdentifier": 777, "positionTicket": 778, "controlsRevision": 0,
+                "signalAt": tsl1pre_signal_at,
+                "inputs": {
+                    "triggeredAt": tsl1pre_signal_at,
+                    "notBefore": "2026-08-20T00:01:00+02:00",
+                    "referenceBid": 28884.0, "tslThreshold": 28884.0,
+                    "delaySeconds": 60.0, "timezone": "Europe/Warsaw",
+                    "priceSource": "FRESH_ACCOUNT_MT5_TICK",
+                },
+                "coordination": {
+                    "role": "EXECUTOR", "ownerId": tms_executor_owner_id,
+                    "fencingToken": int(tms_executor_lease["fencingToken"]),
+                },
+            }
+            http_json(
+                "POST", base_url + "strategy-controls.php",
+                {**tsl1pre_trigger, "accountKey": "DEMO", "requestId": "6" * 32,
+                 "coordination": {
+                     "role": "EXECUTOR", "ownerId": executor_owner_id,
+                     "fencingToken": int(executor_lease["fencingToken"]),
+                 }},
+                token=WRITE_TOKEN, expected=(400,),
+            )
+            _, tsl1pre_authorized, _ = http_json(
+                "POST", base_url + "strategy-controls.php", tsl1pre_trigger, token=WRITE_TOKEN,
+            )
+            if tsl1pre_authorized.get("positionTrigger", {}).get("requestId") != tsl1pre_trigger_request_id:
+                raise AssertionError("immutable TSL1PRE trigger authorization was not returned")
+            # Model a lost first response: the deterministic request is retried
+            # with a later observation, but the first immutable intent wins.
+            tsl1pre_retry = copy.deepcopy(tsl1pre_trigger)
+            tsl1pre_retry["signalAt"] = "2026-08-20T00:00:03+02:00"
+            tsl1pre_retry["inputs"]["triggeredAt"] = tsl1pre_retry["signalAt"]
+            _, tsl1pre_retried, _ = http_json(
+                "POST", base_url + "strategy-controls.php", tsl1pre_retry, token=WRITE_TOKEN,
+            )
+            if tsl1pre_retried.get("positionTrigger", {}).get("requestId") != tsl1pre_trigger_request_id:
+                raise AssertionError("TSL1PRE retry did not recover the first immutable authorization")
+            tms_context_query = urllib.parse.urlencode({
+                "accountKey": "DEMO_TMS", "positionIdentifier": 777,
+                "role": "EXECUTOR", "ownerId": tms_executor_owner_id,
+                "fencingToken": int(tms_executor_lease["fencingToken"]),
+            })
+            _, tsl1pre_recovered, _ = http_json(
+                "GET", base_url + "strategy-controls.php?" + tms_context_query,
+                token=WRITE_TOKEN,
+            )
+            recovered_tsl1pre = tsl1pre_recovered.get("positionTrigger", {})
+            if (recovered_tsl1pre.get("requestId") != tsl1pre_trigger_request_id
+                    or recovered_tsl1pre.get("inputs", {}).get("notBefore") != "2026-08-20T00:01:00+02:00"):
+                raise AssertionError("executor failover context could not recover the TSL1PRE authorization")
+            tsl1pre_trigger_count = int(docker_sql(
+                docker, container,
+                "SELECT COUNT(*) FROM strategy_position_rule_trigger_events WHERE request_id='" + tsl1pre_trigger_request_id + "'",
+                docker_env,
+            ))
+            if tsl1pre_trigger_count != 1:
+                raise AssertionError("TSL1PRE trigger authorization was not idempotent")
             current_iso = datetime.now(timezone.utc).isocalendar()
             entry_week = f"{current_iso.year:04d}-W{current_iso.week:02d}"
             entry_state_request_id = "7" * 32

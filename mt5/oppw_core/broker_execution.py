@@ -260,12 +260,27 @@ class BrokerExecutionMixin:
             identifier = int(trigger.get("positionIdentifier", 0) or 0)
             request_id = str(trigger.get("requestId", "") or "")
             if identifier > 0 and identifier == int(self.state.active_position_identifier or 0) and request_id:
-                self.state.or5_authorized_request_id = request_id
-                self.state.or5_authorized_position_identifier = identifier
-                self.state.or5_authorized_inputs = dict(trigger.get("inputs") or {})
-                if not self.state.exit_latched_reason:
-                    self.state.exit_latched_reason = "OR5"
-                    self.state.exit_latched_at = str(trigger.get("recordedAt", "") or datetime.now(self.tz).isoformat())
+                rule_key = str(trigger.get("ruleKey", "OR5") or "OR5").upper()
+                inputs = dict(trigger.get("inputs") or {})
+                recorded_at = str(trigger.get("recordedAt", "") or datetime.now(self.tz).isoformat())
+                if rule_key == "OR5":
+                    self.state.or5_authorized_request_id = request_id
+                    self.state.or5_authorized_position_identifier = identifier
+                    self.state.or5_authorized_inputs = inputs
+                    if not self.state.exit_latched_reason:
+                        self.state.exit_latched_reason = "OR5"
+                        self.state.exit_latched_at = recorded_at
+                elif rule_key == "TSL1PRE" and self.state.exit_latched_reason in ("", "TSL1PRE"):
+                    self.state.pending_market_exit_reason = "TSL1PRE"
+                    self.state.pending_market_exit_position_identifier = identifier
+                    self.state.pending_market_exit_request_id = request_id
+                    self.state.pending_market_exit_triggered_at = str(
+                        inputs.get("triggeredAt", trigger.get("signalAt", recorded_at)) or recorded_at
+                    )
+                    self.state.pending_market_exit_not_before = str(inputs.get("notBefore", "") or "")
+                    self.state.pending_market_exit_inputs = inputs
+                    self.state.exit_latched_reason = "TSL1PRE"
+                    self.state.exit_latched_at = self.state.pending_market_exit_triggered_at
                 if str(getattr(self, "role", "")).upper() == "EXECUTOR":
                     self.state.save(self.cfg.state_file)
         if changed:
@@ -461,6 +476,120 @@ class BrokerExecutionMixin:
             self.state.exit_latched_at = now.isoformat()
         self.state.save(self.cfg.state_file)
         return self.close_position_market(position, "OR5", now)
+
+    def pending_market_exit_matches(self, position, reason: str = "") -> bool:
+        pending_reason = str(getattr(self.state, "pending_market_exit_reason", "") or "")
+        return (
+            bool(pending_reason)
+            and (not reason or pending_reason == reason)
+            and int(getattr(self.state, "pending_market_exit_position_identifier", 0) or 0)
+            == self.position_identifier(position)
+        )
+
+    def pending_market_exit_due(self, now: datetime) -> bool:
+        raw = str(getattr(self.state, "pending_market_exit_not_before", "") or "")
+        if not raw:
+            return True
+        try:
+            boundary = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if boundary.tzinfo is None:
+                boundary = boundary.replace(tzinfo=self.tz)
+        except ValueError:
+            self.log.error("EVENT PENDING_MARKET_EXIT_INVALID_NOT_BEFORE value=%s action=retry_now", shlex.quote(raw))
+            return True
+        return now.astimezone(UTC) >= boundary.astimezone(UTC)
+
+    def maybe_execute_pending_market_exit(self, position, now: datetime) -> bool:
+        if position is None or not self.pending_market_exit_matches(position):
+            return False
+        reason = str(self.state.pending_market_exit_reason)
+        if self.state.exit_latched_reason not in ("", reason):
+            return False
+        self.state.exit_latched_reason = reason
+        if not self.state.exit_latched_at:
+            self.state.exit_latched_at = self.state.pending_market_exit_triggered_at or now.isoformat()
+        self.state.save(self.cfg.state_file)
+        if not self.pending_market_exit_due(now):
+            self.log.info(
+                "EVENT MARKET_EXIT_PENDING reason=%s position_identifier=%s not_before=%s action=retain_hard_sl",
+                reason, self.position_identifier(position), self.state.pending_market_exit_not_before,
+            )
+            return True
+        # A failed order_send deliberately leaves the immutable intent and
+        # latch intact. The next executor cycle retries the same market-exit
+        # reason instead of converting it to an EXIT_* SL/TP bracket.
+        return self.close_position_market(position, reason, now)
+
+    def record_tsl1pre_trigger(
+        self,
+        position,
+        now: datetime,
+        bid: float,
+        threshold: float,
+    ) -> dict[str, Any]:
+        identifier = self.position_identifier(position)
+        local_midnight = datetime.combine(now.date(), time.min, self.tz)
+        delay = max(0.0, float(getattr(self.cfg, "tsl1pre_market_exit_delay_seconds", 0.0)))
+        not_before = local_midnight + timedelta(seconds=delay)
+        request_source = "|".join((self.account, "TSL1PRE", str(identifier)))
+        inputs = {
+            "ruleKey": "TSL1PRE",
+            "positionIdentifier": identifier,
+            "positionTicket": int(position.ticket),
+            "triggeredAt": now.isoformat(),
+            "notBefore": not_before.isoformat(),
+            "referenceBid": float(bid),
+            "tslThreshold": float(threshold),
+            "delaySeconds": delay,
+            "timezone": self.cfg.timezone_name,
+            "priceSource": "FRESH_ACCOUNT_MT5_TICK",
+        }
+        response = self.entry_rule_backend_request(now.date(), {
+            "action": "recordPositionRuleTrigger",
+            "requestId": uuid.uuid5(uuid.NAMESPACE_URL, request_source).hex,
+            "ruleKey": "TSL1PRE",
+            "positionIdentifier": identifier,
+            "positionTicket": int(position.ticket),
+            "controlsRevision": 0,
+            "signalAt": now.isoformat(),
+            "inputs": inputs,
+        })
+        return self.apply_entry_rule_context(response)
+
+    def arm_tsl1pre_market_exit(
+        self,
+        position,
+        now: datetime,
+        bid: float,
+        threshold: float,
+    ) -> bool:
+        if not self.pending_market_exit_matches(position, "TSL1PRE"):
+            try:
+                response = self.record_tsl1pre_trigger(position, now, bid, threshold)
+            except Exception as exc:
+                self.log.error(
+                    "EVENT TSL1PRE_TRIGGER_AUTHORIZATION_FAILED position_identifier=%s action=retain_hard_sl error=%s",
+                    self.position_identifier(position), shlex.quote(str(exc)),
+                )
+                return True
+            if not self.pending_market_exit_matches(position, "TSL1PRE"):
+                self.log.error(
+                    "EVENT TSL1PRE_TRIGGER_AUTHORIZATION_MISSING position_identifier=%s action=retain_hard_sl",
+                    self.position_identifier(position),
+                )
+                return True
+            trigger = response.get("positionTrigger") if isinstance(response.get("positionTrigger"), dict) else {}
+            self.execution_stage(
+                "EXIT_SIGNAL", position_ticket=int(position.ticket), reference_price=bid,
+                scheduled_at=self.state.pending_market_exit_not_before, reason="TSL1PRE",
+            )
+            self.log.warning(
+                "EVENT TSL1PRE_EXIT_AUTHORIZED request_id=%s position_identifier=%s bid=%.5f "
+                "threshold=%.5f not_before=%s",
+                str(trigger.get("requestId", self.state.pending_market_exit_request_id)),
+                self.position_identifier(position), bid, threshold, self.state.pending_market_exit_not_before,
+            )
+        return self.maybe_execute_pending_market_exit(position, now)
 
     def evaluate_or5_completed_bar(self, position, now: datetime) -> bool:
         if self.or5_authorization_matches(position):
@@ -1463,7 +1592,10 @@ class BrokerExecutionMixin:
         return self.modify_sltp(position, sl, tp, f"EXIT_{reason}", reason, reason)
 
     def apply_standard_protection(self, position, now: datetime) -> bool:
-        if self.state.exit_latched_reason:
+        pending_market_exit = self.pending_market_exit_matches(position)
+        if pending_market_exit and self.pending_market_exit_due(now):
+            return self.maybe_execute_pending_market_exit(position, now)
+        if self.state.exit_latched_reason and not pending_market_exit:
             return self.apply_exit_bracket(position, self.state.exit_latched_reason)
 
         if not self.immutable_hard_stop_matches(position):
@@ -1482,6 +1614,12 @@ class BrokerExecutionMixin:
         ask = float(tick.ask)
 
         desired_sl, sl_reason = self.weekday_sl_target(position, now)
+        if pending_market_exit:
+            # The TMS broker is not yet accepting the deferred market SELL.
+            # Preserve or restore the immutable broker-side hard stop without
+            # attempting to install the already-crossed TSL itself.
+            desired_sl = self.hard_sl_price(position)
+            sl_reason = self.state.active_sl_reason or "SL"
         desired_tp = float(position.price_open) * self.cfg.break_even_ratio if self.state.break_even else 0.0
         tp_reason = "BH" if desired_tp > 0 else ""
         tolerance = max(tick_size * 0.5, float(info.point) * 0.5)
@@ -1514,6 +1652,11 @@ class BrokerExecutionMixin:
                     if now.weekday() == 3 and now < self.session_times(now.date()).cash_open
                     else "TSL"
                 )
+                if (
+                    tsl_exit_reason == "TSL1PRE"
+                    and float(getattr(self.cfg, "tsl1pre_market_exit_delay_seconds", 0.0)) > 0.0
+                ):
+                    return self.arm_tsl1pre_market_exit(position, now, bid, tsl_threshold)
                 return self.close_position_market(position, tsl_exit_reason, now)
 
             tsl_already_installed = (

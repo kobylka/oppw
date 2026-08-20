@@ -11,7 +11,7 @@ from pathlib import Path
 
 @dataclass
 class StrategyState:
-    version: int = 10
+    version: int = 11
 
     last_trading_date: str = ""
     last_close_processed_date: str = ""
@@ -34,6 +34,12 @@ class StrategyState:
     break_even: bool = False
     exit_latched_reason: str = ""
     exit_latched_at: str = ""
+    pending_market_exit_reason: str = ""
+    pending_market_exit_position_identifier: int = 0
+    pending_market_exit_request_id: str = ""
+    pending_market_exit_triggered_at: str = ""
+    pending_market_exit_not_before: str = ""
+    pending_market_exit_inputs: dict[str, object] = field(default_factory=dict)
 
     active_sl_reason: str = ""
     active_tp_reason: str = ""
