@@ -20,7 +20,7 @@ class DataLifecycleStaticTests(unittest.TestCase):
             order.index("migrate_v56_2_execution_lifecycle_links.sql"),
             order.index("migrate_v56_2_bossa_tms_accounts.sql"),
         )
-        self.assertEqual(order[-1], "migrate_v56_2_bossa_tms_accounts.sql")
+        self.assertEqual(order[-1], "migrate_v56_3_or5_position_rule.sql")
         accounts = (ROOT / "Mobile/backend/sql/migrate_v56_2_bossa_tms_accounts.sql").read_text(encoding="utf-8")
         for marker in ("DEMO BOSSA", "REAL BOSSA", "DEMO_TMS", "REAL_TMS", "FALSE, FALSE"):
             self.assertIn(marker, accounts)

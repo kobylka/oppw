@@ -558,6 +558,8 @@ return [
             )
             if len(publisher_entry_context.get("rules", [])) != 4:
                 raise AssertionError("publisher could not read all entry-loss controls")
+            if len(publisher_entry_context.get("positionRules", [])) != 1:
+                raise AssertionError("publisher could not read the OR5 position-loss control")
 
             for delivery in range(2):
                 _, stored, _ = http_json(
@@ -674,6 +676,8 @@ return [
                 rule.get("enabled") is True for rule in strategy_control_initial.get("rules", [])
             ):
                 raise AssertionError("strategy controls did not expose four enabled defaults")
+            if len(strategy_control_initial.get("positionRules", [])) != 1 or strategy_control_initial["positionRules"][0].get("enabled") is not False:
+                raise AssertionError("strategy controls did not expose the backward-safe disabled OR5 default")
             strategy_request_id = "9" * 32
             for _ in range(2):
                 _, strategy_control, strategy_control_raw = http_json("POST", base_url + "strategy-controls.php", {
@@ -706,6 +710,81 @@ return [
             }, token=WRITE_TOKEN)
             if executor_lease.get("acquired") is not True:
                 raise AssertionError(f"executor lease was not acquired: {executor_lease}")
+            or5_control_request_id = "4" * 32
+            _, or5_control, _ = http_json("POST", base_url + "strategy-controls.php", {
+                "action": "setRule", "requestId": or5_control_request_id, "accountKey": "DEMO",
+                "ruleKey": "OR5", "enabled": True,
+            }, token=access_token)
+            if or5_control.get("positionRules", [{}])[0].get("enabled") is not True:
+                raise AssertionError("mobile OR5 enablement was not persisted")
+            or5_revision = int(or5_control["positionRevision"])
+            or5_trigger_request_id = "3" * 32
+            or5_trigger = {
+                "action": "recordPositionRuleTrigger", "requestId": or5_trigger_request_id,
+                "accountKey": "DEMO", "ruleKey": "OR5",
+                "positionIdentifier": int(expected["positionTicket"]),
+                "positionTicket": int(expected["positionTicket"]),
+                "controlsRevision": or5_revision,
+                "signalAt": iso(datetime.now(timezone.utc)),
+                "inputs": {
+                    "entryDrawdown": -0.006, "openingRangeLow": 28900.0,
+                    "signalClose": 28890.0, "slowDecline": -0.016,
+                    "priceSource": "ACCOUNT_MT5_M1",
+                },
+                "coordination": {
+                    "role": "EXECUTOR", "ownerId": executor_owner_id,
+                    "fencingToken": int(executor_lease["fencingToken"]),
+                },
+            }
+            stale_or5_trigger = copy.deepcopy(or5_trigger)
+            stale_or5_trigger["requestId"] = "2" * 32
+            stale_or5_trigger["controlsRevision"] = or5_revision - 1
+            invalid_time_or5_trigger = copy.deepcopy(or5_trigger)
+            invalid_time_or5_trigger["requestId"] = "0" * 32
+            invalid_time_or5_trigger["signalAt"] = "2026-08-17T16:30:00"
+            http_json(
+                "POST", base_url + "strategy-controls.php", invalid_time_or5_trigger,
+                token=WRITE_TOKEN, expected=(400,),
+            )
+            http_json(
+                "POST", base_url + "strategy-controls.php", stale_or5_trigger,
+                token=WRITE_TOKEN, expected=(409,),
+            )
+            for _ in range(2):
+                _, or5_authorized, _ = http_json(
+                    "POST", base_url + "strategy-controls.php", or5_trigger,
+                    token=WRITE_TOKEN,
+                )
+                if or5_authorized.get("positionTrigger", {}).get("requestId") != or5_trigger_request_id:
+                    raise AssertionError("immutable OR5 trigger authorization was not returned")
+            http_json("POST", base_url + "strategy-controls.php", {
+                "action": "setRule", "requestId": "1" * 32, "accountKey": "DEMO",
+                "ruleKey": "OR5", "enabled": False,
+            }, token=access_token)
+            _, or5_after_disable, _ = http_json(
+                "POST", base_url + "strategy-controls.php", or5_trigger,
+                token=WRITE_TOKEN,
+            )
+            if or5_after_disable.get("positionTrigger", {}).get("requestId") != or5_trigger_request_id:
+                raise AssertionError("disabling OR5 cancelled an already-authorized exit")
+            or5_context_query = urllib.parse.urlencode({
+                "accountKey": "DEMO", "positionIdentifier": int(expected["positionTicket"]),
+                "role": "EXECUTOR", "ownerId": executor_owner_id,
+                "fencingToken": int(executor_lease["fencingToken"]),
+            })
+            _, or5_recovered, _ = http_json(
+                "GET", base_url + "strategy-controls.php?" + or5_context_query,
+                token=WRITE_TOKEN,
+            )
+            if or5_recovered.get("positionTrigger", {}).get("requestId") != or5_trigger_request_id:
+                raise AssertionError("executor failover context could not recover the OR5 authorization")
+            or5_trigger_count = int(docker_sql(
+                docker, container,
+                "SELECT COUNT(*) FROM strategy_position_rule_trigger_events WHERE request_id='" + or5_trigger_request_id + "'",
+                docker_env,
+            ))
+            if or5_trigger_count != 1:
+                raise AssertionError("OR5 trigger authorization was not idempotent")
             current_iso = datetime.now(timezone.utc).isocalendar()
             entry_week = f"{current_iso.year:04d}-W{current_iso.week:02d}"
             entry_state_request_id = "7" * 32

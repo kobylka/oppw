@@ -1,3 +1,4 @@
+import inspect
 import sys
 import types
 import unittest
@@ -6,7 +7,9 @@ from pathlib import Path
 
 sys.modules.setdefault("matplotlib", types.ModuleType("matplotlib"))
 sys.modules.setdefault("matplotlib.pyplot", types.ModuleType("matplotlib.pyplot"))
-sys.modules.setdefault("numpy", types.ModuleType("numpy"))
+if "numpy" in sys.modules and not hasattr(sys.modules["numpy"], "asarray"):
+    del sys.modules["numpy"]
+import numpy  # noqa: F401 - ensure classifier tests use the real dependency
 
 from oppw_loss_control import (
     LOSS_CONTROL_DEFER_TUESDAY,
@@ -27,6 +30,127 @@ def load_oppw24_module():
     namespace = {"__name__": "oppw24_cli_test", "__file__": str(source)}
     exec(compile(source.read_text(encoding="utf-8"), str(source), "exec"), namespace)
     return namespace
+
+
+class RemovedRollingCandleExitTests(unittest.TestCase):
+    def test_rolling_candle_exit_is_not_exposed_by_oppw24(self):
+        module = load_oppw24_module()
+        parameters = inspect.signature(module["Sim"].process).parameters
+
+        self.assertNotIn("rolling_candle_exit_signal", module)
+        self.assertNotIn("early_exit_rule", parameters)
+        self.assertNotIn("early_exit_require_all", parameters)
+
+
+class StructuralBreakdownExitTests(unittest.TestCase):
+    def test_requires_entry_loss_opening_range_break_and_persistence(self):
+        helper = load_oppw24_module()["structural_breakdown_exit_signal"]
+        quotes = [[0.0, 0.0, 0.0, 0.0] for _ in range(934)] + [
+            [100.0, 100.2, 99.8, 100.0],
+            [100.0, 100.1, 99.7, 99.9],
+            [99.9, 100.0, 98.7, 99.0],
+            [99.0, 99.1, 98.5, 98.8],
+        ]
+        rule = {
+            "opening_range_minutes": 2,
+            "entry_loss": 0.01,
+            "persistence": 2,
+        }
+
+        self.assertFalse(helper(quotes, 936, 934, 100.0, rule))
+        self.assertTrue(helper(quotes, 937, 934, 100.0, rule))
+
+    def test_rule_list_uses_logical_or(self):
+        helper = load_oppw24_module()["structural_breakdown_exit_signal"]
+        quotes = [[0.0, 0.0, 0.0, 0.0] for _ in range(934)] + [
+            [100.0, 100.1, 99.8, 100.0],
+            [100.0, 100.0, 99.7, 99.9],
+            [99.9, 100.0, 98.5, 98.8],
+        ]
+        matching = {
+            "opening_range_minutes": 2,
+            "entry_loss": 0.01,
+            "persistence": 1,
+        }
+        nonmatching = {
+            "opening_range_minutes": 2,
+            "entry_loss": 0.05,
+            "persistence": 1,
+        }
+
+        self.assertTrue(
+            helper(quotes, 936, 934, 100.0, (nonmatching, matching))
+        )
+
+    def test_first_day_slow_window_can_include_same_day_premarket(self):
+        helper = load_oppw24_module()["structural_breakdown_exit_signal"]
+        quotes = [[100.0, 100.0, 100.0, 100.0] for _ in range(934)] + [
+            [100.0, 100.0, 99.8, 100.0],
+            [100.0, 100.0, 99.7, 99.9],
+            [99.9, 100.0, 98.0, 98.5],
+        ]
+        base_rule = {
+            "opening_range_minutes": 2,
+            "entry_loss": 0.01,
+            "persistence": 1,
+            "slow_minutes": 60,
+            "slow_decline": 0.015,
+        }
+
+        self.assertFalse(helper(quotes, 936, 934, 100.0, base_rule, True))
+        premarket_rule = dict(
+            base_rule,
+            first_day_slow_window_includes_premarket=True,
+        )
+        self.assertTrue(helper(quotes, 936, 934, 100.0, premarket_rule, True))
+        self.assertFalse(helper(quotes, 936, 934, 100.0, premarket_rule, False))
+
+
+class BroadExitTests(unittest.TestCase):
+    def test_profit_giveback_requires_prior_profit_and_retracement(self):
+        helper = load_oppw24_module()["broad_exit_signal"]
+        quotes = [[0.0, 0.0, 0.0, 0.0] for _ in range(934)] + [
+            [100.0, 102.0, 99.8, 100.5],
+        ]
+        rule = {"family": "profit_giveback", "activation": 0.015, "giveback": 0.01}
+
+        self.assertTrue(
+            helper(quotes, 934, 934, 100.0, "20200106", "20200106", 102.0, rule)
+        )
+
+    def test_intraday_time_stop_only_fires_at_checkpoint(self):
+        helper = load_oppw24_module()["broad_exit_signal"]
+        quotes = [[0.0, 0.0, 0.0, 0.0] for _ in range(994)] + [
+            [99.0, 99.1, 98.9, 99.0],
+        ]
+        rule = {"family": "intraday_time_stop", "minutes": 60, "minimum_return": -0.005}
+
+        self.assertTrue(
+            helper(quotes, 994, 934, 100.0, "20200106", "20200106", 100.0, rule)
+        )
+
+
+class MarketStructureExitTests(unittest.TestCase):
+    def test_lower_close_sequence_requires_monotonic_closes(self):
+        helper = load_oppw24_module()["market_structure_exit_signal"]
+        quotes = [[0.0, 0.0, 0.0, 0.0] for _ in range(934)] + [
+            [100.0, 100.0, 99.8, 100.0],
+            [99.9, 100.0, 99.4, 99.5],
+            [99.4, 99.5, 98.8, 99.0],
+        ]
+        rule = {"family": "lower_close_sequence", "count": 2, "minimum_decline": 0.009}
+
+        self.assertTrue(helper(quotes, 936, 934, 100.0, 98.0, 4.0, rule))
+
+    def test_previous_low_break_requires_persistent_closes(self):
+        helper = load_oppw24_module()["market_structure_exit_signal"]
+        quotes = [[0.0, 0.0, 0.0, 0.0] for _ in range(934)] + [
+            [100.0, 100.0, 98.8, 98.9],
+            [98.9, 99.0, 98.6, 98.8],
+        ]
+        rule = {"family": "previous_low_break", "buffer": 0.01, "persistence": 2}
+
+        self.assertTrue(helper(quotes, 935, 934, 100.0, 100.0, 4.0, rule))
 
 
 class ArithmeticLossControlTests(unittest.TestCase):
@@ -196,6 +320,59 @@ class Oppw24CommandLineTests(unittest.TestCase):
             options_for(parser.parse_args(["--all-protections"])),
             options_for(parser.parse_args(["--all-protection"])),
         )
+
+    def test_or5_exit_is_opt_in(self):
+        parser = self.module["build_parser"]()
+
+        self.assertFalse(parser.parse_args([]).or5_exit)
+        self.assertTrue(parser.parse_args(["--or5-exit"]).or5_exit)
+        self.assertIn("--or5-exit", parser.format_help())
+
+    def test_or5_exit_rule_matches_tested_60_minute_variant(self):
+        self.assertEqual(
+            {
+                "opening_range_minutes": 5,
+                "entry_loss": 0.005,
+                "persistence": 1,
+                "slow_minutes": 60,
+                "slow_decline": 0.015,
+            },
+            self.module["OR5_EXIT_RULE"],
+        )
+        selected_rule = self.module["selected_structural_exit_rule"]
+        self.assertIsNone(selected_rule(False))
+        self.assertEqual(self.module["OR5_EXIT_RULE"], selected_rule(True))
+        self.assertIsNot(self.module["OR5_EXIT_RULE"], selected_rule(True))
+
+    def test_meta_filter_is_opt_in(self):
+        parser = self.module["build_parser"]()
+
+        self.assertFalse(parser.parse_args([]).meta_filter)
+        self.assertTrue(parser.parse_args(["--meta-filter"]).meta_filter)
+        self.assertIn("--meta-filter", parser.format_help())
+
+
+class MetaFilterTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.module = load_oppw24_module()
+
+    def test_classifier_is_unavailable_during_warmup(self):
+        fit = self.module["fit_meta_filter"]
+        self.assertIsNone(fit([[0.0]] * 39, [0.0] * 39))
+
+    def test_classifier_assigns_higher_risk_to_worst_pattern(self):
+        fit = self.module["fit_meta_filter"]
+        probability = self.module["meta_filter_worst_probability"]
+        features = [[-2.0 + index * 0.01] for index in range(5)] + [
+            [1.0 + index * 0.01] for index in range(45)
+        ]
+        outcomes = [-0.05] * 5 + [0.01] * 45
+
+        model = fit(features, outcomes)
+
+        self.assertIsNotNone(model)
+        self.assertGreater(probability(model, [-2.0]), probability(model, [1.0]))
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@
 |---|---|---|---|
 | Immutable strategy authority and cash flows | Indefinite | Every database backup; backup copies follow the operator's recovery schedule | Never |
 | Service-control audit | Indefinite | Every database backup; optional annual export retained indefinitely | Never |
+| Entry/position control audit and OR5 trigger authorization | Indefinite | Every database backup | Never |
 | Market minute OHLC | Indefinite | Every database backup; online rows remain the canonical history | Never |
 | Diagnostic events except `EXECUTION_STAGE` | 180 days | Exact encrypted archive for seven years | Only after archive verification |
 | Legacy `EXECUTION_STAGE` diagnostics | Indefinite | Every database backup | Never through retention |

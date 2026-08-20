@@ -283,6 +283,10 @@ class PositionLifecycleMixin:
         self.state.active_tp_price = 0.0
         self.state.active_protection_updated_at = ""
         self.state.active_protection_position_identifier = 0
+        self.state.or5_last_evaluated_bar_utc = 0
+        self.state.or5_authorized_request_id = ""
+        self.state.or5_authorized_position_identifier = 0
+        self.state.or5_authorized_inputs = {}
         self.clear_immutable_hard_stop()
         if clear_last_exit:
             self.state.last_exit_reason = ""
@@ -390,8 +394,7 @@ class PositionLifecycleMixin:
             session_day = session.date()
             if not self.break_even_check_eligible(opened, session_day):
                 continue
-            close_time = self.session_times(session_day).close_bar_open.time().replace(second=0, microsecond=0)
-            bar = self.m1_bar_at(self.cfg.signal_symbol, session_day, close_time)
+            bar = self.completed_session_close_bar(self.cfg.signal_symbol, session_day)
             if bar is not None and bar.close < signal_reference * self.cfg.break_even_ratio:
                 return True
         return False

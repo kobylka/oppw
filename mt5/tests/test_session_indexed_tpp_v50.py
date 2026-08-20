@@ -196,6 +196,53 @@ class SessionIndexedTppTests(unittest.TestCase):
         self.assertAlmostEqual(cached_price, 29_463.15)
         self.assertEqual(len(calls), 1)
 
+    def test_daily_close_processing_uses_completed_session_close_authority(self):
+        sessions = [date(2026, 7, day) for day in range(20, 25)]
+        strategy = self.strategy(sessions, sessions[0])
+        strategy.cfg.signal_symbol = "QQQ"
+        strategy.cfg.state_file = Path("unused-state.json")
+        strategy.state.last_close_processed_date = ""
+        strategy.state.prev_open = 100.0
+        strategy.state.save = lambda _path: None
+        strategy.final_trading_day = lambda _day: sessions[-1]
+        calls = []
+        strategy.completed_session_close_bar = lambda symbol, day: (
+            calls.append((symbol, day))
+            or SimpleNamespace(close=110.0 if symbol == "US100" else 90.0)
+        )
+        messages = []
+        strategy.log = SimpleNamespace(info=lambda message, *args: messages.append(message % args))
+
+        strategy.process_completed_close(
+            sessions[-1], datetime.combine(sessions[-1], time(22, 1), WARSAW), None,
+        )
+
+        self.assertEqual(calls, [("US100", sessions[-1]), ("QQQ", sessions[-1])])
+        self.assertAlmostEqual(0.10, strategy.state.prev_full_week_change)
+        self.assertEqual(sessions[-1].isoformat(), strategy.state.last_close_processed_date)
+        self.assertTrue(any("DAILY_CLOSE_PROCESSED" in message for message in messages))
+
+    def test_break_even_reconstruction_uses_completed_signal_close(self):
+        sessions = [date(2026, 7, day) for day in range(20, 25)]
+        strategy = self.strategy(sessions, sessions[0])
+        strategy.cfg.signal_symbol = "QQQ"
+        strategy.cfg.break_even_ratio = 0.996
+        strategy.calendar = SimpleNamespace(
+            sessions_in_range=lambda *_args: [datetime.combine(sessions[1], time(0, 0), WARSAW)],
+        )
+        strategy.break_even_check_eligible = lambda *_args: True
+        calls = []
+        strategy.completed_session_close_bar = lambda symbol, day: (
+            calls.append((symbol, day)) or SimpleNamespace(close=99.0)
+        )
+
+        reconstructed = strategy.reconstruct_break_even(
+            sessions[0], 100.0, datetime.combine(sessions[2], time(22, 2), WARSAW),
+        )
+
+        self.assertTrue(reconstructed)
+        self.assertEqual(calls, [("QQQ", sessions[1])])
+
     def test_current_w1_bar_supplies_week_ohlc_before_cash_open(self):
         sessions = [date(2026, 7, day) for day in range(27, 32)]
         strategy = self.strategy(sessions, sessions[0])

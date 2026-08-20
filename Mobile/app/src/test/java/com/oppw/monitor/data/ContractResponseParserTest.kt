@@ -35,6 +35,9 @@ class ContractResponseParserTest {
         assertTrue(strategyControl.canControl)
         assertEquals(4, strategyControl.rules.size)
         assertFalse(strategyControl.rules.first { it.key == "GAP_MOMENTUM" }.enabled)
+        assertEquals(1, strategyControl.positionRules.size)
+        assertEquals("OR5", strategyControl.positionRules.single().key)
+        assertFalse(strategyControl.positionRules.single().enabled)
 
         val status = JsonParser.parseResponse(response("status.json"))
         val position = assertNotNull(status.snapshot.position).let { status.snapshot.position!! }
@@ -47,6 +50,8 @@ class ContractResponseParserTest {
         assertEquals(27550.0, position.immutableHardStop.price, 0.01)
         assertEquals(27550.0, position.protectionTarget.price, 0.01)
         assertTrue(position.protectionTarget.applied)
+        assertEquals("OR5", position.lossControls.rules.single().key)
+        assertFalse(position.lossControls.rules.single().enabled)
         assertTrue(status.snapshot.strategyDecision?.decisionId?.isNotBlank() == true)
         val lossControls = status.snapshot.potentialPosition!!.lossControls
         assertEquals(4, lossControls.rules.size)

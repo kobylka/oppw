@@ -283,11 +283,11 @@ def main() -> int:
             "Set-ExactPathAcl -Path $configPath",
         ),
         "Mobile/backend/service-control.php": ("setDesiredState", "strategy_service_control_events", "MASTER_ONLINE", "count($rawProcesses) > 16"),
-        "Mobile/backend/admin/register_account.php": ("monitor_accounts", "strategy_service_desired_state", "strategy_entry_rule_controls"),
+        "Mobile/backend/admin/register_account.php": ("monitor_accounts", "strategy_service_desired_state", "strategy_entry_rule_controls", "strategy_position_rule_controls"),
         "Mobile/backend/sql/migrate_v56_2_bossa_tms_accounts.sql": (
             "DEMO BOSSA", "REAL BOSSA", "DEMO_TMS", "REAL_TMS", "FALSE, FALSE",
         ),
-        "Mobile/backend/strategy-controls.php": ("setRule", "recordWeekState", "strategy_entry_rule_week_events"),
+        "Mobile/backend/strategy-controls.php": ("setRule", "recordWeekState", "recordPositionRuleTrigger", "strategy_position_rule_trigger_events"),
     }
     for relative, markers in service_files.items():
         path = root / relative
@@ -539,8 +539,13 @@ def main() -> int:
         "Mobile/backend/sql/migrate_v56_single_premarket_low.sql": (
             "premarket_low_enabled", "premarket_range_enabled AND premarket_close_low_enabled",
         ),
+        "Mobile/backend/sql/migrate_v56_3_or5_position_rule.sql": (
+            "strategy_position_rule_controls", "strategy_position_rule_control_events",
+            "strategy_position_rule_trigger_events", "or5_enabled BOOLEAN NOT NULL DEFAULT FALSE",
+        ),
         "Mobile/backend/sql/migration-order.txt": (
             "migrate_data_lifecycle.sql", "migrate_v55_entry_rules.sql", "migrate_v56_single_premarket_low.sql",
+            "migrate_v56_3_or5_position_rule.sql",
         ),
         "Mobile/backend/admin/retention.php": (
             "OPPW_EVENT_RETENTION_DAYS = 180", "OPPW_EQUITY_RETENTION_DAYS = 400",
@@ -605,8 +610,8 @@ def main() -> int:
         if migration_order.is_file()
         else []
     )
-    if not migration_names or migration_names[-1] != "migrate_v56_2_bossa_tms_accounts.sql":
-        fail(errors, "migrate_v56_2_bossa_tms_accounts.sql must be the last ordered forward migration")
+    if not migration_names or migration_names[-1] != "migrate_v56_3_or5_position_rule.sql":
+        fail(errors, "migrate_v56_3_or5_position_rule.sql must be the last ordered forward migration")
     elif migration_names.index("migrate_data_lifecycle.sql") >= migration_names.index("migrate_v55_entry_rules.sql"):
         fail(errors, "migrate_v55_entry_rules.sql must follow migrate_data_lifecycle.sql")
     elif migration_names.index("migrate_v55_entry_rules.sql") >= migration_names.index("migrate_v56_single_premarket_low.sql"):
@@ -615,6 +620,8 @@ def main() -> int:
         fail(errors, "migrate_v56_2_execution_lifecycle_links.sql must follow migrate_v56_single_premarket_low.sql")
     elif migration_names.index("migrate_v56_2_execution_lifecycle_links.sql") >= migration_names.index("migrate_v56_2_bossa_tms_accounts.sql"):
         fail(errors, "migrate_v56_2_bossa_tms_accounts.sql must follow migrate_v56_2_execution_lifecycle_links.sql")
+    elif migration_names.index("migrate_v56_2_bossa_tms_accounts.sql") >= migration_names.index("migrate_v56_3_or5_position_rule.sql"):
+        fail(errors, "migrate_v56_3_or5_position_rule.sql must follow migrate_v56_2_bossa_tms_accounts.sql")
 
     retention_path = root / "Mobile" / "backend" / "admin" / "retention.php"
     retention_text = retention_path.read_text(encoding="utf-8") if retention_path.is_file() else ""
@@ -624,6 +631,8 @@ def main() -> int:
         "strategy_fills", "strategy_protection_changes", "strategy_trade_ledger", "account_cash_flows",
         "strategy_entry_rule_controls", "strategy_entry_rule_control_events",
         "strategy_entry_rule_week_state", "strategy_entry_rule_week_events",
+        "strategy_position_rule_controls", "strategy_position_rule_control_events",
+        "strategy_position_rule_trigger_events",
     )
     for table in protected_retention_tables:
         if re.search(rf"DELETE\s+FROM\s+`?{re.escape(table)}\b", retention_text, re.IGNORECASE):

@@ -542,6 +542,7 @@ class MonitoringMixin:
                 "activeTpReason": self.state.active_tp_reason if state_matches else "",
                 "immutableHardStop": self.immutable_hard_stop_payload(position),
                 "protectionTarget": self.protection_target_payload(position, now),
+                "lossControls": self.live_position_loss_control_status(position, now),
             }
             conditions = self.monitor_all_conditions(position, now, bid, signal_price, break_even_check)
             closest = self.monitor_closest_condition(conditions)

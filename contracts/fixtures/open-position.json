@@ -109,6 +109,20 @@
         "signalReference": 500.0,
         "threshold": 498.0,
         "condition": "QQQ close < 498.0"
+      },
+      "lossControls": {
+        "revision": 1,
+        "evaluatedAt": "${CAPTURED_AT}",
+        "currentPrice": 29050.0,
+        "currentPriceUsage": "Previous completed MT5 M1 close; the forming candle is never evaluated.",
+        "error": "",
+        "rules": [
+          {"key":"OR5","enabled":false,"applicable":true,"status":"DISABLED","effect":"EXIT_POSITION_MARKET_SELL","conditions":[
+            {"key":"ENTRY_DRAWDOWN","label":"Signal-bar low vs actual entry","actual":-0.001,"operator":"<=","threshold":-0.005,"unit":"ratio","met":false},
+            {"key":"OPENING_RANGE_BREAK","label":"Completed close vs OR5 low","actual":0.002,"operator":"<=","threshold":0.0,"unit":"ratio","met":false},
+            {"key":"SLOW_DECLINE","label":"60-minute first open to minimum low","actual":-0.004,"operator":"<=","threshold":-0.015,"unit":"ratio","met":false}
+          ]}
+        ]
       }
     },
     "potentialPosition": {

@@ -175,6 +175,8 @@ class OPPWContinuousStrategy(
         self.tsl_install_deferred = False
         self._session_times_cache: dict[date, SessionTimes] = {}
         self._week_open_price_cache: dict[str, float] = {}
+        self._completed_session_close_cache: dict[tuple[str, str, str], M1Bar] = {}
+        self._completed_session_close_missing_logs: dict[tuple[str, str, str], float] = {}
         self.last_monitor_publish_monotonic = 0.0
         self.last_monitor_minute_key = ""
         self.last_strategy_decision_signature: Optional[tuple[Any, ...]] = None
@@ -202,9 +204,28 @@ class OPPWContinuousStrategy(
             if str(key) in self.entry_rule_controls
         })
         self.entry_rule_controls_revision = int(self.state.entry_rule_controls_revision or 0)
+        self.position_rule_controls = {"OR5": False}
+        self.position_rule_controls.update({
+            str(key): bool(value)
+            for key, value in self.state.position_rule_controls.items()
+            if str(key) in self.position_rule_controls
+        })
+        self.position_rule_controls_revision = int(self.state.position_rule_controls_revision or 0)
+        # Never apply a restored/enabled close-based rule retrospectively to
+        # the candle that completed before this process observed authority.
+        observed_minute = datetime.now(self.tz).replace(second=0, microsecond=0)
+        self.position_rule_observed_after_utc = int(
+            self.local_to_mt5_bar_query_time(observed_minute).timestamp()
+        )
+        self.last_position_rule_context_success_monotonic = 0.0
+        self.last_position_rule_error_monotonic = 0.0
+        self.last_position_rule_status: dict[str, Any] = {}
         self.last_entry_rule_context: Optional[dict[str, Any]] = None
         self.last_entry_rule_context_monotonic = 0.0
         self.last_entry_rule_error_monotonic = 0.0
+        self.last_entry_market_wait_week = ""
+        self.last_entry_market_wait_inputs: list[str] = []
+        self.last_entry_market_wait_log_monotonic = 0.0
         self.weekend_idle = False
         self.started_at = datetime.now(self.tz)
         self.strategy_specification = self.build_strategy_specification()

@@ -91,22 +91,28 @@ object JsonParser {
         val root = JSONObject(raw)
         requireOk(root)
         val rules = root.optJSONArray("rules") ?: JSONArray()
+        val positionRules = root.optJSONArray("positionRules") ?: JSONArray()
+        fun parseRules(values: JSONArray, defaultScope: String) = buildList {
+            for (index in 0 until values.length()) values.getJSONObject(index).let { item ->
+                add(StrategyRuleControl(
+                    key = item.optString("key"),
+                    label = item.optString("label", item.optString("key")),
+                    description = item.optString("description"),
+                    enabled = item.optBoolean("enabled", true),
+                    scope = item.optString("scope", defaultScope),
+                ))
+            }
+        }
         return StrategyControlStatus(
             generatedAt = root.optString("generatedAt"),
             accountKey = root.optString("accountKey"),
             canControl = root.optBoolean("canControl"),
             revision = root.optLong("revision"),
             changedAt = root.optString("changedAt"),
-            rules = buildList {
-                for (index in 0 until rules.length()) rules.getJSONObject(index).let { item ->
-                    add(StrategyRuleControl(
-                        key = item.optString("key"),
-                        label = item.optString("label", item.optString("key")),
-                        description = item.optString("description"),
-                        enabled = item.optBoolean("enabled", true),
-                    ))
-                }
-            },
+            rules = parseRules(rules, "ENTRY"),
+            positionRevision = root.optLong("positionRevision"),
+            positionChangedAt = root.optString("positionChangedAt"),
+            positionRules = parseRules(positionRules, "OPEN_POSITION"),
         )
     }
 
@@ -554,6 +560,7 @@ object JsonParser {
         immutableHardStop = json.optJSONObject("immutableHardStop")?.let(::parseImmutableHardStop) ?: ImmutableHardStop(),
         protectionTarget = json.optJSONObject("protectionTarget")?.let(::parseProtectionTarget) ?: ProtectionTarget(),
         manual = json.optBoolean("manual", false),
+        lossControls = parseLossControls(json.optJSONObject("lossControls")),
     )
 
     private fun parseBreakEvenCheck(json: JSONObject) = BreakEvenCheck(

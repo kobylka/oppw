@@ -350,6 +350,76 @@ class SessionCalendarMixin:
         local_dt = self.mt5_bar_timestamp_to_local(raw_ts)
         return M1Bar(raw_ts, local_dt, float(row["open"]), float(row["high"]), float(row["low"]), float(row["close"]))
 
+    def completed_session_close_bar(
+        self,
+        symbol: str,
+        local_day: date,
+        *,
+        before_minutes: int = 5,
+    ) -> Optional[M1Bar]:
+        """Return the final completed M1 candle before the calendar close."""
+        boundary = self.session_times(local_day).close_bar_open.replace(second=0, microsecond=0)
+        cache_key = (symbol, local_day.isoformat(), boundary.isoformat())
+        cache = getattr(self, "_completed_session_close_cache", None)
+        if cache is None:
+            cache = {}
+            self._completed_session_close_cache = cache
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        query_start = boundary - timedelta(minutes=max(1, int(before_minutes)))
+        query_end = boundary + timedelta(seconds=59)
+        rates = None
+        query_error = ""
+        try:
+            rates = mt5.copy_rates_range(
+                symbol,
+                mt5.TIMEFRAME_M1,
+                self.local_to_mt5_bar_query_time(query_start),
+                self.local_to_mt5_bar_query_time(query_end),
+            )
+        except Exception as exc:
+            query_error = str(exc)
+
+        candidates: list[M1Bar] = []
+        returned_times: list[str] = []
+        for row in ([] if rates is None else rates):
+            raw_ts = int(row["time"])
+            local_dt = self.mt5_bar_timestamp_to_local(raw_ts)
+            returned_times.append(local_dt.isoformat())
+            if local_dt.date() != local_day or not (query_start <= local_dt < boundary):
+                continue
+            candidates.append(
+                M1Bar(raw_ts, local_dt, float(row["open"]), float(row["high"]), float(row["low"]), float(row["close"]))
+            )
+
+        if candidates:
+            selected = max(candidates, key=lambda bar: bar.local_datetime)
+            cache[cache_key] = selected
+            return selected
+
+        now_monotonic = time_module.monotonic()
+        missing_logs = getattr(self, "_completed_session_close_missing_logs", None)
+        if missing_logs is None:
+            missing_logs = {}
+            self._completed_session_close_missing_logs = missing_logs
+        interval = float(getattr(self.cfg, "monitor_error_log_interval_seconds", 30.0))
+        if cache_key not in missing_logs or now_monotonic - float(missing_logs[cache_key]) >= interval:
+            missing_logs[cache_key] = now_monotonic
+            try:
+                last_error = mt5.last_error()
+            except Exception:
+                last_error = "unavailable"
+            self.log.warning(
+                "EVENT COMPLETED_SESSION_CLOSE_MISSING symbol=%s day=%s boundary=%s "
+                "query_start=%s query_end=%s returned_times=%s mt5_last_error=%s error=%s",
+                symbol, local_day, boundary.isoformat(), query_start.isoformat(), query_end.isoformat(),
+                ",".join(returned_times[-12:]) or "none", shlex.quote(str(last_error)),
+                shlex.quote(query_error or "none"),
+            )
+        return None
+
     def current_w1_bar(self, symbol: str, now: datetime) -> Optional[M1Bar]:
         """Return MT5's live broker-week candle for the current ISO week."""
         timeframe = getattr(mt5, "TIMEFRAME_W1", None)

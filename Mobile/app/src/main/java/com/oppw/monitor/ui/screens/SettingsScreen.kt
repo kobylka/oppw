@@ -121,6 +121,41 @@ fun SettingsScreen(
         }
         item {
             AppCard(Modifier.fillMaxWidth()) {
+                SectionTitle("Open-position loss protection")
+                val control = state.strategyControl
+                if (state.strategyControlLoading && control == null) {
+                    CircularProgressIndicator()
+                } else if (control == null) {
+                    Text(state.strategyControlError ?: "Position-rule controls unavailable", color = DangerRed)
+                } else {
+                    Text(
+                        "Rules supervise an existing position for ${selected?.displayName ?: control.accountKey}. " +
+                            "A qualifying trigger becomes an immutable exit authorization and cannot be cancelled by disabling the rule afterward.",
+                        color = TextSecondary,
+                    )
+                    control.positionRules.forEach { rule ->
+                        Metric(rule.label, if (rule.enabled) "ENABLED" else "DISABLED")
+                        Text(rule.description, color = TextSecondary)
+                        OutlinedButton(
+                            onClick = { pendingRuleCommand = rule to !rule.enabled },
+                            enabled = control.canControl && !state.strategyControlLoading,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(if (rule.enabled) "Disable rule" else "Enable rule")
+                        }
+                    }
+                    if (control.positionRules.isEmpty()) {
+                        Text("This backend has not published open-position controls yet.", color = TextSecondary)
+                    }
+                    if (!control.canControl) {
+                        Text("This device is read-only. Pair it with operational-control permission to change position rules.", color = TextSecondary)
+                    }
+                    state.strategyControlError?.let { Text(it, color = DangerRed) }
+                }
+            }
+        }
+        item {
+            AppCard(Modifier.fillMaxWidth()) {
                 SectionTitle("Device")
                 Metric("Device name", state.deviceName)
                 Metric("API", BuildConfig.API_BASE_URL)
@@ -223,13 +258,28 @@ fun SettingsScreen(
     }
 
     pendingRuleCommand?.let { (rule, enabled) ->
+        val positionRule = rule.scope.equals("OPEN_POSITION", true)
         AlertDialog(
             onDismissRequest = { pendingRuleCommand = null },
-            title = { Text(if (enabled) "Enable entry rule?" else "Disable entry rule?") },
+            title = {
+                Text(
+                    if (positionRule) {
+                        if (enabled) "Enable position rule?" else "Disable position rule?"
+                    } else {
+                        if (enabled) "Enable entry rule?" else "Disable entry rule?"
+                    }
+                )
+            },
             text = {
                 Text(
-                    "${rule.label}\n\nThis changes new-entry decisions for ${selected?.displayName ?: "the selected account"}. " +
-                        "It does not modify an existing position."
+                    if (positionRule) {
+                        "${rule.label}\n\nThis changes completed-candle supervision of the open position for " +
+                            "${selected?.displayName ?: "the selected account"}. Enabling starts with the next newly completed candle; " +
+                            "disabling cannot cancel an OR5 exit that was already authorized."
+                    } else {
+                        "${rule.label}\n\nThis changes new-entry decisions for ${selected?.displayName ?: "the selected account"}. " +
+                            "It does not modify an existing position."
+                    }
                 )
             },
             confirmButton = {

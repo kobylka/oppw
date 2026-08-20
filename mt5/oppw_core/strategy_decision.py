@@ -133,25 +133,6 @@ class StrategyDecisionMixin:
         direction = "at current price" if abs(difference) <= tolerance else "above" if difference > 0 else "below"
         return f"{name} @ {price:.5f} â€” {distance:.5f} points {direction} ({distance_pct:.4f}%)"
 
-    def m1_bar_near(self, symbol: str, local_day: date, target_time: time, before_minutes: int = 5, after_minutes: int = 0) -> Optional[M1Bar]:
-        target_local = datetime.combine(local_day, target_time, self.tz)
-        start_local = target_local - timedelta(minutes=max(0, before_minutes))
-        end_local = target_local + timedelta(minutes=max(0, after_minutes), seconds=59)
-        rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M1, self.local_to_mt5_bar_query_time(start_local), self.local_to_mt5_bar_query_time(end_local))
-        if rates is None or len(rates) == 0:
-            return None
-        candidates: list[M1Bar] = []
-        for row in rates:
-            raw_ts = int(row["time"])
-            local_dt = self.mt5_bar_timestamp_to_local(raw_ts)
-            if local_dt.date() != local_day:
-                continue
-            candidates.append(M1Bar(raw_ts, local_dt, float(row["open"]), float(row["high"]), float(row["low"]), float(row["close"])))
-        if not candidates:
-            return None
-        not_after = [bar for bar in candidates if bar.local_datetime <= target_local]
-        return max(not_after, key=lambda bar: bar.local_datetime) if not_after else min(candidates, key=lambda bar: abs((bar.local_datetime - target_local).total_seconds()))
-
     def latest_completed_week_change(self, now: Optional[datetime] = None) -> Optional[float]:
         now = now or datetime.now(self.tz)
         current_monday = now.date() - timedelta(days=now.date().weekday())
@@ -165,9 +146,8 @@ class StrategyDecisionMixin:
             if now < self.session_times(last_day).close_processing:
                 continue
             open_time = self.session_times(first_day).cash_open.time().replace(second=0, microsecond=0)
-            close_time = self.session_times(last_day).close_bar_open.time().replace(second=0, microsecond=0)
-            open_bar = self.m1_bar_near(self.cfg.trade_symbol, first_day, open_time, before_minutes=5)
-            close_bar = self.m1_bar_near(self.cfg.trade_symbol, last_day, close_time, before_minutes=5)
+            open_bar = self.m1_bar_at(self.cfg.trade_symbol, first_day, open_time)
+            close_bar = self.completed_session_close_bar(self.cfg.trade_symbol, last_day)
             if open_bar is not None and close_bar is not None and open_bar.open > 0:
                 return close_bar.close / open_bar.open - 1.0
         return None
@@ -636,9 +616,28 @@ class StrategyDecisionMixin:
                 "premarketMinimumRange": float(self.cfg.entry_rule_premarket_minimum_range),
                 "premarketMaximumCloseLocation": float(self.cfg.entry_rule_premarket_maximum_close_location),
                 "entryPriceReference": "fresh MT5 BUY price sampled at the pre-open entry action; no cash-open M1 wait",
+                "completedSessionCloseReference": "close of the latest valid MT5 M1 candle whose opening timestamp is strictly before the exchange-calendar session-close boundary",
                 "priority": ["ARITHMETIC_LAST_TWO", "PREMARKET_LOW", "GAP_MOMENTUM", "TUESDAY_NORMALIZATION"],
                 "skippedWeekOutcome": 0.0,
                 "missingInputPolicy": "do not submit BUY; retry inside the bounded entry window",
+            },
+            "positionLossControl": {
+                "controlAuthority": "per-account MySQL strategy_position_rule_controls, changed by an explicitly authorized paired device",
+                "triggerAuthority": "globally fenced immutable strategy_position_rule_trigger_events authorization",
+                "rules": ["OR5"],
+                "defaultEnabled": False,
+                "openingRangeMinutes": int(self.OR5_OPENING_RANGE_MINUTES),
+                "entryDrawdownThreshold": -float(self.OR5_ENTRY_LOSS),
+                "closePersistence": int(self.OR5_PERSISTENCE),
+                "slowWindowMinutes": int(self.OR5_SLOW_MINUTES),
+                "slowDeclineThreshold": -float(self.OR5_SLOW_DECLINE),
+                "priceSource": "the account's own exact MT5 M1 history",
+                "signalRule": "a newly completed regular-session M1 has low at least 0.50% below actual entry and close at or below the five-minute opening-range low, while the trailing 60-minute first-open-to-minimum-low decline is at least 1.50%",
+                "entryDayWindowFloor": "later of cash open or position open minute",
+                "carriedPositionWindowFloor": "same-day configured premarket start",
+                "enablementRule": "the candle completed before a revision is observed is never evaluated retrospectively",
+                "missingAuthorityOrInputPolicy": "do not authorize a new OR5 exit; existing broker hard-stop protection remains",
+                "authorizedTriggerPolicy": "once immutably authorized, disabling OR5 cannot cancel the latched market SELL",
             },
             "leverageSelection": {
                 "baseLeverage": int(self.cfg.base_leverage),
@@ -710,6 +709,7 @@ class StrategyDecisionMixin:
                 "OH market exit",
                 "BEO market exit",
                 "Thursday TSL tightening or crossed-threshold market exit",
+                "OR5 completed-candle market exit",
                 "BH market exit",
                 "CH market exit",
                 "break-even arming immediately after false CH",
@@ -725,6 +725,8 @@ class StrategyDecisionMixin:
                 "lifecycle": "immutable MySQL strategy_execution_stages",
                 "entryRuleControls": "mutable per-account strategy_entry_rule_controls with immutable control-event audit",
                 "entryRuleWeekState": "globally fenced strategy_entry_rule_week_state with immutable weekly-event audit",
+                "positionRuleControls": "mutable per-account strategy_position_rule_controls with immutable control-event audit",
+                "positionRuleTriggers": "globally fenced immutable strategy_position_rule_trigger_events",
                 "events": "diagnostic stream only",
             },
         }
@@ -735,7 +737,7 @@ class StrategyDecisionMixin:
             "specHash": spec_hash,
             "specKey": "OPPW24",
             "specVersion": PROJECT_VERSION,
-            "effectiveFrom": "2026-08-11T00:00:00+00:00",
+            "effectiveFrom": "2026-08-20T00:00:00+00:00",
             "createdAt": self.started_at.astimezone(UTC).isoformat(),
             "build": BUILD_ID,
             "document": document,

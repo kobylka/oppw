@@ -11,7 +11,7 @@ from pathlib import Path
 
 @dataclass
 class StrategyState:
-    version: int = 9
+    version: int = 10
 
     last_trading_date: str = ""
     last_close_processed_date: str = ""
@@ -85,6 +85,13 @@ class StrategyState:
     entry_rule_decision_week: str = ""
     entry_rule_decision_status: str = ""
     entry_rule_decision_inputs: dict[str, object] = field(default_factory=dict)
+
+    position_rule_controls_revision: int = 0
+    position_rule_controls: dict[str, bool] = field(default_factory=dict)
+    or5_last_evaluated_bar_utc: int = 0
+    or5_authorized_request_id: str = ""
+    or5_authorized_position_identifier: int = 0
+    or5_authorized_inputs: dict[str, object] = field(default_factory=dict)
 
     @classmethod
     def load(cls, path: Path) -> "StrategyState":

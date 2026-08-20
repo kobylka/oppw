@@ -37,6 +37,12 @@ from .versioning import BUILD_ID, PROJECT_VERSION
 
 
 class BrokerExecutionMixin:
+    OR5_OPENING_RANGE_MINUTES = 5
+    OR5_ENTRY_LOSS = 0.005
+    OR5_PERSISTENCE = 1
+    OR5_SLOW_MINUTES = 60
+    OR5_SLOW_DECLINE = 0.015
+
     def wait_for_market_order_priority(self, action: str) -> None:
         delay = float(getattr(self.cfg, "market_order_priority_delay_seconds", 0.0))
         if delay <= 0:
@@ -157,6 +163,7 @@ class BrokerExecutionMixin:
             query = urllib.parse.urlencode({
                 "accountKey": self.cfg.monitor_account_key,
                 "weekKey": week_key,
+                "positionIdentifier": int(self.state.active_position_identifier or 0),
                 "role": actor["role"],
                 "ownerId": actor["ownerId"],
                 "fencingToken": actor["fencingToken"],
@@ -189,6 +196,7 @@ class BrokerExecutionMixin:
         return decoded
 
     def apply_entry_rule_context(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self.apply_position_rule_context(payload)
         rules = payload.get("rules")
         if not isinstance(rules, list):
             raise RuntimeError("Strategy-controls response did not contain rules")
@@ -217,6 +225,327 @@ class BrokerExecutionMixin:
                 revision, json.dumps(parsed, sort_keys=True, separators=(",", ":")),
             )
         return payload
+
+    def apply_position_rule_context(self, payload: dict[str, Any]) -> dict[str, Any]:
+        rules = payload.get("positionRules")
+        if not isinstance(rules, list):
+            return payload
+        parsed: dict[str, bool] = {}
+        for rule in rules:
+            if isinstance(rule, dict) and isinstance(rule.get("enabled"), bool):
+                parsed[str(rule.get("key", ""))] = bool(rule["enabled"])
+        required = set(self.position_rule_controls)
+        if set(parsed) != required:
+            raise RuntimeError(f"Strategy-controls position rule set mismatch: {sorted(parsed)}")
+        revision = int(payload.get("positionRevision", 0) or 0)
+        if revision <= 0:
+            raise RuntimeError("Strategy-controls response contained an invalid position revision")
+        changed = revision != self.position_rule_controls_revision or parsed != self.position_rule_controls
+        was_enabled = bool(self.position_rule_controls.get("OR5", False))
+        self.position_rule_controls = parsed
+        self.position_rule_controls_revision = revision
+        self.last_position_rule_context_success_monotonic = time_module.monotonic()
+        if changed:
+            self.position_rule_observed_after_utc = int(
+                self.local_to_mt5_bar_query_time(
+                    datetime.now(self.tz).replace(second=0, microsecond=0)
+                ).timestamp()
+            )
+        if changed and str(getattr(self, "role", "")).upper() == "EXECUTOR":
+            self.state.position_rule_controls_revision = revision
+            self.state.position_rule_controls = dict(parsed)
+            self.state.save(self.cfg.state_file)
+        trigger = payload.get("positionTrigger")
+        if isinstance(trigger, dict):
+            identifier = int(trigger.get("positionIdentifier", 0) or 0)
+            request_id = str(trigger.get("requestId", "") or "")
+            if identifier > 0 and identifier == int(self.state.active_position_identifier or 0) and request_id:
+                self.state.or5_authorized_request_id = request_id
+                self.state.or5_authorized_position_identifier = identifier
+                self.state.or5_authorized_inputs = dict(trigger.get("inputs") or {})
+                if not self.state.exit_latched_reason:
+                    self.state.exit_latched_reason = "OR5"
+                    self.state.exit_latched_at = str(trigger.get("recordedAt", "") or datetime.now(self.tz).isoformat())
+                if str(getattr(self, "role", "")).upper() == "EXECUTOR":
+                    self.state.save(self.cfg.state_file)
+        if changed:
+            self.log.info(
+                "EVENT POSITION_RULE_CONTROLS_UPDATED revision=%s rules=%s previous_or5_enabled=%s",
+                revision, json.dumps(parsed, sort_keys=True, separators=(",", ":")), was_enabled,
+            )
+        return payload
+
+    def position_open_datetime(self, position) -> Optional[datetime]:
+        timestamp = (
+            float(getattr(position, "time_msc", 0) or 0) / 1000.0
+            if getattr(position, "time_msc", 0)
+            else float(getattr(position, "time", 0.0) or 0.0)
+        )
+        return self.mt5_timestamp_to_local(timestamp) if timestamp > 0 else None
+
+    def m1_bars_inclusive(self, symbol: str, start: datetime, end: datetime) -> list[M1Bar]:
+        """Return exact broker M1 bars in a local-time inclusive window."""
+        start = start.astimezone(self.tz).replace(second=0, microsecond=0)
+        end = end.astimezone(self.tz).replace(second=0, microsecond=0)
+        if end < start:
+            return []
+        rates = mt5.copy_rates_range(
+            symbol,
+            mt5.TIMEFRAME_M1,
+            self.local_to_mt5_bar_query_time(start),
+            self.local_to_mt5_bar_query_time(end + timedelta(seconds=59)),
+        )
+        result: list[M1Bar] = []
+        seen: set[int] = set()
+        for row in ([] if rates is None else rates):
+            raw_ts = int(row["time"])
+            local_at = self.mt5_bar_timestamp_to_local(raw_ts).replace(second=0, microsecond=0)
+            if not (start <= local_at <= end) or raw_ts in seen:
+                continue
+            seen.add(raw_ts)
+            result.append(M1Bar(
+                raw_ts, local_at, float(row["open"]), float(row["high"]),
+                float(row["low"]), float(row["close"]),
+            ))
+        return sorted(result, key=lambda item: item.local_datetime)
+
+    @staticmethod
+    def exact_m1_window(bars: list[M1Bar], start: datetime, count: int) -> bool:
+        expected = [start.replace(second=0, microsecond=0) + timedelta(minutes=index) for index in range(count)]
+        return len(bars) == count and [bar.local_datetime for bar in bars] == expected
+
+    def or5_rule_status(self, position, signal_bar: Optional[M1Bar]) -> dict[str, Any]:
+        enabled = bool(self.position_rule_controls.get("OR5", False))
+        revision = int(self.position_rule_controls_revision or 0)
+        base = {
+            "revision": revision,
+            "evaluatedAt": datetime.now(self.tz).isoformat(),
+            "currentPrice": float(signal_bar.close) if signal_bar is not None else 0.0,
+            "currentPriceUsage": "Previous completed MT5 M1 close; the forming candle is never evaluated.",
+            "error": "",
+            "rules": [],
+        }
+        status = "WAITING"
+        applicable = False
+        conditions: list[dict[str, Any]] = []
+        inputs: dict[str, Any] = {}
+        error = ""
+
+        if signal_bar is None:
+            error = "Waiting for the previous completed MT5 M1 candle."
+        else:
+            signal_at = signal_bar.local_datetime.replace(second=0, microsecond=0)
+            session = self.session_times(signal_at.date())
+            opening_start = session.cash_open.replace(second=0, microsecond=0)
+            first_signal = opening_start + timedelta(minutes=self.OR5_OPENING_RANGE_MINUTES)
+            if not (first_signal <= signal_at < session.close_bar_open):
+                status = "NOT_APPLICABLE"
+            else:
+                applicable = True
+                slow_start = signal_at - timedelta(minutes=self.OR5_SLOW_MINUTES - 1)
+                opened = self.position_open_datetime(position)
+                if opened is not None and opened.date() == signal_at.date():
+                    slow_floor = max(opening_start, opened.replace(second=0, microsecond=0))
+                else:
+                    slow_floor = datetime.combine(signal_at.date(), self.cfg.premarket_start, self.tz)
+                if slow_start < slow_floor:
+                    error = "Waiting until the position has a complete eligible 60-minute M1 window."
+                else:
+                    opening = self.m1_bars_inclusive(
+                        position.symbol, opening_start,
+                        opening_start + timedelta(minutes=self.OR5_OPENING_RANGE_MINUTES - 1),
+                    )
+                    slow = self.m1_bars_inclusive(position.symbol, slow_start, signal_at)
+                    if not self.exact_m1_window(opening, opening_start, self.OR5_OPENING_RANGE_MINUTES):
+                        error = "The exact five-minute opening range is unavailable from MT5."
+                    elif not self.exact_m1_window(slow, slow_start, self.OR5_SLOW_MINUTES):
+                        error = "The exact trailing 60-minute M1 window is unavailable from MT5."
+                    else:
+                        entry = float(position.price_open)
+                        opening_low = min(float(bar.low) for bar in opening)
+                        slow_open = float(slow[0].open)
+                        slow_low = min(float(bar.low) for bar in slow)
+                        entry_drawdown = float(signal_bar.low) / entry - 1.0 if entry > 0 else 0.0
+                        opening_break = float(signal_bar.close) / opening_low - 1.0 if opening_low > 0 else 0.0
+                        slow_decline = slow_low / slow_open - 1.0 if slow_open > 0 else 0.0
+                        conditions = [
+                            {
+                                "key": "ENTRY_DRAWDOWN", "label": "Signal-bar low vs actual entry",
+                                "actual": entry_drawdown, "operator": "<=", "threshold": -self.OR5_ENTRY_LOSS,
+                                "unit": "ratio", "met": entry_drawdown <= -self.OR5_ENTRY_LOSS + 1e-12,
+                            },
+                            {
+                                "key": "OPENING_RANGE_BREAK", "label": "Completed close vs OR5 low",
+                                "actual": opening_break, "operator": "<=", "threshold": 0.0,
+                                "unit": "ratio", "met": opening_break <= 1e-12,
+                            },
+                            {
+                                "key": "SLOW_DECLINE", "label": "60-minute first open to minimum low",
+                                "actual": slow_decline, "operator": "<=", "threshold": -self.OR5_SLOW_DECLINE,
+                                "unit": "ratio", "met": slow_decline <= -self.OR5_SLOW_DECLINE + 1e-12,
+                            },
+                        ]
+                        status = "MATCHED" if all(bool(item["met"]) for item in conditions) else "NOT_MATCHED"
+                        inputs = {
+                            "ruleKey": "OR5",
+                            "controlsRevision": revision,
+                            "positionIdentifier": self.position_identifier(position),
+                            "positionTicket": int(position.ticket),
+                            "entryPrice": entry,
+                            "signalBarOpenedAt": signal_at.isoformat(),
+                            "signalBarClosedAt": (signal_at + timedelta(minutes=1)).isoformat(),
+                            "signalOpen": float(signal_bar.open),
+                            "signalHigh": float(signal_bar.high),
+                            "signalLow": float(signal_bar.low),
+                            "signalClose": float(signal_bar.close),
+                            "openingRangeStartedAt": opening_start.isoformat(),
+                            "openingRangeMinutes": self.OR5_OPENING_RANGE_MINUTES,
+                            "openingRangeLow": opening_low,
+                            "entryDrawdown": entry_drawdown,
+                            "entryDrawdownThreshold": -self.OR5_ENTRY_LOSS,
+                            "persistence": self.OR5_PERSISTENCE,
+                            "slowWindowStartedAt": slow_start.isoformat(),
+                            "slowWindowMinutes": self.OR5_SLOW_MINUTES,
+                            "slowWindowOpen": slow_open,
+                            "slowWindowLow": slow_low,
+                            "slowDecline": slow_decline,
+                            "slowDeclineThreshold": -self.OR5_SLOW_DECLINE,
+                            "priceSource": "ACCOUNT_MT5_M1",
+                        }
+
+        base["error"] = error
+        base["rules"] = [{
+            "key": "OR5",
+            "enabled": enabled,
+            "applicable": applicable,
+            "status": "DISABLED" if not enabled else status,
+            "effect": "EXIT_POSITION_MARKET_SELL",
+            "conditions": conditions,
+        }]
+        base["inputs"] = inputs
+        return base
+
+    def record_or5_trigger(self, position, signal_bar: M1Bar, inputs: dict[str, Any]) -> dict[str, Any]:
+        actor = self.coordinator.actor_payload()
+        identifier = self.position_identifier(position)
+        signal_at = signal_bar.local_datetime.replace(second=0, microsecond=0) + timedelta(minutes=1)
+        request_source = "|".join((
+            self.account, "OR5", str(identifier), signal_at.isoformat(),
+            str(self.position_rule_controls_revision), str(actor["ownerId"]), str(actor["fencingToken"]),
+        ))
+        response = self.entry_rule_backend_request(signal_at.date(), {
+            "action": "recordPositionRuleTrigger",
+            "requestId": uuid.uuid5(uuid.NAMESPACE_URL, request_source).hex,
+            "ruleKey": "OR5",
+            "positionIdentifier": identifier,
+            "positionTicket": int(position.ticket),
+            "controlsRevision": self.position_rule_controls_revision,
+            "signalAt": signal_at.isoformat(),
+            "inputs": inputs,
+        })
+        return self.apply_entry_rule_context(response)
+
+    def or5_authorization_matches(self, position) -> bool:
+        return (
+            bool(getattr(self.state, "or5_authorized_request_id", ""))
+            and int(getattr(self.state, "or5_authorized_position_identifier", 0) or 0) == self.position_identifier(position)
+        )
+
+    def maybe_execute_authorized_or5_exit(self, position, now: datetime) -> bool:
+        if position is None or not self.or5_authorization_matches(position):
+            return False
+        if self.state.exit_latched_reason and self.state.exit_latched_reason != "OR5":
+            return False
+        self.state.exit_latched_reason = "OR5"
+        if not self.state.exit_latched_at:
+            self.state.exit_latched_at = now.isoformat()
+        self.state.save(self.cfg.state_file)
+        return self.close_position_market(position, "OR5", now)
+
+    def evaluate_or5_completed_bar(self, position, now: datetime) -> bool:
+        if self.or5_authorization_matches(position):
+            return self.maybe_execute_authorized_or5_exit(position, now)
+        try:
+            self.refresh_entry_rule_context(now.date())
+            refresh_age = time_module.monotonic() - float(
+                getattr(self, "last_position_rule_context_success_monotonic", 0.0) or 0.0
+            )
+            if refresh_age > max(1.0, float(getattr(self.cfg, "monitor_publish_interval_seconds", 5.0))):
+                raise RuntimeError("position-rule authority is stale")
+        except Exception as exc:
+            monotonic = time_module.monotonic()
+            if monotonic - self.last_position_rule_error_monotonic >= float(self.cfg.monitor_error_log_interval_seconds):
+                self.last_position_rule_error_monotonic = monotonic
+                self.log.error("EVENT OR5_AUTHORITY_UNAVAILABLE action=none error=%s", shlex.quote(str(exc)))
+            return False
+        if self.or5_authorization_matches(position):
+            return self.maybe_execute_authorized_or5_exit(position, now)
+
+        signal_bar = self.previous_m1_bar(position.symbol, now)
+        if signal_bar is None:
+            self.last_position_rule_status = self.or5_rule_status(position, None)
+            return False
+        signal_utc = int(signal_bar.utc_timestamp)
+        if signal_utc < int(getattr(self, "position_rule_observed_after_utc", 0) or 0):
+            return False
+        if signal_utc <= int(self.state.or5_last_evaluated_bar_utc or 0):
+            return False
+
+        result = self.or5_rule_status(position, signal_bar)
+        self.last_position_rule_status = result
+        rule = result["rules"][0]
+        if rule["status"] == "WAITING":
+            return False
+        self.state.or5_last_evaluated_bar_utc = signal_utc
+        self.state.save(self.cfg.state_file)
+        if rule["status"] != "MATCHED":
+            return False
+
+        inputs = dict(result.get("inputs") or {})
+        try:
+            response = self.record_or5_trigger(position, signal_bar, inputs)
+        except Exception as exc:
+            self.log.error(
+                "EVENT OR5_TRIGGER_AUTHORIZATION_FAILED position_identifier=%s signal_bar=%s action=none error=%s",
+                self.position_identifier(position), signal_bar.local_datetime.isoformat(), shlex.quote(str(exc)),
+            )
+            return False
+        trigger = response.get("positionTrigger") if isinstance(response.get("positionTrigger"), dict) else {}
+        if not self.or5_authorization_matches(position):
+            self.log.error("EVENT OR5_TRIGGER_AUTHORIZATION_MISSING position_identifier=%s action=none", self.position_identifier(position))
+            return False
+        self.execution_stage(
+            "EXIT_SIGNAL", position_ticket=int(position.ticket), reference_price=float(signal_bar.close),
+            scheduled_at=str(inputs.get("signalBarClosedAt", "")), reason="OR5",
+        )
+        self.log.warning(
+            "EVENT OR5_EXIT_AUTHORIZED request_id=%s controls_revision=%s position_identifier=%s signal_bar=%s signal_close=%.5f",
+            str(trigger.get("requestId", self.state.or5_authorized_request_id)), self.position_rule_controls_revision,
+            self.position_identifier(position), signal_bar.local_datetime.isoformat(), signal_bar.close,
+        )
+        return self.maybe_execute_authorized_or5_exit(position, now)
+
+    def live_position_loss_control_status(self, position, now: datetime) -> dict[str, Any]:
+        if self.or5_authorization_matches(position):
+            inputs = dict(self.state.or5_authorized_inputs or {})
+            return {
+                "revision": int(inputs.get("controlsRevision", self.position_rule_controls_revision) or 0),
+                "evaluatedAt": str(inputs.get("signalBarClosedAt", now.isoformat())),
+                "currentPrice": float(inputs.get("signalClose", 0.0) or 0.0),
+                "currentPriceUsage": "Immutable OR5 trigger authorized; market SELL remains latched until the position closes.",
+                "error": "",
+                "rules": [{
+                    "key": "OR5", "enabled": True, "applicable": True, "status": "EXIT_AUTHORIZED",
+                    "effect": "EXIT_POSITION_MARKET_SELL", "conditions": [],
+                }],
+            }
+        try:
+            self.refresh_entry_rule_context(now.date())
+        except Exception as exc:
+            result = self.or5_rule_status(position, self.previous_m1_bar(position.symbol, now))
+            result["error"] = f"Position-rule authority unavailable: {exc}"
+            return result
+        return self.or5_rule_status(position, self.previous_m1_bar(position.symbol, now))
 
     def refresh_entry_rule_context(self, current_day: date) -> dict[str, Any]:
         now_monotonic = time_module.monotonic()
@@ -301,15 +630,15 @@ class BrokerExecutionMixin:
         previous_day = session_days[-1] if session_days else None
         momentum_base_day = session_days[-21] if len(session_days) >= 21 else None
 
-        def close_for(day_value: Optional[date]) -> float:
+        def close_for(day_value: Optional[date]) -> Optional[M1Bar]:
             if day_value is None:
-                return 0.0
-            close_time = self.session_times(day_value).close_bar_open.time().replace(second=0, microsecond=0)
-            bar = self.m1_bar_at(self.cfg.trade_symbol, day_value, close_time)
-            return float(bar.close) if bar is not None and bar.close > 0 else 0.0
+                return None
+            return self.completed_session_close_bar(self.cfg.trade_symbol, day_value)
 
-        previous_close = close_for(previous_day)
-        momentum_base_close = close_for(momentum_base_day)
+        previous_close_bar = close_for(previous_day)
+        momentum_base_bar = close_for(momentum_base_day)
+        previous_close = float(previous_close_bar.close) if previous_close_bar is not None and previous_close_bar.close > 0 else 0.0
+        momentum_base_close = float(momentum_base_bar.close) if momentum_base_bar is not None and momentum_base_bar.close > 0 else 0.0
         momentum20 = (
             previous_close / momentum_base_close - 1.0
             if previous_close > 0 and momentum_base_close > 0
@@ -344,9 +673,11 @@ class BrokerExecutionMixin:
             "cashOpenSource": preview_source if cash_open_is_preview else "CASH_OPEN_M1",
             "currentPrice": preview_price,
             "previousCashClose": previous_close,
+            "previousCashCloseAt": previous_close_bar.local_datetime.isoformat() if previous_close_bar is not None else "",
             "previousTradingDay": previous_day.isoformat() if previous_day else "",
             "momentumBaseDay": momentum_base_day.isoformat() if momentum_base_day else "",
             "momentumBaseClose": momentum_base_close,
+            "momentumBaseCloseAt": momentum_base_bar.local_datetime.isoformat() if momentum_base_bar is not None else "",
             "momentum20": momentum20,
             "premarketOpen": premarket_open,
             "premarketHigh": premarket_high,
@@ -481,12 +812,14 @@ class BrokerExecutionMixin:
             or self.entry_rule_controls["PREMARKET_LOW"]
         )
         if market_rules_required and market is None:
+            inputs["missingInputs"] = ["marketContext"]
             return "WAIT_MARKET_INPUTS", inputs
         if market is not None:
             inputs.update(market)
 
         if self.entry_rule_controls["PREMARKET_LOW"]:
             if int(inputs.get("premarketBars", 0) or 0) <= 0:
+                inputs["missingInputs"] = ["premarketBars"]
                 return "WAIT_MARKET_INPUTS", inputs
             if self.premarket_low_entry_rule_trigger(
                 float(inputs.get("premarketOpen", 0.0) or 0.0),
@@ -506,6 +839,14 @@ class BrokerExecutionMixin:
                 float(inputs.get("previousCashClose", 0.0) or 0.0) <= 0
                 or inputs.get("momentum20") is None
             ):
+                inputs["missingInputs"] = [
+                    name
+                    for name, missing in (
+                        ("previousCashClose", float(inputs.get("previousCashClose", 0.0) or 0.0) <= 0),
+                        ("momentum20", inputs.get("momentum20") is None),
+                    )
+                    if missing
+                ]
                 return "WAIT_MARKET_INPUTS", inputs
             gap = float(inputs["cashOpen"]) / float(inputs["previousCashClose"]) - 1.0
             inputs["gap"] = gap
@@ -522,12 +863,13 @@ class BrokerExecutionMixin:
     def refresh_previous_full_week_change(self, previous_day: date) -> None:
         if self.state.prev_open <= 0:
             return
-        close_time = self.session_times(previous_day).close_bar_open.time().replace(second=0, microsecond=0)
-        close_bar = self.m1_bar_at(self.cfg.trade_symbol, previous_day, close_time)
+        close_bar = self.completed_session_close_bar(self.cfg.trade_symbol, previous_day)
         if close_bar is None:
-            self.log.warning("EVENT PREVIOUS_FULL_WEEK_CHANGE_MISSING day=%s", previous_day)
             return
-        self.state.prev_full_week_change = close_bar.close / self.state.prev_open - 1.0
+        updated = close_bar.close / self.state.prev_open - 1.0
+        if abs(updated - self.state.prev_full_week_change) <= 1e-12:
+            return
+        self.state.prev_full_week_change = updated
         self.state.save(self.cfg.state_file)
         self.log.info("EVENT PREVIOUS_FULL_WEEK_CHANGE_UPDATED value=%.5f", self.state.prev_full_week_change)
 
@@ -1265,6 +1607,10 @@ class BrokerExecutionMixin:
     def evaluate_regular_bar(self, position, bar: M1Bar, now: datetime) -> None:
         if self.state.exit_latched_reason:
             return
+        or5_context_available = hasattr(self, "position_rule_controls")
+        or5_authorized = bool(getattr(self.state, "or5_authorized_request_id", ""))
+        if (or5_context_available or or5_authorized) and BrokerExecutionMixin.evaluate_or5_completed_bar(self, position, now):
+            return
         entry = float(position.price_open)
         # A break-even state armed immediately after today's CH check applies
         # from the following session. Do not use an earlier high from the same
@@ -1278,9 +1624,8 @@ class BrokerExecutionMixin:
         if self.state.last_close_processed_date == day_key:
             return
 
-        close_time = self.session_times(current_day).close_bar_open.time().replace(second=0, microsecond=0)
-        trade_close_bar = self.m1_bar_at(self.cfg.trade_symbol, current_day, close_time)
-        signal_close_bar = self.m1_bar_at(self.cfg.signal_symbol, current_day, close_time)
+        trade_close_bar = self.completed_session_close_bar(self.cfg.trade_symbol, current_day)
+        signal_close_bar = self.completed_session_close_bar(self.cfg.signal_symbol, current_day)
         if trade_close_bar is None or signal_close_bar is None:
             return
 
@@ -1352,8 +1697,22 @@ class BrokerExecutionMixin:
                 self.state.execution_started_at = datetime.now(UTC).isoformat()
                 self.state.last_missed_entry_week = week
                 self.state.save(self.cfg.state_file)
-                self.execution_stage("MISSED_WINDOW", result=False, scheduled_at=scheduled_at.isoformat(), reason="entry_window_elapsed")
-                self.log.error("EVENT ENTRY_WINDOW_MISSED week=%s scheduled=%s latest_entry=%s now=%s", week, scheduled_at.isoformat(), latest_entry.isoformat(), now.isoformat())
+                missing_inputs = (
+                    list(getattr(self, "last_entry_market_wait_inputs", []))
+                    if getattr(self, "last_entry_market_wait_week", "") == week
+                    else []
+                )
+                reason = "entry_window_elapsed"
+                if missing_inputs:
+                    reason += "_missing_" + "_".join(missing_inputs)
+                self.execution_stage(
+                    "MISSED_WINDOW", result=False, scheduled_at=scheduled_at.isoformat(), reason=reason[:100],
+                )
+                self.log.error(
+                    "EVENT ENTRY_WINDOW_MISSED week=%s scheduled=%s latest_entry=%s now=%s missing_inputs=%s",
+                    week, scheduled_at.isoformat(), latest_entry.isoformat(), now.isoformat(),
+                    ",".join(missing_inputs) or "none",
+                )
             return
         if int(datetime.now(UTC).timestamp()) < self.state.entry_pending_until_utc:
             return
@@ -1416,7 +1775,21 @@ class BrokerExecutionMixin:
             self.refresh_previous_full_week_change(previous)
         status, inputs = self.loss_control_entry_decision(current_day, backend_context, market)
         if status == "WAIT_MARKET_INPUTS":
+            missing_inputs = [str(value) for value in inputs.get("missingInputs", [])]
+            self.last_entry_market_wait_week = week
+            self.last_entry_market_wait_inputs = missing_inputs
+            now_monotonic = time_module.monotonic()
+            last_logged = float(getattr(self, "last_entry_market_wait_log_monotonic", 0.0))
+            if now_monotonic - last_logged >= float(self.cfg.monitor_error_log_interval_seconds):
+                self.last_entry_market_wait_log_monotonic = now_monotonic
+                self.log.warning(
+                    "EVENT ENTRY_MARKET_INPUTS_WAIT week=%s symbol=%s missing_inputs=%s previous_cash_close_at=%s momentum_base_close_at=%s",
+                    week, self.cfg.trade_symbol, ",".join(missing_inputs) or "unknown",
+                    inputs.get("previousCashCloseAt") or "none", inputs.get("momentumBaseCloseAt") or "none",
+                )
             return
+        self.last_entry_market_wait_week = ""
+        self.last_entry_market_wait_inputs = []
         if status != "ENTER":
             try:
                 self.record_entry_rule_week_state(current_day, status, inputs)

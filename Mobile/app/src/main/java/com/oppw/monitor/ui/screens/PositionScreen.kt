@@ -222,6 +222,7 @@ fun PositionScreen(state: UiState, onRetry: () -> Unit) {
                         MetricRow(stopMetricLabel, price(displayedStopLoss), "Potential OH/CH target", price(potentialTakeProfit), DangerRed)
                     }
                 }
+                item { PositionLossControlCard(state, position.lossControls) }
                 item { ConditionCard("Closest condition", closest, true) }
                 item { SectionTitle("All other conditions", conditions.size.toString()) }
                 if (conditions.isEmpty()) item { AppCard(Modifier.fillMaxWidth()) { Text("No other active price conditions.", color = TextSecondary) } }
@@ -238,6 +239,54 @@ fun PositionScreen(state: UiState, onRetry: () -> Unit) {
                 state.error?.let { error -> item { ErrorPanel("Showing cached data. $error", onRetry) } }
             }
         }
+    }
+}
+
+@Composable
+private fun PositionLossControlCard(state: UiState, live: com.oppw.monitor.data.LossControlStatus) {
+    val liveByKey = live.rules.associateBy { it.key }
+    val configured = state.strategyControl?.positionRules.orEmpty().ifEmpty {
+        live.rules.map { StrategyRuleControl(it.key, it.key.replace('_', ' '), "", it.enabled, "OPEN_POSITION") }
+    }
+    AppCard(Modifier.fillMaxWidth()) {
+        SectionTitle("Open-position loss protection", "REV ${state.strategyControl?.positionRevision ?: live.revision}")
+        if (live.rules.isEmpty()) {
+            Text("Waiting for the publisher's completed-candle position-rule evaluation.", color = TextSecondary)
+            state.strategyControlError?.let { Text(it, color = DangerRed) }
+            return@AppCard
+        }
+        MetricRow("Last completed M1 close", price(live.currentPrice), "Evaluated", shortDateTime(live.evaluatedAt))
+        if (live.currentPriceUsage.isNotBlank()) Text(live.currentPriceUsage, color = TextSecondary)
+        configured.forEach { control ->
+            val rule = liveByKey[control.key]
+            val status = when {
+                rule?.status.equals("EXIT_AUTHORIZED", true) -> "EXIT_AUTHORIZED"
+                !control.enabled -> "DISABLED"
+                rule == null -> "WAITING"
+                else -> rule.status.ifBlank { "WAITING" }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(control.label, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                StatusChip(status.replace('_', ' '), lossControlTone(status, rule?.effect.orEmpty()))
+            }
+            if (control.description.isNotBlank()) Text(control.description, color = TextSecondary)
+            val conditionActive = control.enabled && rule?.applicable == true
+            val effect = rule?.effect.orEmpty()
+            rule?.conditions.orEmpty().forEach { condition ->
+                val actual = condition.actual?.let(::lossControlRatio) ?: "awaiting input"
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Column(Modifier.weight(1f)) {
+                        Text(condition.label)
+                        Text("$actual  ${condition.operator}  ${lossControlRatio(condition.threshold)}", color = TextSecondary)
+                    }
+                    StatusChip(
+                        when (condition.met) { true -> "MET"; false -> "NOT MET"; null -> "WAITING" },
+                        lossControlConditionTone(conditionActive, effect, condition.met),
+                    )
+                }
+            }
+        }
+        live.error.takeIf { it.isNotBlank() }?.let { Text("Live input warning: $it", color = TextSecondary) }
     }
 }
 
@@ -297,6 +346,7 @@ private fun lossControlRatio(value: Double): String = String.format(Locale.US, "
 private fun lossControlTone(status: String, effect: String): String = when (status) {
     "DISABLED", "NOT_APPLICABLE" -> "blue"
     "WAITING" -> "amber"
+    "EXIT_AUTHORIZED" -> "red"
     "MATCHED" -> if (effect == "ALLOW_TUESDAY_REENTRY") "green" else "red"
     "NOT_MATCHED" -> if (effect == "ALLOW_TUESDAY_REENTRY") "red" else "green"
     else -> "blue"

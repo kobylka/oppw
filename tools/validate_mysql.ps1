@@ -104,6 +104,11 @@ VALUES
         mysql -N -uroot --database=oppw_monitor -e $entryRuleTableQuery).Trim()
     if ($LASTEXITCODE -ne 0 -or [int]$entryRuleTableCount -ne 4) { throw "Entry-rule table validation failed: $entryRuleTableCount/4" }
 
+    $positionRuleTableQuery = "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='oppw_monitor' AND TABLE_NAME IN ('strategy_position_rule_controls','strategy_position_rule_control_events','strategy_position_rule_trigger_events');"
+    $positionRuleTableCount = (& $docker.Source exec $container `
+        mysql -N -uroot --database=oppw_monitor -e $positionRuleTableQuery).Trim()
+    if ($LASTEXITCODE -ne 0 -or [int]$positionRuleTableCount -ne 3) { throw "Position-rule table validation failed: $positionRuleTableCount/3" }
+
     $accountSetupQuery = @"
 SELECT COUNT(*)
   FROM monitor_accounts
@@ -134,7 +139,7 @@ SELECT COUNT(*)
     $triggerQuery = "SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA='oppw_monitor' AND TRIGGER_NAME REGEXP '_no_(update|delete)$';"
     $triggerCount = (& $docker.Source exec $container `
         mysql -N -uroot --database=oppw_monitor -e $triggerQuery).Trim()
-    if ($LASTEXITCODE -ne 0 -or [int]$triggerCount -ne 23) { throw "Immutability-trigger validation failed: $triggerCount/23" }
+    if ($LASTEXITCODE -ne 0 -or [int]$triggerCount -ne 27) { throw "Immutability-trigger validation failed: $triggerCount/27" }
 
     $marketRetentionTriggerQuery = "SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA='oppw_monitor' AND TRIGGER_NAME='strategy_market_points_no_delete' AND EVENT_MANIPULATION='DELETE';"
     $marketRetentionTriggerCount = (& $docker.Source exec $container `

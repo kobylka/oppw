@@ -17,6 +17,15 @@ $ruleMetadata = [
     'TUESDAY_NORMALIZATION' => ['label' => 'Tuesday within ±0.50% of Friday', 'description' => 'After a Monday gap-momentum defer, re-enter only when Tuesday opens within ±0.50% of Friday.'],
     'PREMARKET_LOW' => ['label' => 'Premarket range ≥ 0.80% + close in bottom 15%', 'description' => 'Skip only when the premarket range is at least 0.80% and its close is in the bottom 15% of that range.'],
 ];
+$positionRuleColumns = [
+    'OR5' => 'or5_enabled',
+];
+$positionRuleMetadata = [
+    'OR5' => [
+        'label' => 'OR5 breakdown + 60-minute decline',
+        'description' => 'Exit an open position after a completed M1 closes below the five-minute opening-range low while the entry loss is at least 0.50% and the trailing 60-minute decline is at least 1.50%.',
+    ],
+];
 $finalSkipStatuses = [
     'SKIP_ARITHMETIC',
     'SKIP_GAP_MOMENTUM',
@@ -48,6 +57,8 @@ $ensureAccount = static function (PDO $db, string $account): void {
 $ensureControls = static function (PDO $db, string $account): void {
     $statement = $db->prepare('INSERT IGNORE INTO strategy_entry_rule_controls(strategy_key) VALUES (?)');
     $statement->execute([$account]);
+    $positionStatement = $db->prepare('INSERT IGNORE INTO strategy_position_rule_controls(strategy_key) VALUES (?)');
+    $positionStatement->execute([$account]);
 };
 $loadControls = static function (PDO $db, string $account) use ($ruleColumns, $ruleMetadata): array {
     $statement = $db->prepare('SELECT * FROM strategy_entry_rule_controls WHERE strategy_key=? LIMIT 1');
@@ -67,6 +78,57 @@ $loadControls = static function (PDO $db, string $account) use ($ruleColumns, $r
         'revision' => (int)$row['revision'],
         'changedAt' => (string)$row['changed_at'],
         'rules' => $rules,
+    ];
+};
+$loadPositionControls = static function (PDO $db, string $account) use ($positionRuleColumns, $positionRuleMetadata): array {
+    $statement = $db->prepare('SELECT * FROM strategy_position_rule_controls WHERE strategy_key=? LIMIT 1');
+    $statement->execute([$account]);
+    $row = $statement->fetch();
+    if (!is_array($row)) throw new RuntimeException('Position-rule controls are unavailable');
+    $rules = [];
+    foreach ($positionRuleColumns as $key => $column) {
+        $rules[] = [
+            'key' => $key,
+            'scope' => 'OPEN_POSITION',
+            'label' => $positionRuleMetadata[$key]['label'],
+            'description' => $positionRuleMetadata[$key]['description'],
+            'enabled' => (bool)$row[$column],
+        ];
+    }
+    return [
+        'positionRevision' => (int)$row['revision'],
+        'positionChangedAt' => atom_datetime(new DateTimeImmutable((string)$row['changed_at'], new DateTimeZone('UTC'))),
+        'positionRules' => $rules,
+    ];
+};
+$loadPositionTrigger = static function (PDO $db, string $account, int $positionIdentifier): ?array {
+    if ($positionIdentifier <= 0) return null;
+    $statement = $db->prepare(
+        'SELECT request_id,rule_key,position_identifier,position_ticket,controls_revision,
+                owner_id,fencing_token,signal_at,inputs,recorded_at
+           FROM strategy_position_rule_trigger_events
+          WHERE strategy_key=? AND position_identifier=?
+          ORDER BY recorded_at DESC,id DESC LIMIT 1'
+    );
+    $statement->execute([$account, $positionIdentifier]);
+    $row = $statement->fetch();
+    if (!is_array($row)) return null;
+    try {
+        $inputs = json_decode((string)$row['inputs'], true, 64, JSON_THROW_ON_ERROR);
+    } catch (Throwable) {
+        $inputs = [];
+    }
+    return [
+        'requestId' => (string)$row['request_id'],
+        'ruleKey' => (string)$row['rule_key'],
+        'positionIdentifier' => (int)$row['position_identifier'],
+        'positionTicket' => (int)$row['position_ticket'],
+        'controlsRevision' => (int)$row['controls_revision'],
+        'ownerId' => (string)$row['owner_id'],
+        'fencingToken' => (int)$row['fencing_token'],
+        'signalAt' => atom_datetime(new DateTimeImmutable((string)$row['signal_at'], new DateTimeZone('UTC'))),
+        'inputs' => is_array($inputs) ? $inputs : [],
+        'recordedAt' => atom_datetime(new DateTimeImmutable((string)$row['recorded_at'], new DateTimeZone('UTC'))),
     ];
 };
 $loadWeekState = static function (PDO $db, string $account, string $week): ?array {
@@ -147,23 +209,28 @@ $response = static function (
     PDO $db,
     string $account,
     bool $canControl,
-    string $week
-) use ($loadControls, $loadWeekState, $recentOutcomes): never {
+    string $week,
+    int $positionIdentifier = 0
+) use ($loadControls, $loadPositionControls, $loadPositionTrigger, $loadWeekState, $recentOutcomes): never {
     $controls = $loadControls($db, $account);
+    $positionControls = $loadPositionControls($db, $account);
     json_response([
         'ok' => true,
         'generatedAt' => atom_datetime(utc_now()),
         'accountKey' => $account,
         'canControl' => $canControl,
         ...$controls,
+        ...$positionControls,
         'weekState' => $loadWeekState($db, $account, $week),
         'recentOutcomes' => $week !== '' ? $recentOutcomes($db, $account, $week) : [],
+        'positionTrigger' => $loadPositionTrigger($db, $account, $positionIdentifier),
     ]);
 };
 
 if ($method === 'GET') {
     $account = $validAccount($_GET['accountKey'] ?? $_GET['account'] ?? '');
     $week = $validWeek($_GET['weekKey'] ?? '');
+    $positionIdentifier = max(0, (int)($_GET['positionIdentifier'] ?? 0));
     $provided = bearer_token();
     $writeToken = (string)(config()['write_token'] ?? '');
     if ($provided !== '' && $writeToken !== '' && hash_equals($writeToken, $provided)) {
@@ -178,13 +245,13 @@ if ($method === 'GET') {
         if (!in_array($actor['role'], ['EXECUTOR', 'PUBLISHER'], true)) {
             json_response(['ok' => false, 'error' => 'Executor or publisher lease required'], 409);
         }
-        $response($db, $account, false, $week);
+        $response($db, $account, false, $week, $positionIdentifier);
     }
     $session = require_mobile_session($account);
     $ensureControls($db, $account);
     $permission = $db->prepare('SELECT can_control_service FROM monitor_device_accounts WHERE device_id=? AND account_key=?');
     $permission->execute([$session['device_id'], $account]);
-    $response($db, $account, (bool)$permission->fetchColumn(), $week);
+    $response($db, $account, (bool)$permission->fetchColumn(), $week, $positionIdentifier);
 }
 
 if ($method !== 'POST') {
@@ -199,7 +266,9 @@ if ($action === 'setRule') {
     $account = $validAccount($data['accountKey'] ?? '');
     $ruleKey = strtoupper(trim((string)($data['ruleKey'] ?? '')));
     $requestId = strtolower(trim((string)($data['requestId'] ?? '')));
-    if (!isset($ruleColumns[$ruleKey])
+    $isEntryRule = isset($ruleColumns[$ruleKey]);
+    $isPositionRule = isset($positionRuleColumns[$ruleKey]);
+    if ((!$isEntryRule && !$isPositionRule)
         || !preg_match('/^[a-f0-9]{32}$/', $requestId)
         || !array_key_exists('enabled', $data)
         || !is_bool($data['enabled'])) {
@@ -210,21 +279,23 @@ if ($action === 'setRule') {
     $permission = $db->prepare('SELECT can_control_service FROM monitor_device_accounts WHERE device_id=? AND account_key=?');
     $permission->execute([$session['device_id'], $account]);
     if (!(bool)$permission->fetchColumn()) {
-        json_response(['ok' => false, 'error' => 'This device is not permitted to control strategy entry rules'], 403);
+        json_response(['ok' => false, 'error' => 'This device is not permitted to control strategy rules'], 403);
     }
     $enabled = (bool)$data['enabled'];
-    $column = $ruleColumns[$ruleKey];
+    $column = $isEntryRule ? $ruleColumns[$ruleKey] : $positionRuleColumns[$ruleKey];
+    $controlTable = $isEntryRule ? 'strategy_entry_rule_controls' : 'strategy_position_rule_controls';
+    $eventTable = $isEntryRule ? 'strategy_entry_rule_control_events' : 'strategy_position_rule_control_events';
     $db->beginTransaction();
     try {
         $now = utc_now();
         $event = $db->prepare(
-            'INSERT IGNORE INTO strategy_entry_rule_control_events(request_id,strategy_key,rule_key,enabled,device_id,requested_at)
-             VALUES (?,?,?,?,?,?)'
+            "INSERT IGNORE INTO $eventTable(request_id,strategy_key,rule_key,enabled,device_id,requested_at)
+             VALUES (?,?,?,?,?,?)"
         );
         $event->execute([$requestId, $account, $ruleKey, $enabled ? 1 : 0, $session['device_id'], mysql_datetime($now)]);
         $newRequest = $event->rowCount() === 1;
         if (!$newRequest) {
-            $existing = $db->prepare('SELECT strategy_key,rule_key,enabled,device_id FROM strategy_entry_rule_control_events WHERE request_id=? FOR UPDATE');
+            $existing = $db->prepare("SELECT strategy_key,rule_key,enabled,device_id FROM $eventTable WHERE request_id=? FOR UPDATE");
             $existing->execute([$requestId]);
             $recorded = $existing->fetch();
             if (!is_array($recorded)
@@ -238,7 +309,7 @@ if ($action === 'setRule') {
         }
         if ($newRequest) {
             $update = $db->prepare(
-                "UPDATE strategy_entry_rule_controls
+                "UPDATE $controlTable
                     SET $column=?,revision=revision+1,changed_by_device_id=?,changed_at=?
                   WHERE strategy_key=?"
             );
@@ -250,7 +321,91 @@ if ($action === 'setRule') {
         error_log('OPPW strategy rule control failed: ' . $error->getMessage());
         json_response(['ok' => false, 'error' => 'Strategy rule control failed'], 503);
     }
-    $response($db, $account, true, '');
+    $response($db, $account, true, '', 0);
+}
+
+if ($action === 'recordPositionRuleTrigger') {
+    require_write_token();
+    $account = $validAccount($data['accountKey'] ?? '');
+    $ruleKey = strtoupper(trim((string)($data['ruleKey'] ?? '')));
+    $requestId = strtolower(trim((string)($data['requestId'] ?? '')));
+    $positionIdentifier = (int)($data['positionIdentifier'] ?? 0);
+    $positionTicket = (int)($data['positionTicket'] ?? 0);
+    $controlsRevision = (int)($data['controlsRevision'] ?? 0);
+    $signalRaw = trim((string)($data['signalAt'] ?? ''));
+    $inputs = $data['inputs'] ?? [];
+    if ($ruleKey !== 'OR5'
+        || !preg_match('/^[a-f0-9]{32}$/', $requestId)
+        || $positionIdentifier <= 0
+        || $positionTicket <= 0
+        || $controlsRevision <= 0
+        || $signalRaw === ''
+        || !preg_match('/(?:Z|[+-]\d{2}:\d{2})$/', $signalRaw)
+        || !is_array($inputs)) {
+        json_response(['ok' => false, 'error' => 'valid OR5 trigger identity, revision, signalAt and inputs required'], 400);
+    }
+    try {
+        $signalAt = new DateTimeImmutable($signalRaw);
+    } catch (Throwable) {
+        json_response(['ok' => false, 'error' => 'valid offset signalAt required'], 400);
+    }
+    $ensureAccount($db, $account);
+    $ensureControls($db, $account);
+    $actor = require_coordination_actor($db, $account, $data['coordination'] ?? null, 'position-rules');
+    if ($actor['role'] !== 'EXECUTOR') json_response(['ok' => false, 'error' => 'Executor lease required'], 409);
+    try {
+        $inputsJson = json_encode($inputs, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+    } catch (Throwable) {
+        json_response(['ok' => false, 'error' => 'inputs must be JSON-compatible'], 400);
+    }
+    if (strlen($inputsJson) > 16384) json_response(['ok' => false, 'error' => 'inputs payload too large'], 413);
+    $signalSql = mysql_datetime($signalAt);
+    $payloadHash = hash('sha256', implode('|', [
+        $account, $ruleKey, (string)$positionIdentifier, (string)$positionTicket,
+        (string)$controlsRevision, (string)$actor['ownerId'], (string)$actor['fencingToken'],
+        $signalSql, $inputsJson,
+    ]));
+
+    $db->beginTransaction();
+    try {
+        $now = utc_now();
+        $event = $db->prepare(
+            'INSERT IGNORE INTO strategy_position_rule_trigger_events(
+                request_id,strategy_key,rule_key,position_identifier,position_ticket,controls_revision,
+                owner_id,fencing_token,signal_at,inputs,payload_hash,recorded_at
+             ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)'
+        );
+        $event->execute([
+            $requestId, $account, $ruleKey, $positionIdentifier, $positionTicket, $controlsRevision,
+            $actor['ownerId'], $actor['fencingToken'], $signalSql, $inputsJson, $payloadHash, mysql_datetime($now),
+        ]);
+        $newRequest = $event->rowCount() === 1;
+        if (!$newRequest) {
+            $existing = $db->prepare('SELECT payload_hash FROM strategy_position_rule_trigger_events WHERE request_id=? FOR UPDATE');
+            $existing->execute([$requestId]);
+            $existingHash = (string)($existing->fetchColumn() ?: '');
+            if ($existingHash === '' || !hash_equals($existingHash, $payloadHash)) {
+                $db->rollBack();
+                json_response(['ok' => false, 'error' => 'requestId was already used for different position-rule trigger content'], 409);
+            }
+        } else {
+            $currentControls = $db->prepare('SELECT revision,or5_enabled FROM strategy_position_rule_controls WHERE strategy_key=? FOR UPDATE');
+            $currentControls->execute([$account]);
+            $current = $currentControls->fetch();
+            if (!is_array($current)
+                || (int)$current['revision'] !== $controlsRevision
+                || !(bool)$current['or5_enabled']) {
+                $db->rollBack();
+                json_response(['ok' => false, 'error' => 'OR5 control changed or is disabled; reevaluate with the current revision'], 409);
+            }
+        }
+        $db->commit();
+    } catch (Throwable $error) {
+        if ($db->inTransaction()) $db->rollBack();
+        error_log('OPPW position-rule trigger failed: ' . $error->getMessage());
+        json_response(['ok' => false, 'error' => 'Position-rule trigger failed'], 503);
+    }
+    $response($db, $account, false, '', $positionIdentifier);
 }
 
 if ($action === 'recordWeekState') {
@@ -347,7 +502,7 @@ if ($action === 'recordWeekState') {
         error_log('OPPW weekly entry-rule state failed: ' . $error->getMessage());
         json_response(['ok' => false, 'error' => 'Weekly entry-rule state failed'], 503);
     }
-    $response($db, $account, false, $week);
+    $response($db, $account, false, $week, 0);
 }
 
 json_response(['ok' => false, 'error' => 'Unknown action'], 400);

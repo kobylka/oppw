@@ -59,6 +59,7 @@ data class StrategyRuleControl(
     val label: String,
     val description: String,
     val enabled: Boolean,
+    val scope: String = "ENTRY",
 )
 
 data class StrategyControlStatus(
@@ -68,6 +69,9 @@ data class StrategyControlStatus(
     val revision: Long,
     val changedAt: String,
     val rules: List<StrategyRuleControl>,
+    val positionRevision: Long = 0,
+    val positionChangedAt: String = "",
+    val positionRules: List<StrategyRuleControl> = emptyList(),
 )
 
 data class MonitorResponse(
@@ -280,6 +284,7 @@ data class PositionStatus(
     val immutableHardStop: ImmutableHardStop = ImmutableHardStop(),
     val protectionTarget: ProtectionTarget = ProtectionTarget(),
     val manual: Boolean = false,
+    val lossControls: LossControlStatus = LossControlStatus(),
 )
 
 data class PriceCondition(

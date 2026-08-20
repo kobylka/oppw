@@ -148,6 +148,13 @@ INSERT INTO strategy_entry_rule_week_state(strategy_key,week_key,status,controls
 VALUES ('DEMO','2025-W01','SKIP_ARITHMETIC',2,'33333333333333333333333333333333','{"arithmeticSum":-0.021}','2025-01-01 00:00:08.200');
 INSERT INTO strategy_entry_rule_week_events(request_id,strategy_key,week_key,status,controls_revision,decision_id,owner_id,fencing_token,inputs,payload_hash,recorded_at)
 VALUES ('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','DEMO','2025-W01','SKIP_ARITHMETIC',2,'33333333333333333333333333333333','22222222222222222222222222222222',1,'{"arithmeticSum":-0.021}',REPEAT('2',64),'2025-01-01 00:00:08.200');
+UPDATE strategy_position_rule_controls
+SET or5_enabled=TRUE,revision=2,changed_at='2025-01-01 00:00:08.300'
+WHERE strategy_key='DEMO';
+INSERT INTO strategy_position_rule_control_events(request_id,strategy_key,rule_key,enabled,requested_at)
+VALUES ('cccccccccccccccccccccccccccccccc','DEMO','OR5',TRUE,'2025-01-01 00:00:08.300');
+INSERT INTO strategy_position_rule_trigger_events(request_id,strategy_key,rule_key,position_identifier,position_ticket,controls_revision,owner_id,fencing_token,signal_at,inputs,payload_hash,recorded_at)
+VALUES ('dddddddddddddddddddddddddddddddd','DEMO','OR5',9001,9001,2,'22222222222222222222222222222222',1,'2025-01-01 00:00:08.400','{"signalClose":19000}',REPEAT('3',64),'2025-01-01 00:00:08.400');
 INSERT INTO strategy_events(strategy_key,event_time,level,name,result,message,details,event_hash)
 VALUES ('DEMO','2025-01-01 00:00:09.000','INFO','RECOVERY_FIXTURE',TRUE,'fixture','{"fixture":true}',REPEAT('9',64));
 INSERT INTO strategy_equity_points(strategy_key,captured_minute,balance,equity,deposit,current_profit,position_ticket)
@@ -180,6 +187,8 @@ VALUES ('DEMO','2024-12-31','2024-12-31 00:01:00','2024-12-31 23:59:00',9990,999
         'strategy_trade_ledger', 'account_cash_flows', 'strategy_service_control_events',
         'strategy_entry_rule_controls', 'strategy_entry_rule_control_events',
         'strategy_entry_rule_week_state', 'strategy_entry_rule_week_events',
+        'strategy_position_rule_controls', 'strategy_position_rule_control_events',
+        'strategy_position_rule_trigger_events',
         'strategy_events', 'strategy_equity_points', 'strategy_market_points', 'strategy_equity_daily'
     )
     foreach ($table in $tables) {
@@ -193,7 +202,7 @@ VALUES ('DEMO','2024-12-31','2024-12-31 00:01:00','2024-12-31 23:59:00',9990,999
 
     $triggerCount = Get-DisposableScalar -Container $restoreContainer -Sql `
         "SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA='oppw_monitor' AND TRIGGER_NAME REGEXP '_no_(update|delete)$'"
-    if ([int]$triggerCount -ne 23) { throw "Restored immutability-trigger validation failed: $triggerCount/23" }
+    if ([int]$triggerCount -ne 27) { throw "Restored immutability-trigger validation failed: $triggerCount/27" }
     Assert-MutationRejected -Container $restoreContainer `
         -Sql "UPDATE strategy_decisions SET outcome='MUTATED' WHERE decision_id='33333333333333333333333333333333'" `
         -Label 'strategy decision update'
@@ -203,6 +212,9 @@ VALUES ('DEMO','2024-12-31','2024-12-31 00:01:00','2024-12-31 23:59:00',9990,999
     Assert-MutationRejected -Container $restoreContainer `
         -Sql "DELETE FROM strategy_entry_rule_week_events WHERE request_id='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'" `
         -Label 'entry-rule weekly audit deletion'
+    Assert-MutationRejected -Container $restoreContainer `
+        -Sql "DELETE FROM strategy_position_rule_trigger_events WHERE request_id='dddddddddddddddddddddddddddddddd'" `
+        -Label 'position-rule trigger audit deletion'
     Assert-MutationRejected -Container $restoreContainer `
         -Sql "DELETE FROM strategy_market_points WHERE strategy_key='DEMO'" `
         -Label 'minute market OHLC deletion'

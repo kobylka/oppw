@@ -284,7 +284,17 @@ class RuntimeMixin:
                 raise RuntimeError("Exact broker close deal is not available yet")
         elif position is not None:
             self.recover_position_state(position, now, force=True)
-            self.apply_standard_protection(position, now)
+            try:
+                self.refresh_entry_rule_context(now.date())
+            except Exception as exc:
+                self.log.error(
+                    "EVENT POSITION_RULE_STARTUP_RECOVERY_UNAVAILABLE action=none error=%s",
+                    shlex.quote(str(exc)),
+                )
+            if self.maybe_execute_authorized_or5_exit(position, now):
+                position = self.managed_position()
+            if position is not None:
+                self.apply_standard_protection(position, now)
         current_bar = self.current_m1_bar(self.cfg.trade_symbol)
         self.last_account_funding_signature = self.account_funding_signature(mt5.account_info())
         self.last_account_funding_check_monotonic = time_module.monotonic()
@@ -331,7 +341,9 @@ class RuntimeMixin:
 
         if position is not None:
             self.capture_entry_signal_open(position, now)
-            if self.maybe_execute_open_action(position, now):
+            if self.maybe_execute_authorized_or5_exit(position, now):
+                position = self.managed_position()
+            if position is not None and self.maybe_execute_open_action(position, now):
                 position = self.managed_position()
             if position is not None and self.maybe_execute_close_action(position, now):
                 position = self.managed_position()

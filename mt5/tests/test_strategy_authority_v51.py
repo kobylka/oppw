@@ -98,6 +98,10 @@ class StrategySpecificationTests(unittest.TestCase):
         self.assertEqual(specification["document"]["entryLossControl"]["momentumSessions"], 20)
         self.assertIn("pre-open entry action", specification["document"]["calendarAndTime"]["ruleControlledEntryTime"])
         self.assertIn("fresh MT5 BUY price", specification["document"]["entryLossControl"]["entryPriceReference"])
+        self.assertIn(
+            "strictly before",
+            specification["document"]["entryLossControl"]["completedSessionCloseReference"],
+        )
         self.assertEqual("GROWTH_1_765", specification["document"]["sizing"]["activeProfile"])
         self.assertEqual(0.9375, strategy.hard_sl_ratio(8))
         self.assertEqual(0.95, strategy.hard_sl_ratio(10))

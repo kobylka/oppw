@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 import argparse
+import csv
 import os
 import matplotlib.pyplot as plt
 import numpy as np
@@ -16,6 +17,149 @@ from oppw_loss_control import (
         normalized_tuesday_reentry,
         premarket_closes_near_low,
 )
+
+OR5_EXIT_RULE = {
+        "opening_range_minutes": 5,
+        "entry_loss": 0.005,
+        "persistence": 1,
+        "slow_minutes": 60,
+        "slow_decline": 0.015,
+}
+
+def selected_structural_exit_rule(or5_exit_enabled):
+        """Return the opt-in structural exit configuration for this run."""
+        return dict(OR5_EXIT_RULE) if or5_exit_enabled else None
+
+def load_vix_history(path):
+        """Load daily VIX OHLC keyed by the backtest's YYYYMMDD dates."""
+        history = {}
+        with Path(path).open(newline="", encoding="utf-8-sig") as handle:
+                for row in csv.DictReader(handle):
+                        date = datetime.strptime(row["DATE"], "%m/%d/%Y").strftime("%Y%m%d")
+                        history[date] = {
+                                "open": float(row["OPEN"]),
+                                "high": float(row["HIGH"]),
+                                "low": float(row["LOW"]),
+                                "close": float(row["CLOSE"]),
+                        }
+        return history
+
+def meta_filter_entry_features(
+        all_quotes,
+        quote_dates,
+        quote_position,
+        stock,
+        vix_history,
+):
+        """Build leakage-safe features from data available before cash entry."""
+        if quote_position < 21:
+                return None
+
+        history_dates = quote_dates[quote_position - 21:quote_position]
+        history = [all_quotes[date][stock] for date in history_dates]
+        daily_closes = [bars[3] for bars in history]
+        if any(close <= 0 for close in daily_closes):
+                return None
+
+        current = all_quotes[quote_dates[quote_position]][stock]
+        cash_open = current[934][0]
+        previous_cash_close = history[-1][1324][3]
+        premarket = current[4:934]
+        if cash_open <= 0 or previous_cash_close <= 0 or not premarket:
+                return None
+
+        true_ranges = []
+        for offset, bars in enumerate(history[-14:]):
+                previous_close = daily_closes[-15 + offset]
+                true_ranges.append(max(
+                        bars[1] - bars[2],
+                        abs(bars[1] - previous_close),
+                        abs(bars[2] - previous_close),
+                ))
+
+        premarket_open = premarket[0][0]
+        premarket_high = max(bar[1] for bar in premarket)
+        premarket_low = min(bar[2] for bar in premarket)
+        premarket_close = premarket[-1][3]
+        premarket_span = premarket_high - premarket_low
+        if premarket_open <= 0:
+                return None
+
+        latest_close = daily_closes[-1]
+        previous_vix = vix_history.get(history_dates[-1])
+        five_session_vix = vix_history.get(history_dates[-6])
+        if (
+                previous_vix is None
+                or five_session_vix is None
+                or five_session_vix["close"] <= 0
+        ):
+                return None
+        return [
+                latest_close / daily_closes[-2] - 1.0,
+                latest_close / daily_closes[-6] - 1.0,
+                latest_close / daily_closes[-21] - 1.0,
+                cash_open / previous_cash_close - 1.0,
+                sum(true_ranges) / len(true_ranges) / latest_close,
+                latest_close / (sum(daily_closes[-20:]) / 20.0) - 1.0,
+                premarket_span / premarket_open,
+                (
+                        (premarket_close - premarket_low) / premarket_span
+                        if premarket_span > 0
+                        else 0.5
+                ),
+                previous_vix["close"] / 100.0,
+                previous_vix["close"] / five_session_vix["close"] - 1.0,
+        ]
+
+def fit_meta_filter(feature_history, outcome_history, minimum_samples=40):
+        """Fit a deterministic balanced logistic worst-decile classifier."""
+        if len(outcome_history) < minimum_samples:
+                return None
+
+        x = np.asarray(feature_history, dtype=float)
+        outcomes = np.asarray(outcome_history, dtype=float)
+        cutoff = float(np.quantile(outcomes, 0.10, method="lower"))
+        y = (outcomes <= cutoff).astype(float)
+        positives = int(y.sum())
+        negatives = len(y) - positives
+        if positives == 0 or negatives == 0:
+                return None
+
+        mean = x.mean(axis=0)
+        scale = x.std(axis=0)
+        scale[scale < 1e-12] = 1.0
+        normalized = (x - mean) / scale
+        design = np.column_stack((np.ones(len(normalized)), normalized))
+        weights = np.zeros(design.shape[1], dtype=float)
+        sample_weights = np.where(y > 0.5, 0.5 / positives, 0.5 / negatives)
+
+        for _ in range(400):
+                logits = np.clip(design @ weights, -30.0, 30.0)
+                probabilities = 1.0 / (1.0 + np.exp(-logits))
+                gradient = design.T @ (sample_weights * (probabilities - y))
+                gradient[1:] += 0.01 * weights[1:]
+                weights -= 0.25 * gradient
+
+        training_logits = np.clip(design @ weights, -30.0, 30.0)
+        training_probabilities = 1.0 / (1.0 + np.exp(-training_logits))
+        veto_threshold = float(
+                np.quantile(training_probabilities, 0.90, method="higher")
+        )
+
+        return {
+                "mean": mean,
+                "scale": scale,
+                "weights": weights,
+                "cutoff": cutoff,
+                "samples": len(outcomes),
+                "veto_threshold": veto_threshold,
+        }
+
+def meta_filter_worst_probability(model, features):
+        normalized = (np.asarray(features, dtype=float) - model["mean"]) / model["scale"]
+        design = np.concatenate(([1.0], normalized))
+        logit = float(np.clip(design @ model["weights"], -30.0, 30.0))
+        return 1.0 / (1.0 + math.exp(-logit))
 
 def add_days(date, D):
         date_obj = datetime.strptime(date, "%Y%m%d")
@@ -66,6 +210,231 @@ def interpolated_premarket_tpp(
         progress = (bar_index - first_bar_index) / interval
         progress = min(max(progress, 0.0), 1.0)
         return start_tpp + (end_tpp - start_tpp) * progress
+
+def structural_breakdown_exit_signal(
+        quotes,
+        bar_index,
+        position_start_index,
+        open_price,
+        rule,
+        first_position_day=False,
+):
+        """Evaluate an experimental sustained intraday breakdown rule."""
+        if not rule or bar_index < 934:
+                return False
+
+        if isinstance(rule, (list, tuple)):
+                return any(
+                        structural_breakdown_exit_signal(
+                                quotes,
+                                bar_index,
+                                position_start_index,
+                                open_price,
+                                candidate,
+                                first_position_day,
+                        )
+                        for candidate in rule
+                )
+
+        opening_range_minutes = int(rule.get("opening_range_minutes", 0))
+        opening_range_end = 934 + opening_range_minutes - 1
+        if opening_range_minutes <= 0 or bar_index <= opening_range_end:
+                return False
+
+        current_low = quotes[bar_index][2]
+        current_close = quotes[bar_index][3]
+        session_open = quotes[934][0]
+        opening_range_low = min(
+                quote[2]
+                for quote in quotes[934:opening_range_end + 1]
+        )
+
+        entry_loss = rule.get("entry_loss")
+        if entry_loss is not None and current_low / open_price - 1 > -entry_loss:
+                return False
+
+        session_loss = rule.get("session_loss")
+        if session_loss is not None and current_low / session_open - 1 > -session_loss:
+                return False
+
+        break_buffer = float(rule.get("break_buffer", 0.0))
+        if current_close > opening_range_low * (1.0 - break_buffer):
+                return False
+
+        persistence = int(rule.get("persistence", 1))
+        persistence_start = bar_index - persistence + 1
+        if persistence_start < max(position_start_index, opening_range_end + 1):
+                return False
+        if any(
+                quote[3] > opening_range_low * (1.0 - break_buffer)
+                for quote in quotes[persistence_start:bar_index + 1]
+        ):
+                return False
+
+        failed_recovery_minutes = rule.get("failed_recovery_minutes")
+        if failed_recovery_minutes is not None:
+                recovery_start = bar_index - int(failed_recovery_minutes) + 1
+                if recovery_start < position_start_index:
+                        return False
+                recovery_ceiling = open_price * (
+                        1.0 - float(rule.get("recovery_gap", 0.0))
+                )
+                if max(
+                        quote[1]
+                        for quote in quotes[recovery_start:bar_index + 1]
+                ) > recovery_ceiling:
+                        return False
+
+        slow_minutes = rule.get("slow_minutes")
+        if slow_minutes is not None:
+                slow_start = bar_index - int(slow_minutes) + 1
+                slow_floor = position_start_index
+                if (
+                        first_position_day
+                        and rule.get("first_day_slow_window_includes_premarket")
+                ):
+                        slow_floor = 4
+                if slow_start < slow_floor:
+                        return False
+                slow_open = quotes[slow_start][0]
+                slow_low = min(
+                        quote[2]
+                        for quote in quotes[slow_start:bar_index + 1]
+                )
+                if slow_low / slow_open - 1 > -float(rule["slow_decline"]):
+                        return False
+
+        return True
+
+def broad_exit_signal(
+        quotes,
+        bar_index,
+        position_start_index,
+        open_price,
+        open_date,
+        current_date,
+        position_high,
+        rule,
+):
+        """Evaluate one experimental non-structural exit family."""
+        if not rule or bar_index < 934:
+                return False
+
+        family = rule["family"]
+        current_close = quotes[bar_index][3]
+        position_return = current_close / open_price - 1.0
+
+        if family == "intraday_time_stop":
+                return (
+                        current_date == open_date
+                        and bar_index == 934 + int(rule["minutes"])
+                        and position_return <= float(rule["minimum_return"])
+                )
+
+        if family == "multi_day_deadline":
+                return (
+                        date_diff(open_date, current_date) >= int(rule["days"])
+                        and bar_index == 994
+                        and position_return <= float(rule["minimum_return"])
+                )
+
+        if family == "profit_giveback":
+                maximum_favorable_return = position_high / open_price - 1.0
+                giveback = current_close / position_high - 1.0
+                return (
+                        maximum_favorable_return >= float(rule["activation"])
+                        and giveback <= -float(rule["giveback"])
+                )
+
+        if family == "moving_average_failure":
+                window = int(rule["window"])
+                persistence = int(rule["persistence"])
+                first_index = bar_index - window - persistence + 2
+                if first_index < position_start_index:
+                        return False
+                if position_return > float(rule.get("maximum_return", 0.0)):
+                        return False
+                for offset in range(persistence):
+                        end_index = bar_index - offset
+                        start_index = end_index - window + 1
+                        average = sum(
+                                quote[3]
+                                for quote in quotes[start_index:end_index + 1]
+                        ) / window
+                        if quotes[end_index][3] >= average:
+                                return False
+                return True
+
+        raise ValueError(f"Unknown broad exit family: {family}")
+
+def market_structure_exit_signal(
+        quotes,
+        bar_index,
+        position_start_index,
+        open_price,
+        previous_session_low,
+        previous_session_range,
+        rule,
+):
+        """Evaluate volatility and price-structure exit experiments."""
+        if not rule or bar_index < 934:
+                return False
+
+        family = rule["family"]
+        current_close = quotes[bar_index][3]
+        current_low = quotes[bar_index][2]
+
+        if family == "previous_range_stop":
+                if previous_session_range <= 0:
+                        return False
+                stop_price = open_price - previous_session_range * float(rule["multiple"])
+                return current_low <= stop_price
+
+        if family == "range_expansion_reversal":
+                elapsed = bar_index - 934 + 1
+                if elapsed < int(rule["minimum_minutes"]):
+                        return False
+                session_bars = quotes[934:bar_index + 1]
+                session_high = max(quote[1] for quote in session_bars)
+                session_low = min(quote[2] for quote in session_bars)
+                if open_price <= 0 or session_high <= 0:
+                        return False
+                expansion = (session_high - session_low) / open_price
+                retracement = current_close / session_high - 1.0
+                return (
+                        expansion >= float(rule["minimum_expansion"])
+                        and retracement <= -float(rule["retracement"])
+                )
+
+        if family == "lower_close_sequence":
+                count = int(rule["count"])
+                first_index = bar_index - count
+                if first_index < position_start_index:
+                        return False
+                closes = [
+                        quote[3]
+                        for quote in quotes[first_index:bar_index + 1]
+                ]
+                if any(right >= left for left, right in zip(closes, closes[1:])):
+                        return False
+                decline = closes[-1] / closes[0] - 1.0
+                return decline <= -float(rule["minimum_decline"])
+
+        if family == "previous_low_break":
+                if previous_session_low <= 0:
+                        return False
+                buffer = float(rule["buffer"])
+                persistence = int(rule["persistence"])
+                first_index = bar_index - persistence + 1
+                if first_index < position_start_index:
+                        return False
+                threshold = previous_session_low * (1.0 - buffer)
+                return all(
+                        quote[3] <= threshold
+                        for quote in quotes[first_index:bar_index + 1]
+                )
+
+        raise ValueError(f"Unknown market structure family: {family}")
 
 def plotting(equity_history,deposit_history):
         y = np.array(equity_history)
@@ -291,7 +660,6 @@ class Sim:
 
     def sell(self, time, open_price, close_price, open_date, close_date, trade_type, LEVERAGE, debug=False):
                 SL =  (100-50/LEVERAGE)/100
-                SL = 0.95
                 
                 if self.leverage_override and LEVERAGE == 10:
                     granular = int((self.balance/1.5/115))*115
@@ -301,6 +669,8 @@ class Sim:
                     SL = 0.9465
                 else:
                     granular = int((self.balance/(20/LEVERAGE)/115))*115
+                    SL =  (100-50/LEVERAGE)/100
+
                 #granular = int((self.balance/(20/LEVERAGE)/115)+1)*115
                 #if(round(20/(self.balance/granular), 2) < 3):
                 #    granular = int((self.balance/(20/LEVERAGE)/115)+2)*115
@@ -308,11 +678,17 @@ class Sim:
                  #   granular = int((self.balance/(20/LEVERAGE)/115)+3)*115
                 #if(LEVERAGE == 10):
                     #granular = int((self.balance/1.396/115))*115
-                    
+
                 effective_leverage = round(20/(self.balance/granular), 2)
                     
                 #change = round(close_price/open_price-1,4)
                 change = int((close_price/open_price-1)*100000)/100000
+                if getattr(self, "active_meta_filter_features", None) is not None:
+                    self.meta_filter_feature_history.append(
+                        self.active_meta_filter_features
+                    )
+                    self.meta_filter_outcome_history.append(change)
+                    self.active_meta_filter_features = None
                 if self.loss_control_lookback is not None:
                     self.loss_control_outcomes.append(change)
                     self.loss_control_events.append({
@@ -438,6 +814,13 @@ class Sim:
         premarket_range_enabled=None,
         premarket_close_near_low_enabled=None,
         leverage_override=False,
+        structural_exit_rule=None,
+        broad_exit_rule=None,
+        market_structure_exit_rule=None,
+        meta_filter_enabled=False,
+        meta_filter_minimum_samples=40,
+        meta_filter_veto_probability=None,
+        vix_history=None,
     ):
         legacy_loss_controls = loss_control_lookback is not None
         arithmetic_loss_control_enabled = (
@@ -535,9 +918,15 @@ class Sim:
         
         open_price = 0
         qqq_open_price = 0
+        position_high = 0
         
         yearlies = []
         self.returns = []
+        self.meta_filter_feature_history = []
+        self.meta_filter_outcome_history = []
+        self.meta_filter_events = []
+        self.active_meta_filter_features = None
+        vix_history = {} if vix_history is None else vix_history
         prev_year = start_date
         
         prev_equity = initial_balance
@@ -580,6 +969,17 @@ class Sim:
             is_friday = weekday_index == 4
 
             quotes = self.quotes[date][stock]
+
+            previous_session_low = 0.0
+            previous_session_range = 0.0
+            current_quote_position = quote_positions[date]
+            if current_quote_position > 0:
+                previous_quote_date = quote_dates[current_quote_position - 1]
+                previous_bars = self.quotes[previous_quote_date][stock][934:1325]
+                if previous_bars:
+                    previous_session_low = min(bar[2] for bar in previous_bars)
+                    previous_session_high = max(bar[1] for bar in previous_bars)
+                    previous_session_range = previous_session_high - previous_session_low
 
             qqq_open = quotes[0]
             qqq_close = quotes[3]
@@ -681,7 +1081,7 @@ class Sim:
                 granular = int(self.balance / (20 / LEVERAGE) / 115) * 115
                 granular *= 20 / LEVERAGE
 
-            if granular == 0 and self.balance < initial_balance:
+            if allow_deposits and granular == 0 and self.balance < initial_balance:
                 deposit = initial_balance - self.balance
                 self.deposited += deposit
                 self.balance += deposit
@@ -692,6 +1092,7 @@ class Sim:
             # --------------------------------------------------------
 
             if open_price > 0:
+                position_start_index = 934 if date == open_date else 4
                 if open_price * SL > openest:
                     i = 4
                     close_date = date
@@ -890,11 +1291,56 @@ class Sim:
                             "premarket_close_location": premarket_close_location,
                         })
 
+            entry_meta_features = None
+            if should_open_week and open_price == 0 and meta_filter_enabled:
+                entry_meta_features = meta_filter_entry_features(
+                    self.quotes,
+                    quote_dates,
+                    quote_positions[date],
+                    stock,
+                    vix_history,
+                )
+                model = (
+                    fit_meta_filter(
+                        self.meta_filter_feature_history,
+                        self.meta_filter_outcome_history,
+                        meta_filter_minimum_samples,
+                    )
+                    if entry_meta_features is not None
+                    else None
+                )
+                probability = (
+                    meta_filter_worst_probability(model, entry_meta_features)
+                    if model is not None
+                    else None
+                )
+                vetoed = (
+                    probability is not None
+                    and probability >= (
+                        model["veto_threshold"]
+                        if meta_filter_veto_probability is None
+                        else meta_filter_veto_probability
+                    )
+                )
+                self.meta_filter_events.append({
+                    "date": date,
+                    "action": "VETO" if vetoed else "ENTER",
+                    "probability": probability,
+                    "training_samples": 0 if model is None else model["samples"],
+                    "worst_decile_cutoff": None if model is None else model["cutoff"],
+                    "veto_threshold": None if model is None else model["veto_threshold"],
+                    "features": entry_meta_features,
+                })
+                if vetoed:
+                    should_open_week = False
+
             if should_open_week and open_price == 0:
                 open_price = opon
+                position_high = opon
                 self.prev_open = opon
                 open_date = date
                 qqq_open_price = qqq_open
+                self.active_meta_filter_features = entry_meta_features
                 self.trade_no += 1
                 
                 #if(self.deposited < 200000 and  self.max_equity > 0):
@@ -944,10 +1390,12 @@ class Sim:
             # --------------------------------------------------------
 
             if close_price == 0 and open_price > 0:
+                position_start_index = 934 if date == open_date else 4
                 for i in range(934, 1325):
                     o = quotes[i][0]
                     h = quotes[i][1]
                     l = quotes[i][2]
+                    position_high = max(position_high, h)
 
                     #if(i==944 and date_diff(date,open_date) == 0):
                     #    if(o/open_price < 0.994):
@@ -966,6 +1414,48 @@ class Sim:
                         close_date = date
                         close_price = l
                         trade_type = "SL"
+                        break
+
+                    elif structural_breakdown_exit_signal(
+                        quotes,
+                        i,
+                        position_start_index,
+                        open_price,
+                        structural_exit_rule,
+                        date == open_date,
+                    ):
+                        close_date = date
+                        close_price = quotes[i][3]
+                        trade_type = "STRUCTURAL_EXIT"
+                        break
+
+                    elif broad_exit_signal(
+                        quotes,
+                        i,
+                        position_start_index,
+                        open_price,
+                        open_date,
+                        date,
+                        position_high,
+                        broad_exit_rule,
+                    ):
+                        close_date = date
+                        close_price = quotes[i][3]
+                        trade_type = "BROAD_EXIT"
+                        break
+
+                    elif market_structure_exit_signal(
+                        quotes,
+                        i,
+                        position_start_index,
+                        open_price,
+                        previous_session_low,
+                        previous_session_range,
+                        market_structure_exit_rule,
+                    ):
+                        close_date = date
+                        close_price = quotes[i][3]
+                        trade_type = "MARKET_STRUCTURE_EXIT"
                         break
 
                     elif (is_thursday and l / open_price < thursday_SL):
@@ -1056,6 +1546,11 @@ class Sim:
         #print(start_date, end_date, self.classA, self.classB, self.classC, self.classD, self.cumulative_change, end=" ")
         #print(self.balance, self.max_equity, round(self.balance/self.max_equity, 4), self.deposited)
 
+        sharpe = round(self.sharpe_ratio(self.returns), 3)
+        sortino = round(self.sortino_ratio(self.returns), 3)
+
+        print(sharpe, sortino)
+
         #print_wallet(end_date, round(WIN/(WIN+LOSS), 2), 100*(1-MAX_DD),debug,MAX_EQUITY,WIN_AMOUNT/LOSS_AMOUNT,TIMEOUT,SL)
         if(plots == True):
             plotting(self.equity_history, self.deposit_history)        
@@ -1113,6 +1608,8 @@ def run_backtest(
     premarket_range_enabled=None,
     premarket_close_near_low_enabled=None,
     leverage_override=False,
+    or5_exit_enabled=False,
+    meta_filter_enabled=False,
 ):
     files = os.listdir()
     
@@ -1146,6 +1643,7 @@ def run_backtest(
     end_date = "20260706"
     
     sim = Sim()
+    vix_history = load_vix_history(Path(__file__).with_name("VIX_History.csv"))
     
     #sim.read_quotes(files, "20220103")
     sim.quotes = sim.load_quotes("quotes.pkl")
@@ -1166,7 +1664,7 @@ def run_backtest(
     result = sim.process(
         sim_i.quotes,
         "QQQ",
-        "20250102",
+        "20250813",
         "20260813",
         LEVERAGE,
         tpps,
@@ -1174,8 +1672,8 @@ def run_backtest(
         BE,
         0.004,
         0.004,
-        initial_balance=580,
-        allow_deposits=True,
+        initial_balance=100000,
+        allow_deposits=False,
         apply_tax=True,
         debug=debug,
         plots=plots,
@@ -1187,6 +1685,9 @@ def run_backtest(
         premarket_range_enabled=premarket_range_enabled,
         premarket_close_near_low_enabled=premarket_close_near_low_enabled,
         leverage_override=leverage_override,
+        structural_exit_rule=selected_structural_exit_rule(or5_exit_enabled),
+        meta_filter_enabled=meta_filter_enabled,
+        vix_history=vix_history,
     )
     print(result)
     if loss_control_lookback is not None:
@@ -1222,22 +1723,39 @@ def build_parser():
     parser.add_argument(
         "--arithmetic-last-two",
         action="store_true",
-        help="Skip when the arithmetic sum of the last two weekly outcomes is -2.00% or lower.",
+        help="Skip when the arithmetic sum of the last two weekly outcomes is -2.00%% or lower.",
     )
     parser.add_argument(
         "--gap-momentum",
         action="store_true",
-        help="Defer/skip when cash gap is >=1.00% and momentum 20 is <=-0.50%.",
+        help="Defer/skip when cash gap is >=1.00%% and momentum 20 is <=-0.50%%.",
     )
     parser.add_argument(
         "--tuesday-normalization",
         action="store_true",
-        help="After a gap-momentum defer, require Tuesday within +/-0.50% of Friday.",
+        help="After a gap-momentum defer, require Tuesday within +/-0.50%% of Friday.",
     )
     parser.add_argument(
         "--premarket-low",
         action="store_true",
-        help="Skip when premarket range is >=0.80% and its close is in the bottom 15%.",
+        help="Skip when premarket range is >=0.80%% and its close is in the bottom 15%%.",
+    )
+    parser.add_argument(
+        "--or5-exit",
+        action="store_true",
+        help=(
+            "Enable the OR5 early exit: price at least 0.50%% below entry, "
+            "minute close below the five-minute opening-range low, and a "
+            "rolling 60-minute open-to-low decline of at least 1.50%%."
+        ),
+    )
+    parser.add_argument(
+        "--meta-filter",
+        action="store_true",
+        help=(
+            "Enable the expanding walk-forward worst-decile trade veto using "
+            "only pre-entry QQQ and lagged daily VIX features."
+        ),
     )
     parser.add_argument(
         "--all-protections",
@@ -1264,4 +1782,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
     options = loss_protection_options(args)
     print("loss protections", {key: value for key, value in options.items() if key != "loss_control_lookback"})
-    run_backtest(leverage_override=args.leverage_override, **options)
+    run_backtest(
+        leverage_override=args.leverage_override,
+        or5_exit_enabled=args.or5_exit,
+        meta_filter_enabled=args.meta_filter,
+        **options,
+    )

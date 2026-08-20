@@ -33,4 +33,26 @@ class LossControlParserTest {
         assertNull(controls.rules[1].conditions.single().actual)
         assertNull(controls.rules[1].conditions.single().met)
     }
+
+    @Test
+    fun parsesOpenPositionOr5StatusSeparatelyFromEntryControls() {
+        val response = JsonParser.parseResponse(
+            """
+            {"ok":true,"snapshot":{"connection":{},"account":{},"position":{
+              "symbol":"US100","ticket":92,"openPrice":100.0,
+              "lossControls":{"revision":3,"evaluatedAt":"2026-08-17T16:30:00+02:00",
+              "currentPrice":98.5,"currentPriceUsage":"completed M1","rules":[
+                {"key":"OR5","enabled":true,"applicable":true,"status":"MATCHED","effect":"EXIT_POSITION_MARKET_SELL","conditions":[
+                  {"key":"OPENING_RANGE_BREAK","label":"Completed close vs OR5 low","actual":-0.01,"operator":"<=","threshold":0.0,"unit":"ratio","met":true}]}
+              ]}}
+            }}
+            """.trimIndent(),
+        )
+
+        val controls = response.snapshot.position!!.lossControls
+        assertEquals(3, controls.revision)
+        assertEquals("OR5", controls.rules.single().key)
+        assertEquals("MATCHED", controls.rules.single().status)
+        assertTrue(controls.rules.single().conditions.single().met!!)
+    }
 }

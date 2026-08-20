@@ -164,14 +164,14 @@ function Restore-And-Verify([string]$BackupPath, [string]$Database) {
         $safeDatabase = $Database.Replace("'", "''")
         $authority = Invoke-Docker @(
             'exec', $container, 'mysql', '-N', '-uroot', '-e',
-            "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='$safeDatabase' AND TABLE_NAME IN ('strategy_specifications','strategy_account_spec_assignments','strategy_decisions','strategy_execution_stages','strategy_fills','strategy_protection_changes','strategy_trade_ledger','account_cash_flows','strategy_entry_rule_control_events','strategy_entry_rule_week_state','strategy_entry_rule_week_events')"
+            "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='$safeDatabase' AND TABLE_NAME IN ('strategy_specifications','strategy_account_spec_assignments','strategy_decisions','strategy_execution_stages','strategy_fills','strategy_protection_changes','strategy_trade_ledger','account_cash_flows','strategy_entry_rule_control_events','strategy_entry_rule_week_state','strategy_entry_rule_week_events','strategy_position_rule_control_events','strategy_position_rule_trigger_events')"
         ) -Capture
-        if ([int]$authority -ne 11) { throw "Restored authority table count is $authority/11." }
+        if ([int]$authority -ne 13) { throw "Restored authority table count is $authority/13." }
         $operational = Invoke-Docker @(
             'exec', $container, 'mysql', '-N', '-uroot', '-e',
-            "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='$safeDatabase' AND TABLE_NAME IN ('strategy_events','strategy_equity_points','strategy_market_points','strategy_service_control_events','strategy_entry_rule_controls')"
+            "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='$safeDatabase' AND TABLE_NAME IN ('strategy_events','strategy_equity_points','strategy_market_points','strategy_service_control_events','strategy_entry_rule_controls','strategy_position_rule_controls')"
         ) -Capture
-        if ([int]$operational -ne 5) { throw "Restored operational table count is $operational/5." }
+        if ([int]$operational -ne 6) { throw "Restored operational table count is $operational/6." }
         $triggers = Invoke-Docker @(
             'exec', $container, 'mysql', '-N', '-uroot', '-e',
             "SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA='$safeDatabase'"

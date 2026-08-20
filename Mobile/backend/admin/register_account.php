@@ -54,6 +54,10 @@ try {
         'INSERT IGNORE INTO strategy_entry_rule_controls(strategy_key) VALUES (?)'
     );
     $controlsStatement->execute([$account]);
+    $positionControlsStatement = $db->prepare(
+        'INSERT IGNORE INTO strategy_position_rule_controls(strategy_key) VALUES (?)'
+    );
+    $positionControlsStatement->execute([$account]);
     $db->commit();
 } catch (Throwable $e) {
     if ($db->inTransaction()) $db->rollBack();
