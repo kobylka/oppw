@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 import json
 from datetime import date, datetime, time, timedelta, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -60,6 +60,10 @@ def load_json_file(json_file: Path) -> dict:
 
 
 def decode_json_file(json_file: Path, data: dict) -> list[tuple[datetime, Candle]]:
+    if not data["times"]:
+        print(f"Decoded {json_file.name}: 0 rows")
+        return []
+
     multiplier = Decimal(str(data["multiplier"]))
     shift_ms = int(data["shift"])
     timestamp_ms = int(data["timestamp"])
@@ -249,7 +253,7 @@ def main() -> None:
 
             processed_files += 1
 
-        except (ValueError, TypeError, KeyError) as error:
+        except (ValueError, TypeError, KeyError, InvalidOperation) as error:
             print(f"Skipping decoded data from {json_file.name}: {error}")
 
     if not all_candles:

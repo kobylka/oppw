@@ -1651,7 +1651,7 @@ def run_backtest(
         sim.read_quotes(files, "20180413")
         sim.read_csv_quotes(files, "20180413")
     
-    LEVERAGE = 8
+    LEVERAGE = 13.33
     SL = (100-50/LEVERAGE)/100
     BE = 0.996
     
@@ -1664,15 +1664,15 @@ def run_backtest(
     result = sim.process(
         sim_i.quotes,
         "QQQ",
-        "20250813",
-        "20260813",
+        "20220103",
+        "20260913",
         LEVERAGE,
         tpps,
         SL,
         BE,
         0.004,
         0.004,
-        initial_balance=100000,
+        initial_balance=10000,
         allow_deposits=False,
         apply_tax=True,
         debug=debug,
