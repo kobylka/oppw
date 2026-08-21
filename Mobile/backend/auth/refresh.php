@@ -34,19 +34,16 @@ try {
         json_response(['ok' => false, 'error' => 'Refresh token is invalid, expired, or revoked'], 401);
     }
 
-    $newRefresh = random_token(32);
     $refreshExpires = utc_now()->modify('+' . max(1, (int)config()['refresh_token_ttl_days']) . ' days');
-    $rotate = $db->prepare(
+    $touch = $db->prepare(
         'UPDATE monitor_devices
-            SET refresh_token_hash = ?, refresh_expires_at = ?, last_seen_at = UTC_TIMESTAMP(3)
+            SET refresh_expires_at = ?, last_seen_at = UTC_TIMESTAMP(3)
           WHERE device_id = ?'
     );
-    $rotate->execute([token_hash($newRefresh), mysql_datetime($refreshExpires), $deviceId]);
+    $touch->execute([mysql_datetime($refreshExpires), $deviceId]);
 
-    $revoke = $db->prepare('UPDATE monitor_access_tokens SET revoked_at = UTC_TIMESTAMP(3) WHERE device_id = ? AND revoked_at IS NULL');
-    $revoke->execute([$deviceId]);
     $access = create_access_token($db, $deviceId);
-    $session = session_payload($db, $device, $access['token'], $access['expiresAt'], $newRefresh, atom_datetime($refreshExpires));
+    $session = session_payload($db, $device, $access['token'], $access['expiresAt'], $providedRefresh, atom_datetime($refreshExpires));
     $db->commit();
 } catch (Throwable $e) {
     if ($db->inTransaction()) $db->rollBack();

@@ -7,6 +7,8 @@
 - `pairing-admin.php` and `push-admin.php`: optional pairing-admin browser token.
 - `market-admin.php` and `trade-admin.php`: optional manual-admin browser token.
 
+Each pairing has one stable random refresh credential. Successful refreshes extend its configured inactivity expiry (90 days by default) and issue a new short-lived access token without rotating the refresh credential or revoking other unexpired access tokens. This makes a lost refresh response safe to retry. Explicit unpairing or administrator revocation still disables the device and revokes all of its credentials.
+
 Paired-device tokens never write immutable execution authority. `mobile-receipt.php` records only a diagnostic delivery acknowledgement; an explicit per-device operational-control grant is required for service desired-state writes and per-account entry-rule toggles. Globally fenced executors alone may record weekly entry-rule defer/skip transitions through `strategy-controls.php`.
 
 ## Endpoints

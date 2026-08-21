@@ -477,7 +477,8 @@ return [
             _, pair, _ = http_json("POST", base_url + "auth/pair.php", {
                 "pairingCode": PAIRING_CODE, "deviceName": "Contract validator",
             }, expected=(201,))
-            access_token = pair["session"]["accessToken"]
+            initial_access_token = pair["session"]["accessToken"]
+            refresh_token = pair["session"]["refreshToken"]
             paired_device_id = pair["session"]["device"]["id"]
             device_permission = int(docker_sql(
                 docker, container,
@@ -487,6 +488,120 @@ return [
             ))
             if device_permission != 1:
                 raise AssertionError("pairing did not propagate the pairing code's service-control permission")
+
+            docker_sql(
+                docker, container,
+                "UPDATE monitor_devices SET refresh_expires_at=UTC_TIMESTAMP(3)+INTERVAL 1 DAY WHERE device_id="
+                + sql_text(paired_device_id),
+                docker_env,
+            )
+            refresh_request = {"deviceId": paired_device_id, "refreshToken": refresh_token}
+            http_json("POST", base_url + "auth/refresh.php", refresh_request)
+            _, repeated_refresh, _ = http_json("POST", base_url + "auth/refresh.php", refresh_request)
+            repeated_session = repeated_refresh["session"]
+            if repeated_session["device"]["id"] != paired_device_id:
+                raise AssertionError("repeated refresh changed the paired device identity")
+            if repeated_session["refreshToken"] != refresh_token:
+                raise AssertionError("refresh rotated the durable paired-device credential")
+            repeated_expiry = datetime.fromisoformat(
+                repeated_session["refreshTokenExpiresAt"].replace("Z", "+00:00")
+            )
+            if repeated_expiry <= datetime.now(timezone.utc) + timedelta(days=89):
+                raise AssertionError("refresh did not extend the paired-device inactivity expiry")
+
+            _, initial_access_accounts, _ = http_json(
+                "GET", base_url + "accounts.php", token=initial_access_token,
+            )
+            if not any(account["key"] == "DEMO" for account in initial_access_accounts["accounts"]):
+                raise AssertionError("ordinary refresh revoked a still-valid access token")
+
+            expected_refresh_hash = hmac.new(
+                TOKEN_HMAC_SECRET.encode(), refresh_token.encode(), hashlib.sha256,
+            ).hexdigest()
+            refresh_state = docker_sql(
+                docker, container,
+                "SELECT refresh_token_hash,refresh_expires_at>UTC_TIMESTAMP(3)+INTERVAL 89 DAY,"
+                "last_seen_at IS NOT NULL,"
+                "(SELECT COUNT(*) FROM monitor_access_tokens WHERE device_id=" + sql_text(paired_device_id)
+                + " AND revoked_at IS NOT NULL) FROM monitor_devices WHERE device_id=" + sql_text(paired_device_id),
+                docker_env,
+            ).split("\t")
+            if refresh_state != [expected_refresh_hash, "1", "1", "0"]:
+                raise AssertionError(f"durable refresh persistence mismatch: {refresh_state}")
+
+            _, invalid_refresh, _ = http_json(
+                "POST", base_url + "auth/refresh.php",
+                {"deviceId": paired_device_id, "refreshToken": "invalid-contract-refresh-token"},
+                expected=(401,),
+            )
+            if invalid_refresh.get("ok") is not False:
+                raise AssertionError("invalid refresh did not return a JSON authentication error")
+            _, recovered_refresh, _ = http_json("POST", base_url + "auth/refresh.php", refresh_request)
+            if recovered_refresh["session"]["refreshToken"] != refresh_token:
+                raise AssertionError("invalid refresh damaged the valid paired-device credential")
+            access_token = recovered_refresh["session"]["accessToken"]
+
+            expired_device_id = "0" * 32
+            revoked_device_id = "1" * 32
+            expired_refresh_token = secrets.token_urlsafe(32)
+            revoked_refresh_token = secrets.token_urlsafe(32)
+            expired_refresh_hash = hmac.new(
+                TOKEN_HMAC_SECRET.encode(), expired_refresh_token.encode(), hashlib.sha256,
+            ).hexdigest()
+            revoked_refresh_hash = hmac.new(
+                TOKEN_HMAC_SECRET.encode(), revoked_refresh_token.encode(), hashlib.sha256,
+            ).hexdigest()
+            docker_sql(docker, container, f"""
+                INSERT INTO monitor_devices(device_id,device_name,refresh_token_hash,refresh_expires_at,enabled)
+                VALUES
+                  ({sql_text(expired_device_id)},'Expired contract device',{sql_text(expired_refresh_hash)},UTC_TIMESTAMP(3)-INTERVAL 1 SECOND,TRUE),
+                  ({sql_text(revoked_device_id)},'Revoked contract device',{sql_text(revoked_refresh_hash)},UTC_TIMESTAMP(3)+INTERVAL 90 DAY,FALSE);
+            """, docker_env)
+            for rejected_device_id, rejected_token in (
+                (expired_device_id, expired_refresh_token),
+                (revoked_device_id, revoked_refresh_token),
+            ):
+                _, rejected_refresh, _ = http_json(
+                    "POST", base_url + "auth/refresh.php",
+                    {"deviceId": rejected_device_id, "refreshToken": rejected_token},
+                    expected=(401,),
+                )
+                if rejected_refresh.get("ok") is not False:
+                    raise AssertionError("expired or revoked refresh did not return a JSON authentication error")
+
+            unpair_device_id = "2" * 32
+            unpair_refresh_token = secrets.token_urlsafe(32)
+            unpair_access_token = secrets.token_urlsafe(32)
+            unpair_refresh_hash = hmac.new(
+                TOKEN_HMAC_SECRET.encode(), unpair_refresh_token.encode(), hashlib.sha256,
+            ).hexdigest()
+            unpair_access_hash = hmac.new(
+                TOKEN_HMAC_SECRET.encode(), unpair_access_token.encode(), hashlib.sha256,
+            ).hexdigest()
+            docker_sql(docker, container, f"""
+                INSERT INTO monitor_devices(device_id,device_name,refresh_token_hash,refresh_expires_at,enabled)
+                VALUES ({sql_text(unpair_device_id)},'Unpair contract device',{sql_text(unpair_refresh_hash)},UTC_TIMESTAMP(3)+INTERVAL 90 DAY,TRUE);
+                INSERT INTO monitor_access_tokens(token_hash,device_id,expires_at)
+                VALUES ({sql_text(unpair_access_hash)},{sql_text(unpair_device_id)},UTC_TIMESTAMP(3)+INTERVAL 15 MINUTE);
+            """, docker_env)
+            http_json("POST", base_url + "auth/unpair.php", {}, token=unpair_access_token)
+            _, unpaired_refresh, _ = http_json(
+                "POST", base_url + "auth/refresh.php",
+                {"deviceId": unpair_device_id, "refreshToken": unpair_refresh_token},
+                expected=(401,),
+            )
+            if unpaired_refresh.get("ok") is not False:
+                raise AssertionError("unpaired device retained refresh authorization")
+            unpaired_state = docker_sql(
+                docker, container,
+                "SELECT enabled,refresh_token_hash=REPEAT('0',64),"
+                "(SELECT COUNT(*) FROM monitor_access_tokens WHERE device_id=" + sql_text(unpair_device_id)
+                + " AND revoked_at IS NULL) FROM monitor_devices WHERE device_id=" + sql_text(unpair_device_id),
+                docker_env,
+            ).split("\t")
+            if unpaired_state != ["0", "1", "0"]:
+                raise AssertionError(f"unpair did not revoke the complete device session: {unpaired_state}")
+
             run([
                 php, str(root / "Mobile/backend/admin/set_device_accounts.php"),
                 "--device=" + paired_device_id, "--accounts=DEMO",
