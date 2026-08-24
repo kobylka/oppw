@@ -150,24 +150,41 @@ class MobileMonitorPublisher:
             self.condition.notify_all()
 
     def start(self) -> None:
-        if not self.ready or self.thread is not None:
-            return
-        self.thread = threading.Thread(
-            target=self.worker,
-            name=f"oppw-monitor-{self.role.lower()}",
-            daemon=True,
-        )
-        self.thread.start()
-        self.local_log(
-            logging.INFO,
-            "EVENT MONITOR_PUBLISHER_STARTED role=%s account_key=%s interval=%.1fs endpoint=%s "
-            "coordination=mysql fencing_token=%s",
-            self.role,
-            self.cfg.monitor_account_key,
-            self.cfg.monitor_publish_interval_seconds,
-            self.cfg.monitor_ingest_url,
-            self.coordinator.fencing_token,
-        )
+        with self.condition:
+            if not self.ready or self.stopping:
+                return
+            if self.thread is not None and self.thread.is_alive():
+                return
+            restarting = self.thread is not None
+            worker = threading.Thread(
+                target=self.worker,
+                name=f"oppw-monitor-{self.role.lower()}",
+                daemon=True,
+            )
+            self.thread = worker
+            worker.start()
+        if restarting:
+            self.local_log(
+                logging.WARNING,
+                "EVENT MONITOR_PUBLISHER_RESTARTED role=%s account_key=%s interval=%.1fs endpoint=%s "
+                "coordination=mysql fencing_token=%s",
+                self.role,
+                self.cfg.monitor_account_key,
+                self.cfg.monitor_publish_interval_seconds,
+                self.cfg.monitor_ingest_url,
+                self.coordinator.fencing_token,
+            )
+        else:
+            self.local_log(
+                logging.INFO,
+                "EVENT MONITOR_PUBLISHER_STARTED role=%s account_key=%s interval=%.1fs endpoint=%s "
+                "coordination=mysql fencing_token=%s",
+                self.role,
+                self.cfg.monitor_account_key,
+                self.cfg.monitor_publish_interval_seconds,
+                self.cfg.monitor_ingest_url,
+                self.coordinator.fencing_token,
+            )
 
     def stop(self) -> None:
         if self.thread is None:
@@ -178,8 +195,11 @@ class MobileMonitorPublisher:
                 self.latest_snapshot is not None or self.guaranteed_snapshots or self.events
             )
             self.condition.notify_all()
-        self.thread.join(timeout=max(1.0, self.cfg.monitor_timeout_seconds + 2.0))
-        self.thread = None
+            worker = self.thread
+        worker.join(timeout=max(1.0, self.cfg.monitor_timeout_seconds + 2.0))
+        with self.condition:
+            if self.thread is worker:
+                self.thread = None
 
     def enqueue_event(self, event: dict[str, Any]) -> None:
         if not self.ready:
@@ -471,6 +491,7 @@ class MobileMonitorPublisher:
                 existing_ids.add(event_id)
 
     def worker(self) -> None:
+        paused_for_lease = False
         while True:
             with self.condition:
                 while (
@@ -493,6 +514,34 @@ class MobileMonitorPublisher:
             # otherwise invert the logger/queue lock order with another thread.
             allowed = self.allowed_to_publish()
 
+            if not self.coordinator.role_lease_valid():
+                if not paused_for_lease:
+                    paused_for_lease = True
+                    self.local_log(
+                        logging.WARNING,
+                        "EVENT MONITOR_PUBLISH_PAUSED role=%s account_key=%s "
+                        "reason=role_lease_invalid fencing_token=%s",
+                        self.role,
+                        self.cfg.monitor_account_key,
+                        self.coordinator.fencing_token,
+                    )
+                with self.condition:
+                    if self.stopping:
+                        return
+                    self.condition.wait(timeout=0.25)
+                continue
+
+            if paused_for_lease:
+                paused_for_lease = False
+                self.local_log(
+                    logging.INFO,
+                    "EVENT MONITOR_PUBLISH_RESUMED role=%s account_key=%s "
+                    "reason=role_lease_valid fencing_token=%s",
+                    self.role,
+                    self.cfg.monitor_account_key,
+                    self.coordinator.fencing_token,
+                )
+
             with self.condition:
                 guaranteed = bool(self.guaranteed_snapshots)
                 snapshot: Optional[dict[str, Any]] = None
@@ -508,10 +557,6 @@ class MobileMonitorPublisher:
                     or self.latest_snapshot is not None
                     or self.events
                 )
-
-            if not self.coordinator.role_lease_valid():
-                self._requeue_events(events)
-                return
 
             if (
                 snapshot is not None

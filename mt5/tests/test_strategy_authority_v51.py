@@ -289,7 +289,7 @@ class StrategySpecificationTests(unittest.TestCase):
 
     def test_publisher_startup_forces_authoritative_trade_read_before_decision(self):
         strategy = object.__new__(MODULE.OPPWContinuousStrategy)
-        strategy.monitor_publisher = SimpleNamespace(ready=True)
+        strategy.monitor_publisher = SimpleNamespace(ready=True, start=Mock())
         strategy.coordinator = SimpleNamespace(require_role_lease=Mock())
         strategy.reload_state_read_only = Mock()
         strategy.tz = WARSAW
@@ -307,6 +307,7 @@ class StrategySpecificationTests(unittest.TestCase):
 
         strategy.publisher_startup()
 
+        strategy.monitor_publisher.start.assert_called_once_with()
         strategy.latest_closed_trade_record.assert_called_once_with(force=True)
         strategy.record_strategy_decision_if_changed.assert_called_once_with(force=True)
 

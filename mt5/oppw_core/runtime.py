@@ -277,6 +277,7 @@ class RuntimeMixin:
     def startup_reconcile(self) -> None:
         if not self.is_executor:
             raise RuntimeError("startup_reconcile is executor-only")
+        self.monitor_publisher.start()
         now = datetime.now(self.tz)
         position = self.managed_position()
         if position is None and self.state.active_position_identifier:
@@ -395,6 +396,7 @@ class RuntimeMixin:
         if not self.monitor_publisher.ready:
             raise RuntimeError("Publisher mode requires valid monitor configuration")
         self.coordinator.require_role_lease()
+        self.monitor_publisher.start()
         self.reload_state_read_only()
         now = datetime.now(self.tz)
         position = self.managed_position()
