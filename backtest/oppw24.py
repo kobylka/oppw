@@ -1347,7 +1347,7 @@ class Sim:
                 #    if self.balance/self.max_equity < 0.95:
                 #        self.deposited += 3000
                 #        self.balance += 3000
-                if(self.deposited < 200000 and (self.prev_full_week_change < -0.02 or self.prev_change < -0.007) and allow_deposits):
+                if(self.deposited < 200000 and allow_deposits):
                     
                     self.deposited += 115
                     self.balance += 115
@@ -1672,8 +1672,8 @@ def run_backtest(
         BE,
         0.004,
         0.004,
-        initial_balance=10000,
-        allow_deposits=False,
+        initial_balance=1300,
+        allow_deposits=True,
         apply_tax=True,
         debug=debug,
         plots=plots,
